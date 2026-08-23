@@ -4,11 +4,12 @@ from pathlib import Path
 
 from .effects import acoustic_space_ids
 
-SUPPORTED_SCHEMA_VERSIONS = (1, 2, 3, 4, 5)
+SUPPORTED_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6)
 PLACEMENTS = ("left", "center", "right")
 DUCKING_MODES = ("speech", "off")
 EVENT_ROLES_V4 = ("punctuation", "scene")
 EVENT_ROLES_V5 = ("punctuation", "scene", "bridge")
+EVENT_ROLES_V6 = EVENT_ROLES_V5
 MAX_SOUND_LAYERS = 2
 MAX_SOUND_EVENTS = 16
 MIN_SCENE_SPACE_MS = 750
@@ -17,6 +18,9 @@ MIN_BRIDGE_FOREGROUND_MS = 1000
 MAX_BRIDGE_FOREGROUND_MS = 10000
 MIN_BRIDGE_CARRY_MS = 250
 MAX_BRIDGE_CARRY_MS = 10000
+MIN_BRIDGE_CARRY_SEGMENTS = 1
+MAX_BRIDGE_CARRY_SEGMENTS = 3
+MAX_BRIDGE_TAIL_MS = 3000
 
 
 class ContractError(ValueError):
@@ -128,22 +132,28 @@ def _validate_event(item, label, errors, version, segment_count):
 
     v4_fields = {"role", "after_segment", "space_ms", "fade_in_ms", "fade_out_ms"}
     v5_fields = {"foreground_ms", "carry_under_speech_ms"}
+    v6_fields = {"carry_through_segments", "tail_ms"}
     if version < 4:
-        used = sorted((v4_fields | v5_fields) & set(item))
+        used = sorted((v4_fields | v5_fields | v6_fields) & set(item))
         if used:
-            errors.append(f"{label} fields {', '.join(used)} require schema_version 4 or 5")
+            errors.append(f"{label} fields {', '.join(used)} require schema_version 4, 5, or 6")
         at_ms = item.get("at_ms")
         if not isinstance(at_ms, (int, float)) or at_ms < 0:
             errors.append(f"{label}.at_ms must be >= 0")
         return
 
     if version == 4:
-        used = sorted(v5_fields & set(item))
+        used = sorted((v5_fields | v6_fields) & set(item))
         if used:
-            errors.append(f"{label} fields {', '.join(used)} require schema_version 5")
+            errors.append(f"{label} fields {', '.join(used)} require schema_version 5 or 6")
         allowed_roles = EVENT_ROLES_V4
-    else:
+    elif version == 5:
+        used = sorted(v6_fields & set(item))
+        if used:
+            errors.append(f"{label} fields {', '.join(used)} require schema_version 6")
         allowed_roles = EVENT_ROLES_V5
+    else:
+        allowed_roles = EVENT_ROLES_V6
 
     role = item.get("role", "punctuation")
     if role not in allowed_roles:
@@ -158,8 +168,8 @@ def _validate_event(item, label, errors, version, segment_count):
     if role == "scene":
         if "at_ms" in item:
             errors.append(f"{label}.scene must use after_segment, not at_ms")
-        if "foreground_ms" in item or "carry_under_speech_ms" in item:
-            errors.append(f"{label}.scene uses space_ms; foreground/carry are reserved for bridge")
+        if (v5_fields | v6_fields) & set(item):
+            errors.append(f"{label}.scene uses space_ms; bridge carry fields are reserved for bridge")
         _validate_segment_reference(item.get("after_segment"), f"{label}.after_segment", segment_count, errors)
         space_ms = item.get("space_ms")
         if not isinstance(space_ms, (int, float)) or not MIN_SCENE_SPACE_MS <= space_ms <= MAX_SCENE_SPACE_MS:
@@ -168,7 +178,7 @@ def _validate_event(item, label, errors, version, segment_count):
             )
     elif role == "bridge":
         if "at_ms" in item or "space_ms" in item:
-            errors.append(f"{label}.bridge uses after_segment + foreground_ms + carry_under_speech_ms")
+            errors.append(f"{label}.bridge uses after_segment + foreground_ms + a carry mode")
         _validate_segment_reference(
             item.get("after_segment"),
             f"{label}.after_segment",
@@ -181,13 +191,40 @@ def _validate_event(item, label, errors, version, segment_count):
             errors.append(
                 f"{label}.foreground_ms must be between {MIN_BRIDGE_FOREGROUND_MS} and {MAX_BRIDGE_FOREGROUND_MS}"
             )
-        carry_ms = item.get("carry_under_speech_ms")
-        if not isinstance(carry_ms, (int, float)) or not MIN_BRIDGE_CARRY_MS <= carry_ms <= MAX_BRIDGE_CARRY_MS:
+
+        has_fixed = "carry_under_speech_ms" in item
+        has_relative = "carry_through_segments" in item
+        if version <= 5:
+            if not has_fixed:
+                errors.append(f"{label}.carry_under_speech_ms is required in schema_version 5")
+        elif has_fixed == has_relative:
             errors.append(
-                f"{label}.carry_under_speech_ms must be between {MIN_BRIDGE_CARRY_MS} and {MAX_BRIDGE_CARRY_MS}"
+                f"{label}.bridge needs exactly one of carry_under_speech_ms or carry_through_segments"
             )
+
+        if has_fixed:
+            carry_ms = item.get("carry_under_speech_ms")
+            if not isinstance(carry_ms, (int, float)) or not MIN_BRIDGE_CARRY_MS <= carry_ms <= MAX_BRIDGE_CARRY_MS:
+                errors.append(
+                    f"{label}.carry_under_speech_ms must be between {MIN_BRIDGE_CARRY_MS} and {MAX_BRIDGE_CARRY_MS}"
+                )
+            if "tail_ms" in item:
+                errors.append(f"{label}.tail_ms is only valid with carry_through_segments")
+
+        if has_relative:
+            count = item.get("carry_through_segments")
+            available = max(0, segment_count - int(item.get("after_segment") or segment_count))
+            upper = min(MAX_BRIDGE_CARRY_SEGMENTS, available)
+            if not isinstance(count, int) or isinstance(count, bool) or not MIN_BRIDGE_CARRY_SEGMENTS <= count <= upper:
+                errors.append(
+                    f"{label}.carry_through_segments must be between {MIN_BRIDGE_CARRY_SEGMENTS} and {upper} for this anchor"
+                )
+            tail_ms = item.get("tail_ms", 0)
+            if not isinstance(tail_ms, (int, float)) or not 0 <= tail_ms <= MAX_BRIDGE_TAIL_MS:
+                errors.append(f"{label}.tail_ms must be between 0 and {MAX_BRIDGE_TAIL_MS}")
     else:
-        if "after_segment" in item or "space_ms" in item or "foreground_ms" in item or "carry_under_speech_ms" in item:
+        anchored = {"after_segment", "space_ms", "foreground_ms", "carry_under_speech_ms", "carry_through_segments", "tail_ms"}
+        if anchored & set(item):
             errors.append(f"{label}.punctuation uses at_ms; anchored narrative fields are reserved for scene/bridge")
         at_ms = item.get("at_ms")
         if not isinstance(at_ms, (int, float)) or at_ms < 0:
@@ -236,8 +273,8 @@ def validate_program(program):
         errors.append("profile must be a non-empty string")
 
     if "acoustic_space" in program:
-        if version not in (4, 5):
-            errors.append("acoustic_space requires schema_version 4 or 5")
+        if version not in (4, 5, 6):
+            errors.append("acoustic_space requires schema_version 4, 5, or 6")
         else:
             _validate_acoustic_space(program["acoustic_space"], "acoustic_space", errors)
 
@@ -252,8 +289,8 @@ def validate_program(program):
                 continue
             _validate_position(actor, f"actors.{actor_id}", errors)
             if isinstance(actor, dict) and "acoustic_space" in actor:
-                if version not in (4, 5):
-                    errors.append(f"actors.{actor_id}.acoustic_space requires schema_version 4 or 5")
+                if version not in (4, 5, 6):
+                    errors.append(f"actors.{actor_id}.acoustic_space requires schema_version 4, 5, or 6")
                 else:
                     _validate_acoustic_space(actor["acoustic_space"], f"actors.{actor_id}.acoustic_space", errors)
 
@@ -276,8 +313,8 @@ def validate_program(program):
             if "placement" in segment or "pan" in segment:
                 _validate_position(segment, f"segments[{index}]", errors)
             if "acoustic_space" in segment:
-                if version not in (4, 5):
-                    errors.append(f"segments[{index}].acoustic_space requires schema_version 4 or 5")
+                if version not in (4, 5, 6):
+                    errors.append(f"segments[{index}].acoustic_space requires schema_version 4, 5, or 6")
                 else:
                     _validate_acoustic_space(segment["acoustic_space"], f"segments[{index}].acoustic_space", errors)
 
@@ -287,14 +324,14 @@ def validate_program(program):
     )
     uses_v3 = "soundscape" in program
     if version == 1 and uses_v2:
-        errors.append("actors, placement, and ambience require schema_version 2, 3, 4, or 5")
+        errors.append("actors, placement, and ambience require schema_version 2, 3, 4, 5, or 6")
     if version in (1, 2) and uses_v3:
-        errors.append("soundscape requires schema_version 3, 4, or 5")
+        errors.append("soundscape requires schema_version 3, 4, 5, or 6")
     if "ambience" in program and "soundscape" in program:
         errors.append("use ambience or soundscape, not both")
-    if version in (2, 3, 4, 5) and "ambience" in program:
+    if version in (2, 3, 4, 5, 6) and "ambience" in program:
         _validate_ambience(program["ambience"], errors)
-    if version in (3, 4, 5) and "soundscape" in program:
+    if version in (3, 4, 5, 6) and "soundscape" in program:
         _validate_soundscape(program["soundscape"], errors, version, segment_count)
 
     if errors:

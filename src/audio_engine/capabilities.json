@@ -1,106 +1,35 @@
 {
-  "version": 2,
-  "feature_level": "narrative-sound-direction-v2",
-  "program_schema_versions": [1, 2, 3, 4, 5],
+  "version": 3,
+  "feature_level": "narrative-sound-direction-v3",
+  "program_schema_versions": [1, 2, 3, 4, 5, 6],
   "effects": {
     "acoustic_spaces": [
-      {
-        "id": "dry",
-        "label": "Dry / close",
-        "description": "No added room coloration; default for narration.",
-        "kind": "voice-space",
-        "authenticity": "synthetic"
-      },
-      {
-        "id": "outdoor-open",
-        "label": "Open exterior",
-        "description": "Very dry, open-air presentation with no room tail.",
-        "kind": "voice-space",
-        "authenticity": "synthetic"
-      },
-      {
-        "id": "small-stone-room",
-        "label": "Small stone room",
-        "description": "Subtle early reflections suggesting a chapel or small masonry room while preserving speech intelligibility.",
-        "kind": "voice-space",
-        "authenticity": "synthetic"
-      },
-      {
-        "id": "large-stone-interior",
-        "label": "Large stone interior",
-        "description": "Restrained early reflections suggesting a nave or large masonry hall; not an authentic impulse response of a named place.",
-        "kind": "voice-space",
-        "authenticity": "synthetic"
-      },
-      {
-        "id": "confined-stone",
-        "label": "Confined stone space",
-        "description": "Short, close reflections suggesting a crypt, cellar or confined masonry volume.",
-        "kind": "voice-space",
-        "authenticity": "synthetic"
-      }
+      {"id":"dry","label":"Dry / close","description":"No added room coloration; default for narration.","kind":"voice-space","authenticity":"synthetic"},
+      {"id":"outdoor-open","label":"Open exterior","description":"Very dry, open-air presentation with no room tail.","kind":"voice-space","authenticity":"synthetic"},
+      {"id":"small-stone-room","label":"Small stone room","description":"Subtle early reflections suggesting a chapel or small masonry room while preserving speech intelligibility.","kind":"voice-space","authenticity":"synthetic"},
+      {"id":"large-stone-interior","label":"Large stone interior","description":"Restrained early reflections suggesting a nave or large masonry hall; not an authentic impulse response of a named place.","kind":"voice-space","authenticity":"synthetic"},
+      {"id":"confined-stone","label":"Confined stone space","description":"Short, close reflections suggesting a crypt, cellar or confined masonry volume.","kind":"voice-space","authenticity":"synthetic"}
     ],
     "acoustic_usage": [
-      {
-        "id": "segment",
-        "description": "Apply one semantic acoustic space to a complete authored segment."
-      },
-      {
-        "id": "accent",
-        "description": "Use a deliberately short authored segment to make the acoustic space a brief narrative accent rather than a sustained voice effect.",
-        "implementation": "short-segment",
-        "recommended_max_rendered_ms": 2500
-      }
+      {"id":"segment","description":"Apply one semantic acoustic space to a complete authored segment."},
+      {"id":"accent","description":"Use a deliberately short authored segment to make the acoustic space a brief narrative accent rather than a sustained voice effect.","implementation":"short-segment","recommended_max_rendered_ms":2500}
     ],
     "sound_roles": [
-      {
-        "id": "texture",
-        "applies_to": ["bed", "layer"],
-        "description": "Continuous context under narration."
-      },
-      {
-        "id": "punctuation",
-        "applies_to": ["event"],
-        "description": "A punctual sound that underlines an idea without taking over the narration."
-      },
-      {
-        "id": "scene",
-        "applies_to": ["event"],
-        "description": "A sound given explicit narration-free space after a segment because it carries useful information or emotion.",
-        "requires": ["after_segment", "space_ms"]
-      },
-      {
-        "id": "bridge",
-        "applies_to": ["event"],
-        "description": "A sound fades in after a segment, owns a declared foreground interval, then carries under the next spoken segment before fading out.",
-        "requires": ["after_segment", "foreground_ms", "carry_under_speech_ms"]
-      }
+      {"id":"texture","applies_to":["bed","layer"],"description":"Continuous context under narration."},
+      {"id":"punctuation","applies_to":["event"],"description":"A punctual sound that underlines an idea without taking over the narration."},
+      {"id":"scene","applies_to":["event"],"description":"A sound given explicit narration-free space after a segment because it carries useful information or emotion.","requires":["after_segment","space_ms"]},
+      {"id":"bridge","applies_to":["event"],"description":"A sound owns foreground time, then carries under resumed narration. Schema v6 can bind the carry to measured spoken segments rather than guessed milliseconds.","requires":["after_segment","foreground_ms","one carry mode"]}
+    ],
+    "bridge_carry_modes": [
+      {"id":"fixed-ms","schema_min":5,"fields":["carry_under_speech_ms"],"description":"Use when an absolute overlap duration is itself the artistic intent."},
+      {"id":"through-segments","schema_min":6,"fields":["carry_through_segments","tail_ms"],"description":"Carry through the measured duration of the following spoken segment(s), then optionally retain a short tail."}
     ],
     "transitions": {
-      "continuous": {
-        "default_fade_in_ms": 1000,
-        "default_fade_out_ms": 1500
-      },
-      "punctuation": {
-        "default_fade_in_ms": 0,
-        "default_fade_out_ms": 250
-      },
-      "scene": {
-        "default_fade_in_ms": 180,
-        "default_fade_out_ms": 500,
-        "pre_roll_ms": 200,
-        "post_roll_ms": 250
-      },
-      "bridge": {
-        "default_fade_in_ms": 500,
-        "default_fade_out_ms": 1200,
-        "pre_roll_ms": 150,
-        "duck_under_speech": true
-      },
-      "hard_cut": {
-        "supported": true,
-        "policy": "explicit-zero-only"
-      }
+      "continuous":{"default_fade_in_ms":1000,"default_fade_out_ms":1500},
+      "punctuation":{"default_fade_in_ms":0,"default_fade_out_ms":250},
+      "scene":{"default_fade_in_ms":180,"default_fade_out_ms":500,"pre_roll_ms":200,"post_roll_ms":250},
+      "bridge":{"default_fade_in_ms":500,"default_fade_out_ms":1200,"pre_roll_ms":150,"duck_under_speech":true},
+      "hard_cut":{"supported":true,"policy":"explicit-zero-only"}
     },
     "placement": ["left", "center", "right"],
     "ducking": ["speech", "off"]
@@ -108,18 +37,28 @@
   "limits": {
     "continuous_layers": 2,
     "events": 16,
-    "scene_space_ms": {"min": 750, "max": 15000},
-    "bridge_foreground_ms": {"min": 1000, "max": 10000},
-    "bridge_carry_under_speech_ms": {"min": 250, "max": 10000},
-    "acoustic_accent_recommended_max_rendered_ms": 2500
+    "scene_space_ms":{"min":750,"max":15000},
+    "bridge_foreground_ms":{"min":1000,"max":10000},
+    "bridge_carry_under_speech_ms":{"min":250,"max":10000},
+    "bridge_carry_through_segments":{"min":1,"max":3},
+    "bridge_tail_ms":{"min":0,"max":3000},
+    "acoustic_accent_recommended_max_rendered_ms":2500
+  },
+  "tools": {
+    "timing":{"measured_cache":true,"history_calibrated_estimate":true,"estimate_is_authoritative":false},
+    "preview":{"event_windows":true,"default_before_ms":2500,"default_after_ms":2500,"renders_single_program_not_batch":true}
   },
   "policy": {
     "voice_intelligibility_first": true,
     "dry_voice_cache": true,
+    "measured_audio_timeline_is_authority": true,
+    "mp3_tags_are_timing_authority": false,
     "web_resolution_during_render": false,
     "arbitrary_plugin_chain": false,
     "binaural_hrtf": false,
     "named_place_acoustic_authenticity": false,
-    "acoustic_accent_requires_short_authored_segment": true
+    "acoustic_accent_requires_short_authored_segment": true,
+    "automatic_music_time_stretch": false,
+    "automatic_event_looping_without_catalog_permission": false
   }
 }

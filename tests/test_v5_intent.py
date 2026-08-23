@@ -70,7 +70,7 @@ def bridge_program():
 class V5IntentTests(unittest.TestCase):
     def test_catalog_exposes_bridge_and_short_segment_acoustic_accent(self):
         catalog = public_capabilities(engine_version="test")
-        self.assertEqual(catalog["feature_level"], "narrative-sound-direction-v2")
+        self.assertEqual(catalog["feature_level"], "narrative-sound-direction-v3")
         roles = {item["id"] for item in catalog["effects"]["sound_roles"]}
         self.assertIn("bridge", roles)
         usage = {item["id"]: item for item in catalog["effects"]["acoustic_usage"]}
