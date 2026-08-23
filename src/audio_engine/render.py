@@ -10,7 +10,11 @@ from .contract import load_json, sha256_file, validate_program
 from .mix.render import render_master, render_speech_track, stereo_required
 from .profiles import get_profile
 from .providers.edge import EdgeProvider
-from .sound.render import render_soundscape, soundscape_source_sha256
+from .sound.render import (
+    render_soundscape,
+    scene_space_requirements,
+    soundscape_source_sha256,
+)
 from .voice.render import render_voice_clip
 from .voices import load_voice_config, resolve_segments
 
@@ -21,6 +25,8 @@ def engine_code_sha256():
         root / "render.py",
         root / "audio.py",
         root / "contract.py",
+        root / "effects.py",
+        root / "capabilities.json",
         root / "profiles.py",
         root / "voices.py",
         root / "providers" / "edge.py",
@@ -138,15 +144,22 @@ def render_program(program_path, output_root, voices_path=None, provider=None, s
     ambience_cache_hit = None
     soundscape_manifest = None
     soundscape_cache_hit = None
+    timeline = None
 
     with tempfile.TemporaryDirectory() as temp_value:
         temp_dir = Path(temp_value)
-        speech_path = render_speech_track(
+        scene_spaces = {}
+        if program.get("soundscape"):
+            scene_spaces = scene_space_requirements(
+                program["soundscape"], program["schema_version"]
+            )
+        speech_path, timeline = render_speech_track(
             program,
             resolved,
             voice_clips,
             temp_dir,
             profile,
+            scene_spaces=scene_spaces,
         )
         duration = probe_duration_seconds(speech_path)
         if duration is None:
@@ -173,6 +186,8 @@ def render_program(program_path, output_root, voices_path=None, provider=None, s
                 profile["sample_rate_hz"],
                 sounds_path=sounds_path,
                 channels=2,
+                schema_version=program["schema_version"],
+                timeline=timeline,
             )
             ducking = program["soundscape"].get("ducking", "speech")
 
@@ -238,6 +253,7 @@ def render_program(program_path, output_root, voices_path=None, provider=None, s
             "soundscape": soundscape_manifest,
             "soundscape_cache_hit": soundscape_cache_hit,
             "ducking": mix_ducking,
+            "timeline": timeline if program["schema_version"] >= 4 else None,
         },
         "transcript": "transcript.json",
         "warnings": [],
