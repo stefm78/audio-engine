@@ -14,7 +14,11 @@ class FakeProvider:
     name = "fake"
     processing = "local-test"
 
+    def __init__(self):
+        self.calls = 0
+
     def synthesize(self, segment, path):
+        self.calls += 1
         run_ffmpeg([
             "-f", "lavfi",
             "-i", "anullsrc=r=24000:cl=mono",
@@ -61,7 +65,7 @@ class SmokeTests(unittest.TestCase):
             result["recommendations"][1]["score"],
         )
 
-    def test_render_offline_provider(self):
+    def test_render_offline_provider_and_cache(self):
         with tempfile.TemporaryDirectory() as temp_value:
             root = Path(temp_value)
             program = root / "program.json"
@@ -79,14 +83,41 @@ class SmokeTests(unittest.TestCase):
                 ],
             }), encoding="utf-8")
             out = root / "out"
-            manifest = render_program(program, out, provider=FakeProvider())
+            provider = FakeProvider()
+            manifest = render_program(program, out, provider=provider)
             self.assertEqual(manifest["status"], "success")
+            self.assertFalse(manifest["cache_hit"])
+            self.assertEqual(provider.calls, 1)
             self.assertEqual(manifest["audio"]["bitrate_kbps"], 80)
             self.assertEqual(manifest["audio"]["sample_rate_hz"], 24000)
             self.assertEqual(manifest["audio"]["channels"], 1)
+            self.assertTrue(manifest["render_fingerprint"])
             self.assertTrue((out / "smoke" / "audio.mp3").stat().st_size > 0)
             self.assertTrue((out / "smoke" / "manifest.json").exists())
             self.assertTrue((out / "smoke" / "transcript.json").exists())
+
+            cached = render_program(program, out, provider=provider)
+            self.assertTrue(cached["cache_hit"])
+            self.assertEqual(provider.calls, 1)
+            self.assertEqual(cached["render_fingerprint"], manifest["render_fingerprint"])
+
+            program.write_text(json.dumps({
+                "schema_version": 1,
+                "id": "smoke",
+                "title": "Smoke",
+                "profile": "speech",
+                "segments": [
+                    {
+                        "voice": "unused-test-voice",
+                        "text": "Changed",
+                        "pause_after_ms": 100,
+                    }
+                ],
+            }), encoding="utf-8")
+            changed = render_program(program, out, provider=provider)
+            self.assertFalse(changed["cache_hit"])
+            self.assertEqual(provider.calls, 2)
+            self.assertNotEqual(changed["render_fingerprint"], manifest["render_fingerprint"])
 
     def test_assemble(self):
         with tempfile.TemporaryDirectory() as temp_value:
