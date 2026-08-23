@@ -6,10 +6,27 @@ from ..audio import run_ffmpeg
 from ..contract import sha256_file
 
 
+def _asset_root(program_path):
+    program_path = Path(program_path).resolve()
+    cwd = Path.cwd().resolve()
+    try:
+        program_path.relative_to(cwd)
+        return cwd
+    except ValueError:
+        return program_path.parent
+
+
 def resolve_ambience_source(program_path, value):
     if "://" in value:
-        raise ValueError("ambience.file must be a local file path, not a URL")
+        raise ValueError("ambience.file must be a local relative path, not a URL")
+    if Path(value).is_absolute():
+        raise ValueError("ambience.file must be relative")
+    root = _asset_root(program_path)
     source = (Path(program_path).parent / value).resolve()
+    try:
+        source.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"Ambience input escapes allowed asset root: {value}") from exc
     if not source.exists() or not source.is_file():
         raise FileNotFoundError(f"Ambience input not found: {source}")
     return source
@@ -17,6 +34,10 @@ def resolve_ambience_source(program_path, value):
 
 def ambience_source_sha256(config, program_path):
     return sha256_file(resolve_ambience_source(program_path, config["file"]))
+
+
+def _engine_sha256():
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 def _fingerprint(source_sha, config, duration_seconds, sample_rate_hz, channels):
@@ -29,6 +50,7 @@ def _fingerprint(source_sha, config, duration_seconds, sample_rate_hz, channels)
         "duration_seconds": round(float(duration_seconds), 3),
         "sample_rate_hz": sample_rate_hz,
         "channels": channels,
+        "ambience_engine_sha256": _engine_sha256(),
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -42,12 +64,20 @@ def prepare_ambience(config, program_path, cache_root, duration_seconds, sample_
     cache_root = Path(cache_root)
     cache_root.mkdir(parents=True, exist_ok=True)
     output = cache_root / f"{fingerprint}.wav"
+    metadata = {
+        "file": config["file"],
+        "source_sha256": source_sha,
+        "fingerprint": fingerprint,
+        "gain_db": config.get("gain_db", -22),
+        "loop": config.get("loop", True),
+        "fade_in_ms": config.get("fade_in_ms", 1000),
+        "fade_out_ms": config.get("fade_out_ms", 1500),
+        "ducking": config.get("ducking", "speech"),
+        "license": config.get("license"),
+        "attribution": config.get("attribution"),
+    }
     if output.exists() and output.stat().st_size > 0:
-        return output, True, {
-            "file": config["file"],
-            "source_sha256": source_sha,
-            "fingerprint": fingerprint,
-        }
+        return output, True, metadata
 
     duration = max(0.001, float(duration_seconds))
     fade_in = max(0.0, min(float(config.get("fade_in_ms", 1000)) / 1000.0, duration))
@@ -72,8 +102,4 @@ def prepare_ambience(config, program_path, cache_root, duration_seconds, sample_
         str(output),
     ])
     run_ffmpeg(args)
-    return output, False, {
-        "file": config["file"],
-        "source_sha256": source_sha,
-        "fingerprint": fingerprint,
-    }
+    return output, False, metadata
