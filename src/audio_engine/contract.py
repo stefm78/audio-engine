@@ -4,14 +4,19 @@ from pathlib import Path
 
 from .effects import acoustic_space_ids
 
-SUPPORTED_SCHEMA_VERSIONS = (1, 2, 3, 4)
+SUPPORTED_SCHEMA_VERSIONS = (1, 2, 3, 4, 5)
 PLACEMENTS = ("left", "center", "right")
 DUCKING_MODES = ("speech", "off")
-EVENT_ROLES = ("punctuation", "scene")
+EVENT_ROLES_V4 = ("punctuation", "scene")
+EVENT_ROLES_V5 = ("punctuation", "scene", "bridge")
 MAX_SOUND_LAYERS = 2
 MAX_SOUND_EVENTS = 16
 MIN_SCENE_SPACE_MS = 750
 MAX_SCENE_SPACE_MS = 15000
+MIN_BRIDGE_FOREGROUND_MS = 1000
+MAX_BRIDGE_FOREGROUND_MS = 10000
+MIN_BRIDGE_CARRY_MS = 250
+MAX_BRIDGE_CARRY_MS = 10000
 
 
 class ContractError(ValueError):
@@ -106,6 +111,13 @@ def _validate_continuous_sound(item, label, default_gain, errors):
         _validate_non_negative_ms(item.get(name, default), f"{label}.{name}", errors)
 
 
+def _validate_segment_reference(value, label, segment_count, errors, require_next=False):
+    upper = segment_count - 1 if require_next else segment_count
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= upper:
+        suffix = " with a following segment" if require_next else ""
+        errors.append(f"{label} must reference an existing segment{suffix} (1..{upper})")
+
+
 def _validate_event(item, label, errors, version, segment_count):
     if not _validate_sound_ref(item, label, errors):
         return
@@ -115,36 +127,68 @@ def _validate_event(item, label, errors, version, segment_count):
         errors.append(f"{label}.placement must be one of {', '.join(PLACEMENTS)}")
 
     v4_fields = {"role", "after_segment", "space_ms", "fade_in_ms", "fade_out_ms"}
+    v5_fields = {"foreground_ms", "carry_under_speech_ms"}
     if version < 4:
-        used = sorted(v4_fields & set(item))
+        used = sorted((v4_fields | v5_fields) & set(item))
         if used:
-            errors.append(f"{label} fields {', '.join(used)} require schema_version 4")
+            errors.append(f"{label} fields {', '.join(used)} require schema_version 4 or 5")
         at_ms = item.get("at_ms")
         if not isinstance(at_ms, (int, float)) or at_ms < 0:
             errors.append(f"{label}.at_ms must be >= 0")
         return
 
+    if version == 4:
+        used = sorted(v5_fields & set(item))
+        if used:
+            errors.append(f"{label} fields {', '.join(used)} require schema_version 5")
+        allowed_roles = EVENT_ROLES_V4
+    else:
+        allowed_roles = EVENT_ROLES_V5
+
     role = item.get("role", "punctuation")
-    if role not in EVENT_ROLES:
-        errors.append(f"{label}.role must be one of {', '.join(EVENT_ROLES)}")
+    if role not in allowed_roles:
+        errors.append(f"{label}.role must be one of {', '.join(allowed_roles)}")
         return
-    for name, default in (("fade_in_ms", 0), ("fade_out_ms", 250 if role == "punctuation" else 500)):
+
+    default_fade_out = 250 if role == "punctuation" else (1200 if role == "bridge" else 500)
+    default_fade_in = 0 if role == "punctuation" else (500 if role == "bridge" else 180)
+    for name, default in (("fade_in_ms", default_fade_in), ("fade_out_ms", default_fade_out)):
         _validate_non_negative_ms(item.get(name, default), f"{label}.{name}", errors)
 
     if role == "scene":
         if "at_ms" in item:
             errors.append(f"{label}.scene must use after_segment, not at_ms")
-        after_segment = item.get("after_segment")
-        if not isinstance(after_segment, int) or isinstance(after_segment, bool) or not 1 <= after_segment <= segment_count:
-            errors.append(f"{label}.after_segment must reference an existing segment (1..{segment_count})")
+        if "foreground_ms" in item or "carry_under_speech_ms" in item:
+            errors.append(f"{label}.scene uses space_ms; foreground/carry are reserved for bridge")
+        _validate_segment_reference(item.get("after_segment"), f"{label}.after_segment", segment_count, errors)
         space_ms = item.get("space_ms")
         if not isinstance(space_ms, (int, float)) or not MIN_SCENE_SPACE_MS <= space_ms <= MAX_SCENE_SPACE_MS:
             errors.append(
                 f"{label}.space_ms must be between {MIN_SCENE_SPACE_MS} and {MAX_SCENE_SPACE_MS}"
             )
+    elif role == "bridge":
+        if "at_ms" in item or "space_ms" in item:
+            errors.append(f"{label}.bridge uses after_segment + foreground_ms + carry_under_speech_ms")
+        _validate_segment_reference(
+            item.get("after_segment"),
+            f"{label}.after_segment",
+            segment_count,
+            errors,
+            require_next=True,
+        )
+        foreground_ms = item.get("foreground_ms")
+        if not isinstance(foreground_ms, (int, float)) or not MIN_BRIDGE_FOREGROUND_MS <= foreground_ms <= MAX_BRIDGE_FOREGROUND_MS:
+            errors.append(
+                f"{label}.foreground_ms must be between {MIN_BRIDGE_FOREGROUND_MS} and {MAX_BRIDGE_FOREGROUND_MS}"
+            )
+        carry_ms = item.get("carry_under_speech_ms")
+        if not isinstance(carry_ms, (int, float)) or not MIN_BRIDGE_CARRY_MS <= carry_ms <= MAX_BRIDGE_CARRY_MS:
+            errors.append(
+                f"{label}.carry_under_speech_ms must be between {MIN_BRIDGE_CARRY_MS} and {MAX_BRIDGE_CARRY_MS}"
+            )
     else:
-        if "after_segment" in item or "space_ms" in item:
-            errors.append(f"{label}.punctuation uses at_ms; after_segment/space_ms are reserved for scene")
+        if "after_segment" in item or "space_ms" in item or "foreground_ms" in item or "carry_under_speech_ms" in item:
+            errors.append(f"{label}.punctuation uses at_ms; anchored narrative fields are reserved for scene/bridge")
         at_ms = item.get("at_ms")
         if not isinstance(at_ms, (int, float)) or at_ms < 0:
             errors.append(f"{label}.at_ms must be >= 0")
@@ -192,8 +236,8 @@ def validate_program(program):
         errors.append("profile must be a non-empty string")
 
     if "acoustic_space" in program:
-        if version != 4:
-            errors.append("acoustic_space requires schema_version 4")
+        if version not in (4, 5):
+            errors.append("acoustic_space requires schema_version 4 or 5")
         else:
             _validate_acoustic_space(program["acoustic_space"], "acoustic_space", errors)
 
@@ -208,8 +252,8 @@ def validate_program(program):
                 continue
             _validate_position(actor, f"actors.{actor_id}", errors)
             if isinstance(actor, dict) and "acoustic_space" in actor:
-                if version != 4:
-                    errors.append(f"actors.{actor_id}.acoustic_space requires schema_version 4")
+                if version not in (4, 5):
+                    errors.append(f"actors.{actor_id}.acoustic_space requires schema_version 4 or 5")
                 else:
                     _validate_acoustic_space(actor["acoustic_space"], f"actors.{actor_id}.acoustic_space", errors)
 
@@ -232,8 +276,8 @@ def validate_program(program):
             if "placement" in segment or "pan" in segment:
                 _validate_position(segment, f"segments[{index}]", errors)
             if "acoustic_space" in segment:
-                if version != 4:
-                    errors.append(f"segments[{index}].acoustic_space requires schema_version 4")
+                if version not in (4, 5):
+                    errors.append(f"segments[{index}].acoustic_space requires schema_version 4 or 5")
                 else:
                     _validate_acoustic_space(segment["acoustic_space"], f"segments[{index}].acoustic_space", errors)
 
@@ -243,14 +287,14 @@ def validate_program(program):
     )
     uses_v3 = "soundscape" in program
     if version == 1 and uses_v2:
-        errors.append("actors, placement, and ambience require schema_version 2, 3, or 4")
+        errors.append("actors, placement, and ambience require schema_version 2, 3, 4, or 5")
     if version in (1, 2) and uses_v3:
-        errors.append("soundscape requires schema_version 3 or 4")
+        errors.append("soundscape requires schema_version 3, 4, or 5")
     if "ambience" in program and "soundscape" in program:
         errors.append("use ambience or soundscape, not both")
-    if version in (2, 3, 4) and "ambience" in program:
+    if version in (2, 3, 4, 5) and "ambience" in program:
         _validate_ambience(program["ambience"], errors)
-    if version in (3, 4) and "soundscape" in program:
+    if version in (3, 4, 5) and "soundscape" in program:
         _validate_soundscape(program["soundscape"], errors, version, segment_count)
 
     if errors:
