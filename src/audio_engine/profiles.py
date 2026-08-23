@@ -21,8 +21,13 @@ PROFILES = {
     },
 }
 
-def get_profile(name: str):
+
+def get_profile(name: str, stereo: bool = False):
     try:
-        return PROFILES[name]
+        profile = dict(PROFILES[name])
     except KeyError as exc:
         raise ValueError(f"Unknown profile: {name}. Available: {', '.join(PROFILES)}") from exc
+    if stereo:
+        profile["channels"] = 2
+        profile["bitrate_kbps"] = max(profile["bitrate_kbps"], 96)
+    return profile
