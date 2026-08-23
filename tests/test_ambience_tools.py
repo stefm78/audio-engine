@@ -27,7 +27,7 @@ class AmbienceToolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             discovery_plan("forest", ["not-a-source"])
 
-    def test_qualification_fingerprints_local_audio_without_approving_it(self):
+    def test_qualification_fingerprints_source_and_creates_universal_preview(self):
         with tempfile.TemporaryDirectory() as temp_value:
             root = Path(temp_value)
             audio = root / "cathedral-room.wav"
@@ -54,11 +54,40 @@ class AmbienceToolTests(unittest.TestCase):
             self.assertEqual(result["audio"]["sample_rate_hz"], 48000)
             self.assertGreater(result["audio"]["duration_seconds"], 0)
             self.assertEqual(len(result["file"]["content_sha256"]), 64)
+            self.assertTrue(result["file"]["canonical"])
             self.assertTrue(result["source"]["provenance_complete"])
             self.assertEqual(result["license"]["declared"], "CC0-1.0")
             self.assertFalse(result["license"]["verified"])
             self.assertFalse(result["promotion"]["eligible"])
             self.assertEqual(result["review"]["listening_quality"], "pending")
+
+            preview = Path(result["preview"]["path"])
+            self.assertTrue(preview.exists())
+            self.assertEqual(preview.suffix, ".mp3")
+            self.assertEqual(result["preview"]["format"], "mp3")
+            self.assertFalse(result["preview"]["canonical"])
+            self.assertEqual(result["preview"]["bitrate_kbps"], 160)
+            self.assertEqual(result["preview"]["sample_rate_hz"], 44100)
+            self.assertEqual(result["review"]["listening_preview"], "generated")
+            self.assertTrue(result["promotion"]["evidence"]["listening_preview_generated"])
+            self.assertNotEqual(result["file"]["content_sha256"], result["preview"]["content_sha256"])
+
+    def test_qualification_can_redirect_preview_without_changing_source_identity(self):
+        with tempfile.TemporaryDirectory() as temp_value:
+            root = Path(temp_value)
+            audio = root / "source.ogg"
+            preview_dir = root / "listening"
+            run_ffmpeg([
+                "-f", "lavfi",
+                "-i", "anoisesrc=color=white:sample_rate=44100:duration=0.3",
+                "-ac", "1",
+                "-c:a", "libvorbis",
+                str(audio),
+            ])
+            result = qualify_candidate(audio, preview_dir=preview_dir)
+            self.assertEqual(Path(result["preview"]["path"]).parent, preview_dir)
+            self.assertEqual(result["file"]["name"], "source.ogg")
+            self.assertTrue(result["file"]["canonical"])
 
     def test_qualification_rejects_missing_file(self):
         with self.assertRaises(FileNotFoundError):
