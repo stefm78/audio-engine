@@ -4,9 +4,24 @@
   "policy": {
     "web_discovery": "outside-render",
     "production": "locked-snapshot",
-    "preferred_sources": ["Wikimedia Commons"],
+    "preferred_sources": [
+      "Openverse",
+      "Wikimedia Commons",
+      "Pixabay",
+      "Freesound",
+      "ZapSplat",
+      "Mixkit",
+      "Sonniss GameAudioGDC",
+      "Free To Use Sounds",
+      "Soundly",
+      "BOOM Library",
+      "Pro Sound Effects",
+      "Pond5"
+    ],
+    "source_license_verification": "per-asset",
+    "raw_redistribution": "license-dependent",
     "automatic_licenses": ["CC0-1.0", "CC-BY-4.0"],
-    "manual_review_licenses": ["CC-BY-SA-4.0"],
+    "manual_review_licenses": ["CC-BY-SA-4.0", "provider-specific"],
     "rejected_by_default": ["CC-BY-NC-*", "CC-BY-ND-*"]
   },
   "entries": []
