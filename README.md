@@ -2,7 +2,7 @@
 
 Small, reusable spoken-audio renderer.
 
-`audio-engine` turns a declared JSON audio program into publication-ready audio assets. It is product-agnostic: consumers own content, storage, publication and playback.
+`audio-engine` turns a declared JSON audio program into publication-ready audio assets. Consumers own content, storage, publication and playback.
 
 ```text
 text ──► dry voice ──► bounded acoustic space ──┐
@@ -10,7 +10,7 @@ text ──► dry voice ──► bounded acoustic space ──┐
 validated/local sounds ──► soundscape ──────────┘
 ```
 
-Consumers still use **one CLI, one program contract and one reusable workflow**.
+Consumers use **one CLI, one program contract and one reusable workflow**.
 
 ## Quick start
 
@@ -21,191 +21,118 @@ python -m pip install -e .
 audio-engine capabilities
 audio-engine voices
 audio-engine sounds
-audio-engine ambience discover "quiet cathedral room tone"
 audio-engine validate examples/minimal.json
-audio-engine validate examples/dialogue.json
-audio-engine validate examples/soundscape.json
 audio-engine render examples/minimal.json --out output
 ```
 
-Default `speech` output is MP3 mono, 24 kHz, 80 kbit/s. Stereo dialogue, legacy ambience and schema-v3/v4 soundscapes render stereo at least 96 kbit/s.
+Default `speech` output is MP3 mono, 24 kHz, 80 kbit/s. Scene/soundscape features render stereo at least 96 kbit/s.
 
-## Commands
+## Capability catalog
 
 ```bash
 audio-engine capabilities
 audio-engine capabilities --category acoustic_spaces
-
-audio-engine voices
-audio-engine recommend --target '{"gender":"male","age":"adult","energy":5,"tags":["narrateur","vif"]}'
-
-audio-engine sounds
-audio-engine sounds --type ambience --tag interior
-audio-engine sounds --type event --tag bell
-audio-engine sounds --id cathedral-calm
-
-audio-engine ambience discover "quiet cathedral room tone"
-audio-engine ambience qualify FILE.wav --source-provider PROVIDER --source-page URL --license LICENSE
-
-audio-engine render PROGRAM.json --out output/ [--sounds SOUNDS.json]
-audio-engine batch "content/**/*.json" --out output/ [--sounds SOUNDS.json]
-audio-engine assemble ASSEMBLY.json --out output/
-audio-engine validate PROGRAM.json
 ```
 
-`capabilities` is the machine-readable source of truth for effects and narrative sound-direction features applications may offer. The catalog only exposes effects the installed engine actually renders.
+`capabilities` is the machine-readable source of truth for effects and narrative sound-direction features applications may offer. The catalog exposes only behavior the installed engine actually renders.
 
-`ambience discover/qualify` is the broad **candidate** workflow. `sounds` is the narrow **validated production meta-index**. A discovered file never becomes a public sound merely because it was downloaded.
+The sound catalog answers which validated audio assets exist; the capability catalog answers what the renderer can do with them.
 
-See [`docs/EFFECTS.md`](docs/EFFECTS.md), [`docs/SOUNDS.md`](docs/SOUNDS.md), [`docs/AMBIENCES.md`](docs/AMBIENCES.md), and [`docs/VOICES.md`](docs/VOICES.md).
+See [`docs/EFFECTS.md`](docs/EFFECTS.md), [`docs/CONTRACT.md`](docs/CONTRACT.md), [`docs/SOUNDS.md`](docs/SOUNDS.md), and [`docs/VOICES.md`](docs/VOICES.md).
 
 ## Program schemas
 
-### v1 — narration
+- **v1** — narration.
+- **v2** — semantic stereo placement and optional legacy ambience.
+- **v3** — bounded deterministic soundscape.
+- **v4** — semantic acoustic spaces, safe fades and foreground-only `scene` events.
+- **v5** — `bridge`: a sound owns real foreground time, then continues under the next spoken segment.
 
-```json
-{
-  "schema_version": 1,
-  "id": "demo",
-  "title": "Demo",
-  "segments": [
-    {"preset": "narrateur-vif", "text": "Bonjour."}
-  ]
-}
-```
-
-### v2 — stable stereo dialogue / one legacy ambience
-
-```json
-{
-  "schema_version": 2,
-  "id": "dialogue",
-  "title": "Dialogue",
-  "actors": {
-    "narrator": {"placement": "center"},
-    "alice": {"placement": "left"},
-    "bob": {"placement": "right"}
-  },
-  "segments": [
-    {"character_id": "narrator", "preset": "narrateur-vif", "text": "Ils discutent."},
-    {"character_id": "alice", "preset": "conteuse-chaleureuse", "text": "Bonjour."},
-    {"character_id": "bob", "preset": "officier-autorite", "text": "Bonjour."}
-  ]
-}
-```
-
-Public placement vocabulary is only `left`, `center`, `right`; constant-power pan values remain internal.
-
-### v3 — bounded deterministic soundscape
-
-```json
-{
-  "schema_version": 3,
-  "id": "cathedral-scene",
-  "title": "Inside the cathedral",
-  "soundscape": {
-    "bed": {"sound": "cathedral-calm", "gain_db": -23},
-    "layers": [
-      {"sound": "crowd-distant", "gain_db": -30}
-    ],
-    "events": [
-      {
-        "sound": "church-bell-distant",
-        "at_ms": 42000,
-        "gain_db": -18,
-        "placement": "right"
-      }
-    ],
-    "ducking": "speech"
-  },
-  "segments": [
-    {"preset": "narrateur-vif", "text": "Bienvenue dans la nef."}
-  ]
-}
-```
-
-V3 remains deliberately bounded: one bed, at most two continuous layers, at most sixteen explicitly timed events. There is no random scheduling or arbitrary multitrack timeline.
-
-### v4 — narrative sound direction
-
-V4 adds semantic acoustic spaces, safe event fades, and `scene` events that deliberately give sound a short narration-free window.
+### v4 scene
 
 ```json
 {
   "schema_version": 4,
-  "id": "cathedral-memory",
-  "title": "A sound can take the scene",
-  "acoustic_space": "large-stone-interior",
   "soundscape": {
     "events": [
       {
         "sound": "historic-horse-hooves",
         "role": "scene",
         "after_segment": 1,
-        "space_ms": 3200,
-        "gain_db": -18,
-        "placement": "left"
-      },
+        "space_ms": 3200
+      }
+    ]
+  },
+  "segments": [
+    {"preset": "narrateur-vif", "text": "Le son prend brièvement la scène."},
+    {"preset": "narrateur-vif", "text": "Puis la voix reprend."}
+  ]
+}
+```
+
+V4 scene semantics remain unchanged for compatibility: `space_ms` is the whole narration-free window and includes small engine-owned transition margins.
+
+### v5 bridge — foreground then carry
+
+```json
+{
+  "schema_version": 5,
+  "soundscape": {
+    "events": [
       {
-        "sound": "church-bell-distant",
-        "role": "punctuation",
-        "at_ms": 8500,
-        "gain_db": -24
+        "sound": "historic-horse-hooves",
+        "role": "bridge",
+        "after_segment": 1,
+        "foreground_ms": 3500,
+        "carry_under_speech_ms": 2500,
+        "gain_db": -23,
+        "placement": "left"
       }
     ],
     "ducking": "speech"
   },
   "segments": [
-    {
-      "preset": "narrateur-vif",
-      "text": "Cherchez maintenant la scène de l'entrée de Jeanne à Orléans."
-    },
-    {
-      "preset": "narrateur-vif",
-      "acoustic_space": "dry",
-      "text": "Nous reprenons le récit."
-    }
+    {"preset": "narrateur-vif", "text": "Jeanne entre dans la ville."},
+    {"preset": "narrateur-vif", "text": "La narration revient pendant que les sabots s'éloignent."}
   ]
 }
 ```
 
-The public acoustic-space vocabulary is intentionally small: `dry`, `outdoor-open`, `small-stone-room`, `large-stone-interior`, `confined-stone`. These are restrained synthetic evocations, never claims to reproduce the authentic acoustics of a named place.
+After a small pre-roll, `foreground_ms` is the **actual duration for which the sound is alone before narration restarts**. The sound then carries under the next segment for `carry_under_speech_ms`; speech ducking lowers it automatically and the bridge fades out smoothly.
 
-A v4 `scene` event uses `after_segment` + `space_ms`. Audio Engine reserves that pause in the speech track, starts the event inside the window with a short pre-roll, trims it if needed, and applies safe fades. `punctuation` events keep explicit `at_ms` timing and receive a small automatic fade-out unless explicitly set to zero.
+V4 rejects bridge fields, so an older Audio Engine cannot silently ignore this intent.
 
-Each soundscape component declares exactly one of a validated catalog `sound` id or a workspace-bounded local `file`. Catalog content is hash-verified before rendering.
+## Acoustic spaces and accents
 
-See [`docs/CONTRACT.md`](docs/CONTRACT.md) for the full contract.
+The bounded public spaces are `dry`, `outdoor-open`, `small-stone-room`, `large-stone-interior`, and `confined-stone`. They are synthetic evocations, never claims to reproduce a named place's authentic acoustics.
+
+An **acoustic accent** is authored by splitting a short meaningful phrase into its own segment and applying `acoustic_space` only there. The catalog recommends no more than roughly 2500 ms rendered duration. Audio Engine intentionally does not expose arbitrary millisecond-level reverb automation inside speech.
+
+The TTS cache always stores dry voice. Changing acoustic treatment or sound direction remixes locally without a new TTS call for unchanged text/voice parameters.
 
 ## Rendering architecture
 
-Sound direction does **not** turn the mixer into a DAW:
-
 ```text
 dry TTS clips
-   ↓ local semantic acoustic-space preset
+   ↓ optional bounded acoustic treatment
 speech.wav
 
-bed + layers + punctuation + scenes
-        ↓
+texture + punctuation + scene + bridge
+               ↓
  deterministic environment.wav
-        ↓
-speech + environment.wav
-        ↓
-   subtle ducking
-        ↓
-    final loudnorm
-        ↓
-       master
+               ↓
+        speech + environment
+               ↓
+             ducking
+               ↓
+          final loudnorm
 ```
 
 Web access is never part of rendering.
 
-## Stage-level content-addressed reuse
+## Stage-level reuse
 
-Voice synthesis is cached independently from scene placement, acoustic-space processing and environment mixing. Changing only left/right placement, acoustic space, ambience level, layer gain, fades, scene spacing or event timing should normally remix locally without calling the remote TTS provider again.
-
-Legacy ambience and v3/v4 soundscapes each have local content-addressed preparation caches. Internal caches live under `OUT/.cache/` and are not listening assets.
+Voice synthesis is content-addressed independently from placement, acoustic-space processing and soundscape mixing. Changing only placement, acoustic space, gains, fades or scene/bridge timing should normally remix locally.
 
 ## Reusable GitHub workflow
 
@@ -220,7 +147,7 @@ jobs:
       sounds_path: "assets/sounds.json" # optional
 ```
 
-The consumer decides whether generated files go to a site, package, object storage or GitHub Release. For production, pin workflow and `engine_ref` to the same tested SHA.
+The consumer decides whether outputs go to a site, package, object storage or GitHub Release. Production callers should pin workflow and `engine_ref` to the same tested SHA.
 
 ## Provider and privacy
 
