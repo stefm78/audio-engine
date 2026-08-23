@@ -10,11 +10,13 @@ from .assemble import assemble_plan
 from .batch import render_batch
 from .contract import ContractError, load_json, validate_assembly, validate_program
 from .effects import load_capabilities, public_capabilities
+from .preview import preview_program
 from .render import render_program
 from .sound.acquisition import DEFAULT_PROVIDERS, ensure_sound
 from .sound.catalog import SOUND_TYPES, public_catalog as public_sound_catalog, sound_info
 from .sound.library import hydrate_sound_library
 from .sound.selection import select_candidates
+from .timing import timing_report
 from .voices import load_voice_config, public_catalog, recommend_presets
 
 
@@ -47,6 +49,20 @@ def build_parser():
     render.add_argument("--out", default="output")
     render.add_argument("--voices", default=None)
     render.add_argument("--sounds", default=None)
+
+    preview = sub.add_parser("preview", help="Render one program and extract short windows around its sound events")
+    preview.add_argument("program")
+    preview.add_argument("--out", default="output")
+    preview.add_argument("--voices", default=None)
+    preview.add_argument("--sounds", default=None)
+    preview.add_argument("--event", type=int, default=None, help="1-based event index; omit to preview all events")
+    preview.add_argument("--before-ms", type=int, default=2500)
+    preview.add_argument("--after-ms", type=int, default=2500)
+
+    timing = sub.add_parser("timing", help="Report measured or calibrated estimated diction durations")
+    timing.add_argument("program")
+    timing.add_argument("--out", default="output")
+    timing.add_argument("--voices", default=None)
 
     batch = sub.add_parser("batch", help="Render a glob of programs, best effort")
     batch.add_argument("pattern")
@@ -134,6 +150,18 @@ def main(argv=None):
     try:
         if args.command == "render":
             result = render_program(args.program, args.out, voices_path=args.voices, sounds_path=args.sounds)
+        elif args.command == "preview":
+            result = preview_program(
+                args.program,
+                args.out,
+                voices_path=args.voices,
+                sounds_path=args.sounds,
+                event=args.event,
+                before_ms=args.before_ms,
+                after_ms=args.after_ms,
+            )
+        elif args.command == "timing":
+            result = timing_report(args.program, args.out, voices_path=args.voices)
         elif args.command == "batch":
             result = render_batch(args.pattern, args.out, voices_path=args.voices, sounds_path=args.sounds)
         elif args.command == "assemble":
