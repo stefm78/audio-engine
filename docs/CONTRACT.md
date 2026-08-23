@@ -1,14 +1,27 @@
 # Contract
 
-Audio Engine accepts two program schema versions plus the assembly contract.
+Audio Engine accepts three program schema versions plus assembly schema v1.
 
-- **Program schema v1**: stable narration contract, mono by default.
-- **Program schema v2**: adds declarative stereo placement and one optional ambience bed.
-- **Assembly schema v1**: joins already-rendered listening units.
+- **Program v1** — stable narration; mono by default.
+- **Program v2** — v1 plus semantic stereo placement and one optional legacy ambience bed.
+- **Program v3** — v2 plus one bounded deterministic `soundscape`.
+- **Assembly v1** — joins already-rendered listening units.
 
-A v1 program remains valid unchanged. Spatial or ambience fields in v1 are rejected rather than silently ignored.
+Older contracts remain valid unchanged. Newer-only fields are rejected rather than silently ignored.
 
-## Program v1
+## Shared program fields
+
+Every program requires:
+- `schema_version`: `1`, `2`, or `3`;
+- `id`: stable output identifier;
+- `title`: human-readable title;
+- non-empty `segments`.
+
+Useful optional top-level fields include `language`, `profile`, `lead_in_ms`, `sources`, and, for v2/v3, `actors`.
+
+Each segment requires `text` and one of `voice`, `preset`, or `target`. Optional fields include `speaker`, `character_id`, `pause_after_ms`, `rate`, `pitch`, `volume`, and in v2/v3 semantic `placement`.
+
+## Program v1 — narration
 
 ```json
 {
@@ -16,34 +29,14 @@ A v1 program remains valid unchanged. Spatial or ambience fields in v1 are rejec
   "id": "episode-01",
   "title": "Episode 1",
   "segments": [
-    {
-      "text": "Text to synthesize.",
-      "voice": "fr-FR-RemyMultilingualNeural"
-    }
+    {"preset": "narrateur-vif", "text": "Text to synthesize."}
   ]
 }
 ```
 
-Top-level fields:
+Spatial placement, legacy ambience and soundscape are not valid v1 fields.
 
-- `schema_version`: `1` or `2` for programs.
-- `id`: stable output identifier.
-- `title`: human-readable title.
-- `segments`: non-empty ordered array.
-- `language`: optional metadata such as `fr-FR`.
-- `profile`: optional; `speech` by default or `speech-high`.
-- `lead_in_ms`: optional initial silence, default 250 ms.
-- `sources`: optional provenance URLs or identifiers.
-
-Each segment requires `text` and one of `voice`, `preset`, or `target`.
-
-Useful optional segment fields are `speaker`, `character_id`, `pause_after_ms` (default 350), `rate`, `pitch`, and `volume`.
-
-`voice` directly selects a provider voice. `preset` selects a configured voice preset. `target` lets the bundled simple casting scorer choose a preset from declared traits.
-
-## Program v2: stereo dialogue
-
-Schema v2 lets a client describe **where a speaker sits in a stable scene** without exposing channel gains or FFmpeg details.
+## Program v2 — stereo scene
 
 ```json
 {
@@ -63,26 +56,16 @@ Schema v2 lets a client describe **where a speaker sits in a stable scene** with
 }
 ```
 
-Supported public placements are deliberately limited to:
-- `left`;
-- `center`;
-- `right`.
+Public placements are strictly `left`, `center`, and `right`. The mixer owns the moderate constant-power numeric mapping; numeric pan is not public contract surface.
 
-The current mapping intentionally stays moderate: left/right are not hard-panned. The mixer uses constant-power panning. Numeric pan is **not** a public contract field; clients describe scene intent and Audio Engine owns the DSP mapping.
+A segment-level placement overrides its actor placement. Scene positions should represent stable scene intent rather than decorative movement.
 
-A segment-level `placement` overrides the actor-level declaration. Scene positions should be stable and meaningful. Do not move voices merely for decoration.
+### v2 legacy ambience
 
-If no non-center placement and no ambience is present, `speech` remains mono at 80 kbit/s. If stereo is required, Audio Engine automatically renders two channels and raises the speech bitrate to at least 96 kbit/s.
-
-## Program v2: ambience
-
-A program may declare **one background ambience bed**:
+A v2 program may declare one background file:
 
 ```json
 {
-  "schema_version": 2,
-  "id": "scene-with-roomtone",
-  "title": "Scene with ambience",
   "ambience": {
     "file": "../assets/cathedral-roomtone.flac",
     "gain_db": -22,
@@ -91,47 +74,146 @@ A program may declare **one background ambience bed**:
     "fade_out_ms": 1500,
     "ducking": "speech",
     "license": "CC0-1.0",
-    "attribution": "Optional human-readable attribution"
+    "attribution": "Optional attribution"
+  }
+}
+```
+
+`file` is local, relative and workspace-bounded. HTTP(S), absolute paths and workspace escapes are rejected. Gain is `-60..+6` dB; ducking is `speech` or `off`. Legacy ambience remains supported in schema v3 for compatibility, but a program may not declare both `ambience` and `soundscape`.
+
+## Program v3 — deterministic soundscape
+
+Schema v3 introduces sound composition without introducing an arbitrary DAW timeline.
+
+```json
+{
+  "schema_version": 3,
+  "id": "cathedral-scene",
+  "title": "Inside the cathedral",
+  "soundscape": {
+    "bed": {
+      "sound": "cathedral-calm",
+      "gain_db": -23
+    },
+    "layers": [
+      {
+        "sound": "crowd-distant",
+        "gain_db": -30
+      }
+    ],
+    "events": [
+      {
+        "sound": "church-bell-distant",
+        "at_ms": 42000,
+        "gain_db": -18,
+        "placement": "right"
+      }
+    ],
+    "ducking": "speech"
   },
   "segments": [
-    {"preset": "narrateur-vif", "text": "Bienvenue."}
+    {"preset": "narrateur-vif", "text": "Bienvenue dans la nef."}
   ]
 }
 ```
 
-Rules:
-- `file` is required and is resolved relative to the program JSON file;
-- arbitrary HTTP(S) URLs and absolute paths are rejected;
-- when rendering inside a repository, a relative path may not escape the caller workspace;
-- `gain_db` defaults to `-22` and must be between `-60` and `+6`;
-- `loop` defaults to `true`;
-- fades default to 1000 ms in and 1500 ms out;
-- `ducking` is `speech` (default) or `off`;
-- optional `license` and `attribution` metadata are copied to the manifest.
+### Bounds
 
-The background file belongs to the consumer or to a separately locked asset snapshot. Discovery on the Web is outside the render contract. Production inputs should be licence-checked and content-addressed before publication.
+A soundscape supports:
+- zero or one `bed`;
+- at most **2** `layers`;
+- at most **16** `events`;
+- one global `ducking`: `speech` (default) or `off`.
 
-An ambience bed forces stereo so an existing stereo recording can retain its width. The final master is normalized only after voice and ambience are mixed.
+At least one of bed/layers/events must be present.
+
+These limits are deliberate API constraints, not current performance limits.
+
+### Sound references
+
+Every bed/layer/event declares **exactly one** of:
+
+```json
+{"sound": "validated-catalog-id"}
+```
+
+or:
+
+```json
+{"file": "assets/product-specific.wav"}
+```
+
+A `sound` resolves through the validated sound meta-index supplied by `--sounds` or the bundled catalog. Catalog ids are type checked:
+- bed/layer require an intrinsic `ambience` resource;
+- event requires an intrinsic `event` resource.
+
+The materialized catalog file must match the catalog `content_sha256` exactly before it is accepted for rendering.
+
+Local `file` inputs remain workspace-bounded and network-free.
+
+### Bed and layers
+
+Continuous components support:
+- `gain_db`: default `-22` for bed and `-28` for layer, range `-60..+6`;
+- `loop`: default `true`;
+- `fade_in_ms`: default `1000`, non-negative;
+- `fade_out_ms`: default `1500`, non-negative.
+
+`layer` is a soundscape role, not a catalog resource type. The same validated ambience may serve as the main bed or a secondary layer.
+
+### Events
+
+Events require:
+- `at_ms`: explicit non-negative timestamp;
+- optional `gain_db`, default `-18`, range `-60..+6`;
+- optional `placement`: `left`, `center` (default), or `right`.
+
+P2 intentionally has no random/recurring scheduling. An event whose start time lies beyond the rendered program duration is rejected.
+
+## Validated sound meta-index
+
+The public `sounds` catalog contains only production-approved entries. Each entry must have:
+- unique stable id;
+- intrinsic type `ambience` or `event`;
+- `status: validated`;
+- semantic tags;
+- exact lowercase SHA-256 content hash;
+- verified per-asset licence metadata;
+- locked asset information.
+
+`asset.file` must be a local relative path. A location-only asset can document licensed/private storage but is not directly renderable by catalog id until materialized locally.
+
+See [`SOUNDS.md`](SOUNDS.md).
+
+## Rendering model
+
+Soundscape composition remains bounded internally:
+
+```text
+bed + layers + events
+        ↓
+ deterministic environment.wav
+        ↓
+speech + environment.wav
+        ↓
+      ducking
+        ↓
+    final loudnorm
+```
+
+One soundscape therefore does not turn `mix` into a general multitrack engine.
+
+## Stereo
+
+`speech` remains mono 80 kbit/s when no scene feature needs stereo. Non-center dialogue, legacy ambience, or a v3 soundscape automatically produces stereo and raises speech output to at least 96 kbit/s.
 
 ## Stage-level caching
 
-Audio Engine separates expensive synthesis from cheap mixing:
+Expensive TTS clips are content-addressed independently from placement and sound design.
 
-```text
-text + resolved voice settings
-        ↓
-content-addressed voice clip cache
-        ↓
-placement / ambience preparation
-        ↓
-master mix
-```
+Environment caches include exact source hashes, declared processing settings, target duration/format and relevant engine code. Changing only an event timestamp, layer gain, fades, ducking or speaker placement normally remixes locally without synthesizing unchanged speech again.
 
-Changing only `placement`, ambience gain, fades, or ducking does **not** require a new TTS call when the text and resolved voice settings are unchanged.
-
-The ambience preparation cache includes the source file hash, preparation settings, target duration, output format, and ambience-engine code. A change to ambience processing therefore cannot silently reuse an old prepared asset.
-
-## Render output
+## Output
 
 For program id `episode-01`:
 
@@ -142,21 +224,17 @@ OUT/episode-01/
   transcript.json
 ```
 
-`manifest.json` records the render status, source SHA-256, voice-config SHA-256, engine version, provider processing mode, profile, codec, bitrate, sample rate, channels, duration, cache information, and ambience source identity/provenance when present.
+The manifest records engine/provider/profile data, source and render fingerprints, audio properties, stage-cache information and, when present, legacy ambience or soundscape component metadata including content hashes and catalog provenance/licence data.
 
-`transcript.json` contains resolved segments, resolved semantic placement, internal resolved pan for diagnostics, and sources. Consumers should use the manifest instead of probing the MP3.
-
-Internal caches are stored below `OUT/.cache/` and are implementation details, not published listening assets.
+Internal caches live below `OUT/.cache/` and are not publication assets.
 
 ## Batch
 
-`audio-engine batch "path/**/*.json"` renders each matched program independently. It writes `OUT/render-report.json`.
-
-A bad member does not roll back or delete successful renders.
+`audio-engine batch "path/**/*.json"` renders members independently and writes `OUT/render-report.json`. A failed program does not remove successful outputs.
 
 ## Assembly
 
-Assembly joins already-rendered listening units and remains schema v1. It does **not** imply that every series should be concatenated.
+Assembly remains schema v1 and joins existing listening units:
 
 ```json
 {
@@ -170,34 +248,14 @@ Assembly joins already-rendered listening units and remains schema v1. It does *
 }
 ```
 
-Paths are relative to the assembly JSON file. Output is `OUT/long-program/audio.mp3` plus `manifest.json`.
+## Explicit non-goals
 
-Audioguide visit/route episodes should normally remain separate because movement occurs between listening units. Audiobooks are a typical case where `assemble` can be useful.
-
-## Errors
-
-Single `render`/`assemble`:
-- malformed contract or missing input → non-zero exit;
-- provider or FFmpeg failure → non-zero exit;
-- forbidden or escaping ambience asset → non-zero exit.
-
-`batch`:
-- failures are isolated and recorded in `render-report.json`;
-- successful outputs remain valid.
-
-## Provider boundary
-
-Program schemas do not expose provider-specific processing concepts other than optional explicit provider voice names. A later provider may implement the same synthesis interface without changing scene placement, ambience, or mixing semantics.
-
-## Explicit non-goals for v2
-
-Schema v2 does **not** define:
-- front/rear or height rendering;
-- HRTF/binaural 3D;
-- distance or room simulation;
-- reverb design;
-- overlapping dialogue tracks;
-- arbitrary multi-track sound design;
-- Internet search/download during rendering.
-
-Those features require separate evidence before they become contract surface.
+The public program schemas do not define:
+- front/rear/height or HRTF/binaural 3D;
+- distance/room simulation or reverb design;
+- overlapping dialogue authoring;
+- random event scheduling;
+- unlimited tracks/events or arbitrary automation;
+- plugin/effects chains;
+- Internet search/download during rendering;
+- a general-purpose DAW timeline.
