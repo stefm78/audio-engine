@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "description": "Validated reusable sound resources for spoken-audio soundscapes. Entries are production-ready references, not discovery candidates.",
+  "policy": {
+    "discovery": "broad-multi-source",
+    "publication": "validated-only",
+    "production": "locked-asset",
+    "render_network_access": false,
+    "types": ["ambience", "event"],
+    "soundscape_roles": ["bed", "layer", "event"],
+    "max_layers": 2,
+    "max_events": 16,
+    "license_verification": "per-asset",
+    "content_hash_required": true
+  },
+  "entries": []
+}

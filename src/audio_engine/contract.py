@@ -2,9 +2,11 @@ import hashlib
 import json
 from pathlib import Path
 
-SUPPORTED_SCHEMA_VERSIONS = (1, 2)
+SUPPORTED_SCHEMA_VERSIONS = (1, 2, 3)
 PLACEMENTS = ("left", "center", "right")
 DUCKING_MODES = ("speech", "off")
+MAX_SOUND_LAYERS = 2
+MAX_SOUND_EVENTS = 16
 
 
 class ContractError(ValueError):
@@ -24,7 +26,7 @@ def sha256_file(path):
 
 
 def _non_empty_string(value):
-    return isinstance(value, str) and value.strip()
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _validate_position(value, label, errors):
@@ -37,21 +39,27 @@ def _validate_position(value, label, errors):
         errors.append(f"{label}.placement must be one of {', '.join(PLACEMENTS)}")
 
 
+def _validate_local_file(value, label, errors):
+    if not _non_empty_string(value):
+        errors.append(f"{label} is required")
+        return
+    if "://" in value:
+        errors.append(f"{label} must be a local relative path, not a URL")
+    if Path(value).is_absolute():
+        errors.append(f"{label} must be relative")
+
+
+def _validate_gain(value, label, errors):
+    if not isinstance(value, (int, float)) or not -60 <= value <= 6:
+        errors.append(f"{label} must be between -60 and 6")
+
+
 def _validate_ambience(ambience, errors):
     if not isinstance(ambience, dict):
         errors.append("ambience must be an object")
         return
-    file_value = ambience.get("file")
-    if not _non_empty_string(file_value):
-        errors.append("ambience.file is required")
-    else:
-        if "://" in file_value:
-            errors.append("ambience.file must be a local relative path, not a URL")
-        if Path(file_value).is_absolute():
-            errors.append("ambience.file must be relative")
-    gain = ambience.get("gain_db", -22)
-    if not isinstance(gain, (int, float)) or not -60 <= gain <= 6:
-        errors.append("ambience.gain_db must be between -60 and 6")
+    _validate_local_file(ambience.get("file"), "ambience.file", errors)
+    _validate_gain(ambience.get("gain_db", -22), "ambience.gain_db", errors)
     if not isinstance(ambience.get("loop", True), bool):
         errors.append("ambience.loop must be boolean")
     for name, default in (("fade_in_ms", 1000), ("fade_out_ms", 1500)):
@@ -60,6 +68,72 @@ def _validate_ambience(ambience, errors):
             errors.append(f"ambience.{name} must be >= 0")
     if ambience.get("ducking", "speech") not in DUCKING_MODES:
         errors.append(f"ambience.ducking must be one of {', '.join(DUCKING_MODES)}")
+
+
+def _validate_sound_ref(item, label, errors):
+    if not isinstance(item, dict):
+        errors.append(f"{label} must be an object")
+        return False
+    has_sound = _non_empty_string(item.get("sound"))
+    has_file = _non_empty_string(item.get("file"))
+    if has_sound == has_file:
+        errors.append(f"{label} needs exactly one of sound or file")
+    if has_file:
+        _validate_local_file(item.get("file"), f"{label}.file", errors)
+    return True
+
+
+def _validate_continuous_sound(item, label, default_gain, errors):
+    if not _validate_sound_ref(item, label, errors):
+        return
+    _validate_gain(item.get("gain_db", default_gain), f"{label}.gain_db", errors)
+    if not isinstance(item.get("loop", True), bool):
+        errors.append(f"{label}.loop must be boolean")
+    for name, default in (("fade_in_ms", 1000), ("fade_out_ms", 1500)):
+        value = item.get(name, default)
+        if not isinstance(value, (int, float)) or value < 0:
+            errors.append(f"{label}.{name} must be >= 0")
+
+
+def _validate_event(item, label, errors):
+    if not _validate_sound_ref(item, label, errors):
+        return
+    _validate_gain(item.get("gain_db", -18), f"{label}.gain_db", errors)
+    at_ms = item.get("at_ms")
+    if not isinstance(at_ms, (int, float)) or at_ms < 0:
+        errors.append(f"{label}.at_ms must be >= 0")
+    placement = item.get("placement", "center")
+    if placement not in PLACEMENTS:
+        errors.append(f"{label}.placement must be one of {', '.join(PLACEMENTS)}")
+
+
+def _validate_soundscape(soundscape, errors):
+    if not isinstance(soundscape, dict):
+        errors.append("soundscape must be an object")
+        return
+    if soundscape.get("ducking", "speech") not in DUCKING_MODES:
+        errors.append(f"soundscape.ducking must be one of {', '.join(DUCKING_MODES)}")
+    bed = soundscape.get("bed")
+    layers = soundscape.get("layers", [])
+    events = soundscape.get("events", [])
+    if bed is None and not layers and not events:
+        errors.append("soundscape needs bed, layers, or events")
+    if bed is not None:
+        _validate_continuous_sound(bed, "soundscape.bed", -22, errors)
+    if not isinstance(layers, list):
+        errors.append("soundscape.layers must be an array")
+    else:
+        if len(layers) > MAX_SOUND_LAYERS:
+            errors.append(f"soundscape.layers supports at most {MAX_SOUND_LAYERS} items")
+        for index, item in enumerate(layers, start=1):
+            _validate_continuous_sound(item, f"soundscape.layers[{index}]", -28, errors)
+    if not isinstance(events, list):
+        errors.append("soundscape.events must be an array")
+    else:
+        if len(events) > MAX_SOUND_EVENTS:
+            errors.append(f"soundscape.events supports at most {MAX_SOUND_EVENTS} items")
+        for index, item in enumerate(events, start=1):
+            _validate_event(item, f"soundscape.events[{index}]", errors)
 
 
 def validate_program(program):
@@ -107,10 +181,17 @@ def validate_program(program):
         isinstance(segment, dict) and ("placement" in segment or "pan" in segment)
         for segment in (segments or [])
     )
+    uses_v3 = "soundscape" in program
     if version == 1 and uses_v2:
-        errors.append("actors, placement, and ambience require schema_version 2")
-    if version == 2 and "ambience" in program:
+        errors.append("actors, placement, and ambience require schema_version 2 or 3")
+    if version in (1, 2) and uses_v3:
+        errors.append("soundscape requires schema_version 3")
+    if "ambience" in program and "soundscape" in program:
+        errors.append("use ambience or soundscape, not both")
+    if version in (2, 3) and "ambience" in program:
         _validate_ambience(program["ambience"], errors)
+    if version == 3 and "soundscape" in program:
+        _validate_soundscape(program["soundscape"], errors)
 
     if errors:
         raise ContractError("; ".join(errors))

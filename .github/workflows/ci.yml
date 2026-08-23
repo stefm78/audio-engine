@@ -22,8 +22,10 @@ jobs:
         run: |
           audio-engine voices
           audio-engine ambiences
+          audio-engine sounds
           audio-engine validate examples/minimal.json
           audio-engine validate examples/dialogue.json
+          audio-engine validate examples/soundscape.json
       - name: Provider smoke evidence
         continue-on-error: true
         run: audio-engine render examples/minimal.json --out .provider-smoke

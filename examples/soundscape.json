@@ -1,0 +1,34 @@
+{
+  "schema_version": 3,
+  "id": "demo-soundscape",
+  "title": "Soundscape example",
+  "language": "fr-FR",
+  "profile": "speech",
+  "soundscape": {
+    "bed": {
+      "sound": "cathedral-calm",
+      "gain_db": -23
+    },
+    "layers": [
+      {
+        "sound": "crowd-distant",
+        "gain_db": -30
+      }
+    ],
+    "events": [
+      {
+        "sound": "church-bell-distant",
+        "at_ms": 42000,
+        "gain_db": -18,
+        "placement": "right"
+      }
+    ],
+    "ducking": "speech"
+  },
+  "segments": [
+    {
+      "preset": "narrateur-vif",
+      "text": "Bienvenue dans cette scène sonore. Les identifiants sont des exemples et doivent exister dans un catalogue validé pour le rendu."
+    }
+  ]
+}

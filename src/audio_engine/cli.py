@@ -10,6 +10,7 @@ from .assemble import assemble_plan
 from .batch import render_batch
 from .contract import ContractError, load_json, validate_assembly, validate_program
 from .render import render_program
+from .sound.catalog import SOUND_TYPES, public_catalog as public_sound_catalog, sound_info
 from .voices import load_voice_config, public_catalog, recommend_presets
 
 
@@ -22,11 +23,13 @@ def build_parser():
     render.add_argument("program")
     render.add_argument("--out", default="output")
     render.add_argument("--voices", default=None)
+    render.add_argument("--sounds", default=None, help="Optional validated sound catalog JSON")
 
     batch = sub.add_parser("batch", help="Render a glob of programs, best effort")
     batch.add_argument("pattern")
     batch.add_argument("--out", default="output")
     batch.add_argument("--voices", default=None)
+    batch.add_argument("--sounds", default=None, help="Optional validated sound catalog JSON")
 
     assemble = sub.add_parser("assemble", help="Assemble existing audio assets")
     assemble.add_argument("plan")
@@ -44,7 +47,13 @@ def build_parser():
     recommend.add_argument("--limit", type=int, default=3)
     recommend.add_argument("--voices", default=None)
 
-    ambiences = sub.add_parser("ambiences", help="Publish the curated ambience catalog and asset policy")
+    sounds = sub.add_parser("sounds", help="Publish the validated production sound meta-index")
+    sounds.add_argument("--catalog", default=None, help="Optional sound catalog JSON")
+    sounds.add_argument("--id", default=None, help="Return one validated sound by id")
+    sounds.add_argument("--type", choices=SOUND_TYPES, default=None, dest="sound_type")
+    sounds.add_argument("--tag", action="append", default=[], help="Require a tag; repeat to combine tags")
+
+    ambiences = sub.add_parser("ambiences", help="Publish the legacy curated ambience catalog and asset policy")
     ambiences.add_argument("--id", default=None, help="Return one curated ambience by id")
     ambiences.add_argument("--tag", action="append", default=[], help="Require a tag; repeat to combine tags")
 
@@ -76,9 +85,19 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         if args.command == "render":
-            result = render_program(args.program, args.out, args.voices)
+            result = render_program(
+                args.program,
+                args.out,
+                voices_path=args.voices,
+                sounds_path=args.sounds,
+            )
         elif args.command == "batch":
-            result = render_batch(args.pattern, args.out, args.voices)
+            result = render_batch(
+                args.pattern,
+                args.out,
+                voices_path=args.voices,
+                sounds_path=args.sounds,
+            )
         elif args.command == "assemble":
             result = assemble_plan(args.plan, args.out)
         elif args.command == "voices":
@@ -93,6 +112,12 @@ def main(argv=None):
                 raise ValueError("--target must be a JSON object")
             config, _ = load_voice_config(args.voices)
             result = recommend_presets(target, config, args.limit)
+        elif args.command == "sounds":
+            if args.id:
+                entry, _ = sound_info(args.id, args.catalog)
+                result = {"entry": entry}
+            else:
+                result = public_sound_catalog(args.catalog, tags=args.tag, sound_type=args.sound_type)
         elif args.command == "ambiences":
             result = ambience_info(args.id) if args.id else public_ambience_catalog(tags=args.tag)
         elif args.command == "ambience":

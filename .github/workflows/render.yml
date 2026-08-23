@@ -27,6 +27,11 @@ on:
         required: false
         default: ''
         type: string
+      sounds_path:
+        description: Optional validated sound catalog path in caller repository
+        required: false
+        default: ''
+        type: string
 
 jobs:
   render:
@@ -50,8 +55,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ inputs.output_dir }}
-          key: audio-engine-v2-${{ runner.os }}-${{ github.repository }}-${{ github.sha }}
+          key: audio-engine-v3-${{ runner.os }}-${{ github.repository }}-${{ github.sha }}
           restore-keys: |
+            audio-engine-v3-${{ runner.os }}-${{ github.repository }}-
             audio-engine-v2-${{ runner.os }}-${{ github.repository }}-
             audio-engine-v1-${{ runner.os }}-${{ github.repository }}-
       - name: Install audio-engine
@@ -62,10 +68,14 @@ jobs:
           SOURCE_GLOB: ${{ inputs.source_glob }}
           OUTPUT_DIR: ${{ inputs.output_dir }}
           VOICES_PATH: ${{ inputs.voices_path }}
+          SOUNDS_PATH: ${{ inputs.sounds_path }}
         run: |
           args=()
           if [[ -n "$VOICES_PATH" ]]; then
             args+=(--voices "$VOICES_PATH")
+          fi
+          if [[ -n "$SOUNDS_PATH" ]]; then
+            args+=(--sounds "$SOUNDS_PATH")
           fi
           audio-engine batch "$SOURCE_GLOB" --out "$OUTPUT_DIR" "${args[@]}"
       - name: Upload audio assets

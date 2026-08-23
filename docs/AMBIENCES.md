@@ -1,17 +1,8 @@
-# Ambience catalog
+# Ambience discovery and qualification
 
-Audio Engine separates **broad discovery** from the small **curated ambience catalog** used in production. It is not a crawler and not a repository of arbitrary audio files.
+Audio Engine separates **broad discovery** from **validated production sounds**. It is not a crawler and rendering never downloads from the Web.
 
 ## Commands
-
-Curated production catalog:
-
-```bash
-audio-engine ambiences
-audio-engine ambiences --tag interior
-audio-engine ambiences --tag interior --tag calm
-audio-engine ambiences --id cathedral-calm
-```
 
 Candidate discovery and intake:
 
@@ -29,138 +20,76 @@ audio-engine ambience qualify assets/cathedral.wav \
   --tag interior --tag calm
 ```
 
-All command output is JSON so humans, agents, Audioguide, Learn-it, or other clients can use the same evidence.
+Validated production collection:
 
-`ambience discover` performs **zero network requests**. It turns one semantic query into a machine-readable plan across the known sourcing surface, including direct search URLs where a stable provider search URL is known. Humans or agents perform the actual Web search outside the rendering process.
+```bash
+audio-engine sounds
+audio-engine sounds --type ambience --tag interior
+audio-engine sounds --type event --tag bell
+```
 
-`ambience qualify` operates only on a file that has already been downloaded under the applicable terms. It probes the local asset and records:
+The legacy `audio-engine ambiences` command remains available for schema-v2 compatibility. New reusable production resources should converge on the generic `sounds` meta-index described in [`SOUNDS.md`](SOUNDS.md).
 
-- SHA-256 and byte size;
-- codec;
-- sample rate;
-- channel count when identifiable;
-- duration;
-- declared source/provider metadata;
-- declared licence and redistribution mode;
-- pending listening, loopability, speech-masking, licence-verification and snapshot gates.
+## Candidate workflow
 
-A successful technical probe **never means the asset is approved**. Qualified output deliberately remains `status: candidate` and `promotion.eligible: false` until the human/editorial and rights gates are completed.
+```text
+many Web/catalog sources
+        ↓
+ambience discover
+        ↓
+human/agent download outside render
+        ↓
+ambience qualify
+        ↓
+licence + listening + suitability review
+        ↓
+validated sounds meta-index
+        ↓
+schema-v3 soundscape
+```
 
-## Broad discovery, narrow promotion
+`ambience discover` performs **zero network requests** itself. It turns a semantic query into a machine-readable plan across known sources.
+
+`ambience qualify` operates only on an already-downloaded local file and records technical evidence such as SHA-256, duration, codec/sample-rate/channel information, declared provenance, licence and redistribution posture.
+
+A successful probe **never means approved**. Candidate output remains ineligible until rights, listening, speech-masking, context, loopability where relevant, and durable asset strategy are reviewed.
+
+## Broad discovery surface
+
+The current source registry covers Openverse, Wikimedia Commons, Freesound, Pixabay Sound Effects, ZapSplat, Mixkit, Sonniss GameAudioGDC, Free To Use Sounds, Soundly, BOOM Library, Pro Sound Effects and Pond5.
+
+This is a discovery surface, not an allow-list. Provider reputation never replaces checking the exact asset licence.
 
 The sourcing rule is:
 
-> Search widely. Qualify strictly. Produce from a locked asset.
+> Search widely. Qualify strictly. Produce from exact locked content.
 
-Discovery should not be limited to one or two websites. The machine-readable source registry currently covers:
+## Promotion into `sounds`
 
-- Openverse;
-- Wikimedia Commons;
-- Freesound;
-- Pixabay Sound Effects;
-- ZapSplat;
-- Mixkit;
-- Sonniss GameAudioGDC;
-- Free To Use Sounds;
-- Soundly;
-- BOOM Library;
-- Pro Sound Effects;
-- Pond5.
-
-The registry is a discovery surface, not an allow-list. A provider name never substitutes for checking the licence of the exact asset.
-
-## Promotion gates
-
-An ambience enters the curated catalog only after all production gates are satisfied:
+A reusable ambience/event is promoted only after:
 
 1. provenance identified;
-2. licence verified;
-3. content hash captured;
+2. exact per-asset licence verified;
+3. SHA-256 captured;
 4. listening quality reviewed;
-5. suitability as a background bed reviewed;
-6. loopability recorded when relevant;
-7. speech masking checked;
-8. durable production snapshot strategy established.
+5. suitability behind spoken audio reviewed;
+6. contextual/historical fit reviewed where applicable;
+7. loopability/speech masking recorded where relevant;
+8. durable, licence-compliant asset materialization established.
 
-A small curated catalog is preferable to an impressive but unreliable sound library. Discovery, however, should remain broad.
+The public `sounds` catalog then enforces `status: validated`, verified licence metadata, exact content hash and locked asset information. At render time, a catalog id is accepted only if its materialized local file matches the recorded SHA-256.
 
-## Web discovery versus production
+## Snapshot and redistribution
 
-Web search/download is intentionally outside the `render` contract.
+Two cases must remain distinct:
 
-A production program uses a local relative `ambience.file`. The file may be:
+1. **Redistributable originals** — suitable CC0/open assets may be snapshotted in shared durable storage when permitted.
+2. **Production-only licensed originals** — many commercial royalty-free libraries allow embedding in a finished mix but forbid raw redistribution. Their source files must stay in authorized storage and must not be republished standalone.
 
-- a product-specific recording owned by the consumer;
-- a snapshot of a qualified Web asset;
-- later, a materialized member of a shared curated ambience pack.
+`asset.location` can document a validated asset that is not currently materialized. Rendering by catalog id requires a local `asset.file` available in the authorized workspace.
 
-Playback never depends on the third-party source: the ambience is mixed into the final master.
+## Legacy schema-v2 ambience
 
-## Snapshot and redistribution rule
+Schema v2 still accepts one local relative `ambience.file` with gain, loop, fades and speech ducking. It is preserved for backward compatibility.
 
-Two asset classes must be treated differently:
-
-1. **Redistributable source assets** — for example CC0 or suitable CC BY material. The original may be snapshotted in a durable shared location when the licence permits it and attribution obligations are preserved.
-2. **Production-only licensed assets** — many royalty-free commercial libraries permit use inside a finished production but forbid redistribution of the raw sound. These originals must not be committed to a public repository or public Release as standalone files. Keep the licensed source in an appropriate private/local asset location and publish only the resulting mixed production plus provenance metadata permitted by the licence.
-
-The engine does not need to know which storage product is used. It only receives the qualified local file at render time.
-
-## Licence policy
-
-Initial automated policy is deliberately conservative:
-
-- CC0 / public-domain equivalent: suitable after provenance and quality checks;
-- CC BY: suitable after attribution requirements are captured;
-- CC BY-SA: manual review;
-- provider-specific royalty-free licences: manual review of the exact asset and raw-redistribution rules;
-- NC or ND restrictions: rejected by default for the shared generic catalog.
-
-The catalog policy is machine-readable in `ambiences.json`; it is guidance, not legal advice.
-
-## Entry shape
-
-A promoted entry should look broadly like:
-
-```json
-{
-  "id": "cathedral-calm",
-  "label": "Cathedral — calm room tone",
-  "tags": ["interior", "calm", "stereo", "loopable"],
-  "source": {
-    "provider": "qualified provider",
-    "identifier": "provider asset id",
-    "page": "canonical source page"
-  },
-  "license": {
-    "id": "CC0-1.0",
-    "verified": true,
-    "attribution": null
-  },
-  "content_sha256": "...",
-  "audio": {
-    "channels": 2,
-    "loopable": true
-  },
-  "defaults": {
-    "gain_db": -22,
-    "ducking": "speech"
-  },
-  "snapshot": {
-    "status": "locked",
-    "location": "consumer/shared durable asset location"
-  }
-}
-```
-
-Adding such an entry must not require changing the mixer or consumer application code.
-
-## Client responsibility
-
-Clients should expose semantic choices, for example:
-
-```text
-Ambience: None / Cathedral / Forest / Street / Classroom
-Level: Subtle / Normal / Present
-```
-
-They should not expose provenance URLs, codecs, channel gains, or FFmpeg settings to ordinary users.
+Schema v3 `soundscape` is the forward path for richer environments: validated or explicit local ambience resources can act as bed/layers and punctual `event` resources can be placed at explicit timestamps.
