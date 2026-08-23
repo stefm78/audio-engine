@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "description": "Discovery sources for ambience candidates. This registry helps humans and agents search broadly; it is never consulted during rendering.",
+  "sources": [
+    {
+      "id": "openverse",
+      "label": "Openverse",
+      "tier": "open-index",
+      "homepage": "https://openverse.org/",
+      "search_url_template": "https://openverse.org/search/audio?q={query}",
+      "notes": "Aggregator for openly licensed media; verify licence at the original source."
+    },
+    {
+      "id": "wikimedia-commons",
+      "label": "Wikimedia Commons",
+      "tier": "open-archive",
+      "homepage": "https://commons.wikimedia.org/",
+      "search_url_template": "https://commons.wikimedia.org/w/index.php?search={query}&title=Special:MediaSearch&type=audio",
+      "notes": "Per-file licence and provenance."
+    },
+    {
+      "id": "freesound",
+      "label": "Freesound",
+      "tier": "community-field-recording",
+      "homepage": "https://freesound.org/",
+      "search_url_template": "https://freesound.org/search/?q={query}",
+      "notes": "Rich field-recording corpus; licence varies per sound."
+    },
+    {
+      "id": "pixabay",
+      "label": "Pixabay Sound Effects",
+      "tier": "royalty-free",
+      "homepage": "https://pixabay.com/sound-effects/",
+      "search_url_template": "https://pixabay.com/sound-effects/search/{query_path}/",
+      "notes": "Large sound-effects catalog; verify current provider terms for each production."
+    },
+    {
+      "id": "zapsplat",
+      "label": "ZapSplat",
+      "tier": "royalty-free",
+      "homepage": "https://www.zapsplat.com/",
+      "search_url_template": null,
+      "notes": "Large sound-effects and ambience catalog; provider terms depend on asset/account."
+    },
+    {
+      "id": "mixkit",
+      "label": "Mixkit",
+      "tier": "royalty-free",
+      "homepage": "https://mixkit.co/free-sound-effects/",
+      "search_url_template": null,
+      "notes": "Free sound-effects collection; verify current provider terms."
+    },
+    {
+      "id": "sonniss-gameaudiogdc",
+      "label": "Sonniss GameAudioGDC",
+      "tier": "professional-free-pack",
+      "homepage": "https://sonniss.com/gameaudiogdc/",
+      "search_url_template": null,
+      "notes": "Professional free bundles; raw redistribution rules must be checked."
+    },
+    {
+      "id": "free-to-use-sounds",
+      "label": "Free To Use Sounds",
+      "tier": "professional-field-recording",
+      "homepage": "https://www.freetousesounds.com/",
+      "search_url_template": null,
+      "notes": "Field recordings and immersive material; verify current licence and redistribution rights."
+    },
+    {
+      "id": "soundly",
+      "label": "Soundly",
+      "tier": "professional-library",
+      "homepage": "https://getsoundly.com/",
+      "search_url_template": null,
+      "notes": "Professional search/library service; raw assets are generally production inputs, not public repo content."
+    },
+    {
+      "id": "boom-library",
+      "label": "BOOM Library",
+      "tier": "professional-library",
+      "homepage": "https://www.boomlibrary.com/",
+      "search_url_template": null,
+      "notes": "Professional sound-effects library; use under applicable licence."
+    },
+    {
+      "id": "pro-sound-effects",
+      "label": "Pro Sound Effects",
+      "tier": "professional-library",
+      "homepage": "https://www.prosoundeffects.com/",
+      "search_url_template": null,
+      "notes": "Professional sound-effects library; use under applicable licence."
+    },
+    {
+      "id": "pond5",
+      "label": "Pond5",
+      "tier": "marketplace",
+      "homepage": "https://www.pond5.com/sound-effects/",
+      "search_url_template": null,
+      "notes": "Large marketplace useful for hard-to-find material; verify licence per acquisition."
+    }
+  ]
+}
