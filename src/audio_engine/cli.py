@@ -10,6 +10,7 @@ from .assemble import assemble_plan
 from .batch import render_batch
 from .contract import ContractError, load_json, validate_assembly, validate_program
 from .render import render_program
+from .sound.acquisition import DEFAULT_PROVIDERS, ensure_sound
 from .sound.catalog import SOUND_TYPES, public_catalog as public_sound_catalog, sound_info
 from .sound.selection import select_candidates
 from .voices import load_voice_config, public_catalog, recommend_presets
@@ -73,7 +74,7 @@ def build_parser():
     sounds.add_argument("--type", choices=SOUND_TYPES, default=None, dest="sound_type")
     sounds.add_argument("--tag", action="append", default=[])
 
-    sound = sub.add_parser("sound", help="Autonomous sound qualification and selection")
+    sound = sub.add_parser("sound", help="Autonomous sound qualification, selection and acquisition")
     sound_sub = sound.add_subparsers(dest="sound_command", required=True)
     sound_qualify = sound_sub.add_parser("qualify", help="Machine-qualify one downloaded sound candidate")
     _add_qualify_args(sound_qualify, include_type=True)
@@ -83,6 +84,20 @@ def build_parser():
     sound_select.add_argument("--require-tag", action="append", default=[])
     sound_select.add_argument("--prefer-tag", action="append", default=[])
     sound_select.add_argument("--min-score", type=float, default=70.0)
+    sound_ensure = sound_sub.add_parser(
+        "ensure",
+        help="Resolve a semantic sound request from the catalog or acquire it autonomously",
+    )
+    sound_ensure.add_argument("query")
+    sound_ensure.add_argument("--type", choices=SOUND_TYPES, required=True, dest="sound_type")
+    sound_ensure.add_argument("--id", default=None, dest="sound_id")
+    sound_ensure.add_argument("--catalog", default=None)
+    sound_ensure.add_argument("--out", default=".sound-acquisition")
+    sound_ensure.add_argument("--provider", action="append", choices=DEFAULT_PROVIDERS, default=[])
+    sound_ensure.add_argument("--require-tag", action="append", default=[])
+    sound_ensure.add_argument("--prefer-tag", action="append", default=[])
+    sound_ensure.add_argument("--limit", type=int, default=8)
+    sound_ensure.add_argument("--min-score", type=float, default=70.0)
 
     ambiences = sub.add_parser("ambiences", help="Publish the legacy curated ambience catalog and asset policy")
     ambiences.add_argument("--id", default=None)
@@ -140,12 +155,25 @@ def main(argv=None):
                     tags=args.tag,
                     preview_dir=args.preview_dir,
                 )
-            else:
+            elif args.sound_command == "select":
                 result = select_candidates(
                     args.candidates,
                     sound_type=args.sound_type,
                     required_tags=args.require_tag,
                     preferred_tags=args.prefer_tag,
+                    min_score=args.min_score,
+                )
+            else:
+                result = ensure_sound(
+                    args.query,
+                    sound_type=args.sound_type,
+                    sound_id=args.sound_id,
+                    required_tags=args.require_tag,
+                    preferred_tags=args.prefer_tag,
+                    providers=args.provider or None,
+                    output_dir=args.out,
+                    catalog_path=args.catalog,
+                    limit=args.limit,
                     min_score=args.min_score,
                 )
         elif args.command == "ambiences":
