@@ -21,7 +21,7 @@ def _declared_position(segment, actors):
 
 
 def stereo_required(program):
-    if program.get("ambience"):
+    if program.get("ambience") or program.get("soundscape"):
         return True
     actors = program.get("actors", {})
     for segment in program.get("segments", []):
