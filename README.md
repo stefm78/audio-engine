@@ -2,7 +2,17 @@
 
 Small, reusable spoken-audio renderer.
 
-`audio-engine` turns a declared JSON audio program into published-ready audio assets. It is deliberately product-agnostic: it does not know about audioguides, learning kits, websites, releases, or storage.
+`audio-engine` turns a declared JSON audio program into publication-ready audio assets. It is deliberately product-agnostic: it does not know about audioguides, learning kits, websites, releases, or storage.
+
+Internally, the pipeline is deliberately split into three responsibilities:
+
+```text
+text ──► voice ──┐
+                 ├──► mix ──► master
+asset ─► ambience┘
+```
+
+Consumers still use **one CLI, one JSON contract, and one GitHub workflow**.
 
 ## Quick start
 
@@ -13,6 +23,7 @@ python -m pip install -e .
 audio-engine validate examples/minimal.json
 audio-engine voices
 audio-engine render examples/minimal.json --out output
+audio-engine render examples/dialogue.json --out output
 ```
 
 Output:
@@ -25,7 +36,7 @@ output/
     transcript.json
 ```
 
-Default `speech` output is MP3, mono, 24 kHz, 80 kbit/s, normalized for spoken-word listening.
+Default `speech` output is MP3, mono, 24 kHz, 80 kbit/s, normalized for spoken-word listening. A v2 program that declares stereo placement or ambience automatically renders stereo at at least 96 kbit/s.
 
 ## Commands
 
@@ -42,9 +53,11 @@ audio-engine validate PROGRAM.json
 
 `batch` is best effort: one failed program is reported in `render-report.json` and does not delete successful outputs.
 
-## Input
+## Contracts
 
-See [`docs/CONTRACT.md`](docs/CONTRACT.md). A minimal program is:
+See [`docs/CONTRACT.md`](docs/CONTRACT.md).
+
+### Schema v1 — narration
 
 ```json
 {
@@ -64,34 +77,80 @@ See [`docs/CONTRACT.md`](docs/CONTRACT.md). A minimal program is:
 }
 ```
 
-Segments may use an explicit provider voice, a validated `preset`, or a `target` profile. With `target`, the same recommendation rules exposed by `audio-engine recommend` are used during rendering, and the top alternatives are recorded in the transcript.
+### Schema v2 — dialogue stéréo
+
+```json
+{
+  "schema_version": 2,
+  "id": "dialogue",
+  "title": "Dialogue",
+  "actors": {
+    "narrator": {"placement": "center"},
+    "alice": {"placement": "left"},
+    "bob": {"placement": "right"}
+  },
+  "segments": [
+    {"character_id": "narrator", "preset": "narrateur-vif", "text": "Ils discutent."},
+    {"character_id": "alice", "preset": "conteuse-chaleureuse", "text": "Bonjour."},
+    {"character_id": "bob", "preset": "officier-autorite", "text": "Bonjour."}
+  ]
+}
+```
+
+Clients describe the scene. Audio Engine owns constant-power channel gains and output encoding.
+
+### Schema v2 — optional ambience
+
+```json
+{
+  "schema_version": 2,
+  "id": "cathedral-scene",
+  "title": "Cathedral scene",
+  "ambience": {
+    "file": "assets/cathedral-roomtone.flac",
+    "gain_db": -22,
+    "loop": true,
+    "fade_in_ms": 1000,
+    "fade_out_ms": 1500,
+    "ducking": "speech"
+  },
+  "segments": [
+    {"preset": "narrateur-vif", "text": "Bienvenue."}
+  ]
+}
+```
+
+The ambience is a local/snapshotted production asset relative to the JSON program. Arbitrary Web URLs are rejected. Use the Web to discover candidates; qualify licence/quality once, then render from a locked asset.
 
 ## Profiles
 
-- `speech`: 80 kbit/s, mono, 24 kHz — default for narration.
-- `speech-high`: 96 kbit/s, mono, 24 kHz — extra margin for demanding spoken material.
+- `speech`: 80 kbit/s mono by default; 96 kbit/s minimum when stereo is required; 24 kHz.
+- `speech-high`: 96 kbit/s mono or stereo; 24 kHz.
 
-The engine normalizes the final assembled asset. Segment files are temporary and are never part of the published output.
+The engine normalizes only the final master.
 
-## Content-addressed reuse
+## Stage-level content-addressed reuse
 
-A completed render is reusable only when its render fingerprint still matches. The fingerprint includes:
+A completed master is reusable only when its render fingerprint still matches. In addition, expensive TTS clips have their own content-addressed cache keyed by text, resolved voice settings, provider, and provider code.
 
-- source JSON SHA-256;
-- voice configuration SHA-256;
-- rendering-code SHA-256;
-- provider name;
-- output profile.
+That means changing only:
 
-If those inputs are unchanged and `audio.mp3` plus `transcript.json` are present, `render` returns a cache hit without calling the TTS provider. The reusable GitHub workflow also restores the previous generated-audio directory with `actions/cache`, so a consumer changing one episode normally regenerates only that episode.
+- `left` → `right`;
+- ambience level;
+- fades;
+- ducking;
 
-`render-report.json` distinguishes `rendered_count`, `cached_count`, and failures.
+normally remixes locally without calling the remote TTS provider again.
+
+Ambience preparation has its own cache keyed by source content hash and processing settings.
+
+Internal stage caches live below `OUT/.cache/`; they are not listening assets and should not be published as product content.
 
 ## Provider and privacy
 
 The current provider is Edge TTS. Processing is **remote**: text sent for synthesis leaves the runner. Do not use the remote provider for content that must not be sent to an external TTS service.
 
-Provider choice is isolated from the rendering contract so a local or different remote provider can be added later without changing consumer data.
+Provider choice is isolated from placement, ambience, and mixing so a local or different remote voice provider can be added later without changing client scene data.
 
 ## Reusable GitHub workflow
 
@@ -111,10 +170,20 @@ The called workflow uploads the generated directory as an Actions artifact. The 
 
 For production, pin both the called workflow and `engine_ref` to the same tested tag or SHA.
 
-## Design boundaries
+## Current design boundary
 
-Read [`AGENTS.md`](AGENTS.md) before changing architecture. The core rule is:
+P1 intentionally supports:
+
+- mono narration;
+- stable left/center/right dialogue placement;
+- numeric pan as an advanced override;
+- one optional background ambience;
+- gain, loop, fades, and simple speech ducking;
+- automatic mono/stereo output;
+- final normalization and encoding.
+
+P1 intentionally does **not** implement HRTF/binaural 3D, front/rear/height positioning, room simulation, reverb design, effects timelines, or a general-purpose multitrack workstation.
+
+Read [`AGENTS.md`](AGENTS.md) before changing architecture. The core rule remains:
 
 > Input contract → audio assets + manifest.
-
-No backend, database, content catalog, publication logic, product-specific concepts, or permanent audio storage belong here.
