@@ -34,3 +34,18 @@ jobs:
         run: |
           audio-engine sound hydrate examples/sound-requirements-smoke.json --out .hydration-smoke
           audio-engine sounds --catalog .hydration-smoke/sounds.json --id ci-pretiosa
+      - name: Generic eligible discovery evidence
+        continue-on-error: true
+        run: |
+          audio-engine sound ensure "cathedral bell" \
+            --type event \
+            --id ci-generic-cathedral-bell \
+            --provider wikimedia-commons \
+            --provider openverse \
+            --require-tag bell \
+            --prefer-tag cathedral \
+            --prefer-tag church \
+            --prefer-tag distant \
+            --out .generic-discovery-smoke \
+            --limit 8 \
+            --min-score 70
