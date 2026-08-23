@@ -41,8 +41,9 @@ def make_event(path, duration=1.0):
 class V4EffectsTests(unittest.TestCase):
     def test_capability_catalog_contains_only_bounded_public_features(self):
         catalog = public_capabilities(engine_version="test")
-        self.assertEqual(catalog["version"], 1)
+        self.assertEqual(catalog["version"], 2)
         self.assertIn(4, catalog["program_schema_versions"])
+        self.assertIn(5, catalog["program_schema_versions"])
         spaces = {item["id"] for item in catalog["effects"]["acoustic_spaces"]}
         self.assertEqual(
             spaces,
