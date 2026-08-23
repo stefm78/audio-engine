@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "description": "Curated reusable ambience references. Entries are added only after licence, provenance, content hash and listening quality are verified.",
+  "policy": {
+    "web_discovery": "outside-render",
+    "production": "locked-snapshot",
+    "preferred_sources": ["Wikimedia Commons"],
+    "automatic_licenses": ["CC0-1.0", "CC-BY-4.0"],
+    "manual_review_licenses": ["CC-BY-SA-4.0"],
+    "rejected_by_default": ["CC-BY-NC-*", "CC-BY-ND-*"]
+  },
+  "entries": []
+}
