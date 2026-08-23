@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import tempfile
@@ -86,6 +87,47 @@ def cached_manifest(output_dir, expected_fingerprint):
     return manifest
 
 
+def _resolve_relative_sound_intent(soundscape, schema_version, timeline):
+    if schema_version < 6 or not soundscape:
+        return soundscape, []
+    resolved = copy.deepcopy(soundscape)
+    resolutions = []
+    for index, event in enumerate(resolved.get("events", []), start=1):
+        if event.get("role", "punctuation") != "bridge":
+            continue
+        if "carry_through_segments" not in event:
+            resolutions.append({
+                "event": index,
+                "role": "bridge",
+                "carry_mode": "fixed-ms",
+                "resolved_carry_under_speech_ms": float(event["carry_under_speech_ms"]),
+            })
+            continue
+
+        anchor = int(event["after_segment"])
+        count = int(event["carry_through_segments"])
+        first_sequence = anchor + 1
+        last_sequence = anchor + count
+        tail_ms = float(event.get("tail_ms", 0))
+        next_start_ms = float(timeline[first_sequence]["start_ms"])
+        target_end_ms = float(timeline[last_sequence]["end_ms"]) + tail_ms
+        carry_ms = max(0.0, target_end_ms - next_start_ms)
+        event["carry_under_speech_ms"] = round(carry_ms, 3)
+        resolutions.append({
+            "event": index,
+            "role": "bridge",
+            "carry_mode": "through-segments",
+            "after_segment": anchor,
+            "carry_through_segments": count,
+            "through_segment": last_sequence,
+            "tail_ms": tail_ms,
+            "next_voice_start_ms": round(next_start_ms, 3),
+            "target_sound_end_ms": round(target_end_ms, 3),
+            "resolved_carry_under_speech_ms": round(carry_ms, 3),
+        })
+    return resolved, resolutions
+
+
 def render_program(program_path, output_root, voices_path=None, provider=None, sounds_path=None):
     program_path = Path(program_path)
     program = validate_program(load_json(program_path))
@@ -145,6 +187,7 @@ def render_program(program_path, output_root, voices_path=None, provider=None, s
     soundscape_manifest = None
     soundscape_cache_hit = None
     timeline = None
+    resolved_sound_intent = []
 
     with tempfile.TemporaryDirectory() as temp_value:
         temp_dir = Path(temp_value)
@@ -178,8 +221,11 @@ def render_program(program_path, output_root, voices_path=None, provider=None, s
             )
             ducking = program["ambience"].get("ducking", "speech")
         elif program.get("soundscape"):
+            soundscape_for_render, resolved_sound_intent = _resolve_relative_sound_intent(
+                program["soundscape"], program["schema_version"], timeline
+            )
             environment_path, soundscape_cache_hit, soundscape_manifest = render_soundscape(
-                program["soundscape"],
+                soundscape_for_render,
                 program_path,
                 output_root / ".cache" / "soundscapes",
                 duration,
@@ -254,6 +300,7 @@ def render_program(program_path, output_root, voices_path=None, provider=None, s
             "soundscape_cache_hit": soundscape_cache_hit,
             "ducking": mix_ducking,
             "timeline": timeline if program["schema_version"] >= 4 else None,
+            "resolved_sound_intent": resolved_sound_intent or None,
         },
         "transcript": "transcript.json",
         "warnings": [],
