@@ -1,0 +1,99 @@
+name: Hydrate sound library
+
+on:
+  workflow_call:
+    inputs:
+      requirements_path:
+        description: Sound requirements JSON path in the caller repository
+        required: true
+        type: string
+      artifact_name:
+        description: Hydrated library artifact name
+        required: false
+        default: sound-library
+        type: string
+      engine_ref:
+        description: audio-engine branch, tag, or SHA to execute
+        required: false
+        default: main
+        type: string
+      release_tag:
+        description: Durable caller-repository Release tag
+        required: false
+        default: sound-library
+        type: string
+      publish_release:
+        description: Publish validated resources to the durable Release on non-PR runs
+        required: false
+        default: true
+        type: boolean
+      fail_on_unresolved:
+        description: Fail hydration when one or more requirements cannot be resolved
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  hydrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout caller
+        uses: actions/checkout@v6
+      - name: Checkout audio-engine
+        uses: actions/checkout@v6
+        with:
+          repository: stefm78/audio-engine
+          ref: ${{ inputs.engine_ref }}
+          path: .audio-engine
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install audio-engine
+        run: python -m pip install --disable-pip-version-check ./.audio-engine
+      - name: Restore durable sound seed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          mkdir -p .sound-release-cache
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir .sound-release-cache --clobber || true
+          fi
+      - name: Hydrate sound library
+        env:
+          REQUIREMENTS_PATH: ${{ inputs.requirements_path }}
+        run: audio-engine sound hydrate "$REQUIREMENTS_PATH" --seed-dir .sound-release-cache --out sound-library
+      - name: Enforce unresolved policy
+        if: inputs.fail_on_unresolved
+        run: |
+          python - <<'PY'
+          import json
+          data = json.load(open('sound-library/hydration.json', encoding='utf-8'))
+          if data.get('unresolved_count', 0):
+              raise SystemExit(f"Unresolved sounds: {data['unresolved']}")
+          PY
+      - name: Upload hydrated sound library
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: sound-library
+          if-no-files-found: error
+      - name: Publish durable validated sounds
+        if: inputs.publish_release && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "Validated sound library" --notes "Machine-verified Audio Engine sound resources."
+          fi
+          for dir in sound-library/assets sound-library/catalogs sound-library/selections; do
+            if [[ -d "$dir" ]]; then
+              find "$dir" -maxdepth 1 -type f -print0 | while IFS= read -r -d '' file; do
+                gh release upload "$RELEASE_TAG" "$file" --repo "$GITHUB_REPOSITORY" --clobber
+              done
+            fi
+          done
