@@ -2,14 +2,15 @@
 
 ## Purpose
 
-Audio Engine converts a declared structured audio program into audio assets and a machine-readable manifest. It also publishes validated voice and sound catalogs.
+Audio Engine converts a declared structured audio program into audio assets and a machine-readable manifest. It also publishes validated voice, sound and engine-capability catalogs.
 
-Internally it has four responsibilities with one public product boundary:
+Internally it has five responsibilities with one public product boundary:
 
-- `voice` — text and resolved voice settings → cached mono voice clips;
+- `voice` — text and resolved voice settings → cached dry mono voice clips;
 - `ambience` — legacy schema-v2 single-bed preparation and pre-production candidate tooling;
 - `sound` — validated sound meta-index + one deterministic environment track from bed/layers/events;
-- `mix` — speech + optional prepared environment → final mono/stereo master.
+- `effects` — bounded semantic acoustic-space presets and public capability metadata;
+- `mix` — dry speech clips + optional acoustic-space treatment + optional prepared environment → final mono/stereo master.
 
 Consumers call **Audio Engine**, not separate services.
 
@@ -20,7 +21,8 @@ Do not add:
 - content authoring or permanent media storage;
 - arbitrary Web downloads during rendering;
 - web UI, backend, database, accounts, queues, or job dashboards;
-- HRTF/binaural 3D, room simulation, reverb design, plugin chains, or general-purpose DAW behavior without new evidence;
+- HRTF/binaural 3D, front/rear/height positioning, user-defined reverb design, plugin chains, or general-purpose DAW behavior;
+- claims that a synthetic acoustic preset reproduces the authentic acoustics of a named place;
 - unbounded tracks or events;
 - nondeterministic/random event scheduling in the public contract.
 
@@ -28,17 +30,30 @@ Do not add:
 
 - Schema v1: stable narration contract.
 - Schema v2: stable stereo placement + one optional legacy ambience bed.
-- Schema v3: bounded deterministic soundscape. Old engines must reject it rather than silently lose sound design.
+- Schema v3: bounded deterministic soundscape with explicit timestamps. Old engines must reject it rather than silently lose sound design.
+- Schema v4: bounded narrative sound direction: semantic acoustic spaces, safe event fades and explicit `scene` events that reserve narration-free space after a segment. Older schemas must not accept v4-only fields.
 - Assembly remains schema v1.
 
-Core commands include `voices`, `recommend`, `sounds`, `ambiences`, `ambience discover/qualify`, `render`, `batch`, `assemble`, and `validate`.
+Core commands include `capabilities`, `voices`, `recommend`, `sounds`, `ambiences`, `ambience discover/qualify`, `render`, `batch`, `assemble`, and `validate`.
 
 ## Voice governance
 
 - Linguistic quality precedes role fit.
 - French pronunciation is eliminatory in the tested palette.
 - Casting scores are advisory rankings, not fabricated historical quality scores.
-- Keep voice synthesis cache independent from placement and all environment mixing.
+- Keep voice synthesis cache independent from placement, acoustic-space processing and all environment mixing.
+- Cached TTS clips remain dry. Acoustic-space processing happens locally after the voice cache.
+- Narration intelligibility takes priority over acoustic realism.
+
+## Capability catalog governance
+
+`audio-engine capabilities` is the machine-readable source of truth for what applications may offer.
+
+- Publish only effects and semantics that the current engine actually renders.
+- Keep public vocabulary semantic (`large-stone-interior`), not plugin-oriented (`reverb=0.72`).
+- Acoustic spaces are restrained synthetic evocations unless an explicitly governed authentic impulse response is introduced later.
+- The initial public acoustic-space set is intentionally small: `dry`, `outdoor-open`, `small-stone-room`, `large-stone-interior`, `confined-stone`.
+- A new public effect requires contract semantics, deterministic rendering, manifest evidence and tests. Do not add decorative catalog entries without implementation.
 
 ## Sound catalog governance
 
@@ -61,17 +76,23 @@ Web search is discovery, never render-time resolution.
 
 ## Soundscape governance
 
-Schema v3 is deliberately bounded:
+Schema v3/v4 remains deliberately bounded:
 - at most one bed;
 - at most two continuous layers;
 - at most sixteen punctual events;
-- events use explicit `at_ms` timing;
+- v3 events use explicit `at_ms` timing;
+- v4 punctuation events retain explicit `at_ms` timing;
+- v4 `scene` events use one `after_segment` anchor and a bounded `space_ms` narration-free window;
 - event placement is semantic `left`, `center`, or `right`;
 - environment ducking is one global `speech` or `off` choice.
 
+Continuous bed/layers are narrative `texture`. Event roles are `punctuation` or `scene`. `scene` means the sound is intentionally allowed to carry information or emotion without speech for a short declared window.
+
+V4 event fades are safe defaults. A hard cut is allowed only when the author explicitly sets the corresponding fade duration to zero.
+
 Do not add random recurrence, arbitrary automation, unlimited timelines, or per-plugin processing without separate evidence.
 
-The `sound` module should produce **one deterministic environment WAV**. The mixer then remains a simple two-input responsibility: speech + environment. This boundary is intentional.
+The `sound` module should produce **one deterministic environment WAV**. The mixer then remains a simple speech/environment responsibility. This boundary is intentional.
 
 ## Mix governance
 
@@ -81,6 +102,7 @@ The `sound` module should produce **one deterministic environment WAV**. The mix
 - Use constant-power panning and avoid hard panning ordinary dialogue.
 - Voice intelligibility takes priority over realism.
 - Ducking must remain subtle.
+- Acoustic-space presets must remain restrained enough for spoken-word playback on phone, car speaker and headphones.
 - Normalize only the final master.
 
 ## Asset governance
@@ -96,11 +118,11 @@ The `sound` module should produce **one deterministic environment WAV**. The mix
 - Keep dependencies minimal.
 - Product-specific exceptions are architecture defects.
 - Batch failures must not destroy successful outputs.
-- Expensive TTS cache must survive changes to event time, ambience gain, fades, or placement.
+- Expensive TTS cache must survive changes to event time, ambience gain, fades, placement, acoustic-space preset or scene spacing.
 - Environment preparation and final mix are local deterministic stages with content-addressed caches.
-- Cache fingerprints must include source hashes, declared settings, target duration/format and relevant processing code.
+- Cache fingerprints must include source hashes, declared settings, resolved scene timing, target duration/format and relevant processing code.
 - Default spoken-word output is MP3 mono 24 kHz 80 kbit/s; stereo speech uses at least 96 kbit/s.
-- Manifest must record engine version, provider, profile, hashes, cache information, output properties and environment component provenance.
+- Manifest must record engine version, provider, profile, hashes, cache information, output properties, resolved acoustic spaces and environment component provenance.
 - Run offline smoke tests before merging rendering changes. Provider smoke is useful evidence but should not make ordinary CI brittle.
 
 ## Privacy

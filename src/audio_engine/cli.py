@@ -9,6 +9,7 @@ from .ambience.qualification import qualify_candidate
 from .assemble import assemble_plan
 from .batch import render_batch
 from .contract import ContractError, load_json, validate_assembly, validate_program
+from .effects import load_capabilities, public_capabilities
 from .render import render_program
 from .sound.acquisition import DEFAULT_PROVIDERS, ensure_sound
 from .sound.catalog import SOUND_TYPES, public_catalog as public_sound_catalog, sound_info
@@ -60,6 +61,13 @@ def build_parser():
     validate = sub.add_parser("validate", help="Validate a JSON contract")
     validate.add_argument("file")
     validate.add_argument("--kind", choices=("program", "assembly"), default="program")
+
+    capabilities = sub.add_parser(
+        "capabilities",
+        help="Publish the machine-readable catalog of effects, roles, transitions and limits",
+    )
+    capability_categories = tuple(load_capabilities().get("effects", {}).keys())
+    capabilities.add_argument("--category", choices=capability_categories, default=None)
 
     voices = sub.add_parser("voices", help="Publish the validated voice catalog and selection rules")
     voices.add_argument("--voices", default=None)
@@ -130,6 +138,8 @@ def main(argv=None):
             result = render_batch(args.pattern, args.out, voices_path=args.voices, sounds_path=args.sounds)
         elif args.command == "assemble":
             result = assemble_plan(args.plan, args.out)
+        elif args.command == "capabilities":
+            result = public_capabilities(args.category, engine_version=__version__)
         elif args.command == "voices":
             config, _ = load_voice_config(args.voices)
             result = public_catalog(config)
