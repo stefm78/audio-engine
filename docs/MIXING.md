@@ -4,7 +4,7 @@ Audio Engine schema v2 intentionally exposes **scene intent**, not a mixing cons
 
 ## Client-facing model
 
-Clients should normally use:
+Clients use:
 
 ```json
 {
@@ -29,7 +29,7 @@ and optionally one ambience bed:
 }
 ```
 
-Consumers should not calculate left/right gains. Numeric `pan` exists for advanced authoring but is not the recommended application UI.
+Consumers do not calculate left/right gains or numeric pan. The public scene vocabulary is deliberately limited to `left`, `center`, and `right`; Audio Engine maps those semantic positions to internal constant-power pan values.
 
 ## Product guidance
 
@@ -81,7 +81,6 @@ Do not make playback or production depend on a third-party hotlink.
 
 Supported now:
 - left / center / right;
-- numeric pan override;
 - one ambience bed;
 - loop;
 - gain;
@@ -89,6 +88,7 @@ Supported now:
 - simple speech ducking.
 
 Not supported now:
+- public numeric pan controls;
 - front/rear/height;
 - HRTF/binaural 3D;
 - distance simulation;
