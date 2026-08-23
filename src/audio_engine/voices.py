@@ -12,6 +12,37 @@ NUMERIC_TRAITS = {
 GENDER_MISMATCH_PENALTY = 25.0
 AGE_DISTANCE_PENALTY = 7.0
 TAG_MATCH_BONUS = 2.0
+QUALITY_VALIDATION = {
+    "origin": "initial blind French voice benchmark and subsequent human casting tests",
+    "principle": "language quality is checked before role fit",
+    "criteria": [
+        {
+            "id": "french_pronunciation",
+            "label": "Prononciation française",
+            "priority": 1,
+            "eliminatory": True,
+        },
+        {
+            "id": "fluency_prosody",
+            "label": "Fluidité et prosodie",
+            "priority": 2,
+            "eliminatory": False,
+        },
+        {
+            "id": "naturalness",
+            "label": "Naturel / absence d’effet synthétique",
+            "priority": 3,
+            "eliminatory": False,
+        },
+        {
+            "id": "narrative_potential",
+            "label": "Potentiel de narration / conteur",
+            "priority": 4,
+            "eliminatory": False,
+        },
+    ],
+    "benchmark_note": "The original benchmark compared French voices on the same difficult French text before revealing voice identity. No fabricated historical aggregate score is published here.",
+}
 
 
 def default_voice_config():
@@ -38,7 +69,7 @@ def public_catalog(voice_config):
     return {
         "version": voice_config.get("version"),
         "description": voice_config.get("description"),
-        "validation": voice_config.get("validation", {}),
+        "quality_validation": voice_config.get("quality_validation", QUALITY_VALIDATION),
         "selection_rules": selection_rules(),
         "presets": voice_config.get("presets", []),
     }
@@ -79,6 +110,7 @@ def recommend_presets(target, voice_config, limit=3):
     ranked = rank_presets(target, voice_config.get("presets", []), limit=limit)
     return {
         "target": target,
+        "quality_validation": voice_config.get("quality_validation", QUALITY_VALIDATION),
         "selection_rules": selection_rules(),
         "recommendations": [
             {
