@@ -11,7 +11,27 @@ from .batch import render_batch
 from .contract import ContractError, load_json, validate_assembly, validate_program
 from .render import render_program
 from .sound.catalog import SOUND_TYPES, public_catalog as public_sound_catalog, sound_info
+from .sound.selection import select_candidates
 from .voices import load_voice_config, public_catalog, recommend_presets
+
+
+def _add_qualify_args(parser, include_type=True):
+    parser.add_argument("file")
+    if include_type:
+        parser.add_argument("--type", choices=SOUND_TYPES, required=True, dest="sound_type")
+    parser.add_argument("--id", default=None)
+    parser.add_argument("--source-provider", default=None)
+    parser.add_argument("--source-page", default=None)
+    parser.add_argument("--source-identifier", default=None)
+    parser.add_argument("--license", default=None, dest="license_id")
+    parser.add_argument("--attribution", default=None)
+    parser.add_argument(
+        "--raw-redistribution",
+        choices=("unknown", "allowed", "embedded-only", "forbidden"),
+        default="unknown",
+    )
+    parser.add_argument("--tag", action="append", default=[])
+    parser.add_argument("--preview-dir", default=None)
 
 
 def build_parser():
@@ -23,13 +43,13 @@ def build_parser():
     render.add_argument("program")
     render.add_argument("--out", default="output")
     render.add_argument("--voices", default=None)
-    render.add_argument("--sounds", default=None, help="Optional validated sound catalog JSON")
+    render.add_argument("--sounds", default=None)
 
     batch = sub.add_parser("batch", help="Render a glob of programs, best effort")
     batch.add_argument("pattern")
     batch.add_argument("--out", default="output")
     batch.add_argument("--voices", default=None)
-    batch.add_argument("--sounds", default=None, help="Optional validated sound catalog JSON")
+    batch.add_argument("--sounds", default=None)
 
     assemble = sub.add_parser("assemble", help="Assemble existing audio assets")
     assemble.add_argument("plan")
@@ -43,49 +63,38 @@ def build_parser():
     voices.add_argument("--voices", default=None)
 
     recommend = sub.add_parser("recommend", help="Rank voice presets for a requested target profile")
-    recommend.add_argument("--target", required=True, help="Target profile as a JSON object")
+    recommend.add_argument("--target", required=True)
     recommend.add_argument("--limit", type=int, default=3)
     recommend.add_argument("--voices", default=None)
 
     sounds = sub.add_parser("sounds", help="Publish the validated production sound meta-index")
-    sounds.add_argument("--catalog", default=None, help="Optional sound catalog JSON")
-    sounds.add_argument("--id", default=None, help="Return one validated sound by id")
+    sounds.add_argument("--catalog", default=None)
+    sounds.add_argument("--id", default=None)
     sounds.add_argument("--type", choices=SOUND_TYPES, default=None, dest="sound_type")
-    sounds.add_argument("--tag", action="append", default=[], help="Require a tag; repeat to combine tags")
+    sounds.add_argument("--tag", action="append", default=[])
+
+    sound = sub.add_parser("sound", help="Autonomous sound qualification and selection")
+    sound_sub = sound.add_subparsers(dest="sound_command", required=True)
+    sound_qualify = sound_sub.add_parser("qualify", help="Machine-qualify one downloaded sound candidate")
+    _add_qualify_args(sound_qualify, include_type=True)
+    sound_select = sound_sub.add_parser("select", help="Automatically select the best machine-qualified candidate")
+    sound_select.add_argument("candidates", nargs="+")
+    sound_select.add_argument("--type", choices=SOUND_TYPES, required=True, dest="sound_type")
+    sound_select.add_argument("--require-tag", action="append", default=[])
+    sound_select.add_argument("--prefer-tag", action="append", default=[])
+    sound_select.add_argument("--min-score", type=float, default=70.0)
 
     ambiences = sub.add_parser("ambiences", help="Publish the legacy curated ambience catalog and asset policy")
-    ambiences.add_argument("--id", default=None, help="Return one curated ambience by id")
-    ambiences.add_argument("--tag", action="append", default=[], help="Require a tag; repeat to combine tags")
+    ambiences.add_argument("--id", default=None)
+    ambiences.add_argument("--tag", action="append", default=[])
 
-    ambience = sub.add_parser("ambience", help="Discover and qualify ambience candidates before rendering")
+    ambience = sub.add_parser("ambience", help="Legacy ambience discovery/qualification alias")
     ambience_sub = ambience.add_subparsers(dest="ambience_command", required=True)
-
     discover = ambience_sub.add_parser("discover", help="Create a multi-source discovery plan without network requests")
     discover.add_argument("query")
-    discover.add_argument("--source", action="append", default=[], help="Limit to a source id; repeat to combine sources")
-
-    qualify = ambience_sub.add_parser(
-        "qualify",
-        help="Probe and fingerprint a local candidate and automatically create a universal MP3 listening preview",
-    )
-    qualify.add_argument("file")
-    qualify.add_argument("--id", default=None, help="Stable candidate id; defaults to a slug of the filename")
-    qualify.add_argument("--source-provider", default=None)
-    qualify.add_argument("--source-page", default=None)
-    qualify.add_argument("--source-identifier", default=None)
-    qualify.add_argument("--license", default=None, dest="license_id")
-    qualify.add_argument("--attribution", default=None)
-    qualify.add_argument(
-        "--raw-redistribution",
-        choices=("unknown", "allowed", "embedded-only", "forbidden"),
-        default="unknown",
-    )
-    qualify.add_argument("--tag", action="append", default=[])
-    qualify.add_argument(
-        "--preview-dir",
-        default=None,
-        help="Directory for the automatic MP3 listening preview; defaults to the source file directory",
-    )
+    discover.add_argument("--source", action="append", default=[])
+    qualify = ambience_sub.add_parser("qualify", help="Machine-qualify an ambience candidate")
+    _add_qualify_args(qualify, include_type=False)
     return parser
 
 
@@ -93,19 +102,9 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         if args.command == "render":
-            result = render_program(
-                args.program,
-                args.out,
-                voices_path=args.voices,
-                sounds_path=args.sounds,
-            )
+            result = render_program(args.program, args.out, voices_path=args.voices, sounds_path=args.sounds)
         elif args.command == "batch":
-            result = render_batch(
-                args.pattern,
-                args.out,
-                voices_path=args.voices,
-                sounds_path=args.sounds,
-            )
+            result = render_batch(args.pattern, args.out, voices_path=args.voices, sounds_path=args.sounds)
         elif args.command == "assemble":
             result = assemble_plan(args.plan, args.out)
         elif args.command == "voices":
@@ -126,6 +125,29 @@ def main(argv=None):
                 result = {"entry": entry}
             else:
                 result = public_sound_catalog(args.catalog, tags=args.tag, sound_type=args.sound_type)
+        elif args.command == "sound":
+            if args.sound_command == "qualify":
+                result = qualify_candidate(
+                    args.file,
+                    candidate_id=args.id,
+                    candidate_type=args.sound_type,
+                    source_provider=args.source_provider,
+                    source_page=args.source_page,
+                    source_identifier=args.source_identifier,
+                    license_id=args.license_id,
+                    attribution=args.attribution,
+                    raw_redistribution=args.raw_redistribution,
+                    tags=args.tag,
+                    preview_dir=args.preview_dir,
+                )
+            else:
+                result = select_candidates(
+                    args.candidates,
+                    sound_type=args.sound_type,
+                    required_tags=args.require_tag,
+                    preferred_tags=args.prefer_tag,
+                    min_score=args.min_score,
+                )
         elif args.command == "ambiences":
             result = ambience_info(args.id) if args.id else public_ambience_catalog(tags=args.tag)
         elif args.command == "ambience":
@@ -135,6 +157,7 @@ def main(argv=None):
                 result = qualify_candidate(
                     args.file,
                     candidate_id=args.id,
+                    candidate_type="ambience",
                     source_provider=args.source_provider,
                     source_page=args.source_page,
                     source_identifier=args.source_identifier,
