@@ -264,6 +264,9 @@ def _catalog_hit(sound_id, sound_type, required_tags, preferred_tags, catalog_pa
                 if entry.get("type") != sound_type:
                     raise ValueError(f"Existing sound {sound_id} has type {entry.get('type')}, expected {sound_type}")
                 return entry
+        # A caller-supplied semantic id is an identity contract. Never silently
+        # substitute a different catalog entry merely because its tags match.
+        return None
     matches = [
         entry for entry in entries
         if entry.get("type") == sound_type and required.issubset(set(entry.get("tags", [])))
