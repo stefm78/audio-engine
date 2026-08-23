@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Audio Engine converts a declared structured audio program into audio assets and a machine-readable manifest.
+Audio Engine converts a declared structured audio program into audio assets and a machine-readable manifest. It also publishes the validated voice palette and recommends suitable presets from declared vocal traits.
 
 ## Non-goals
 
@@ -20,10 +20,21 @@ Consumers own their content, publication, storage, and playback experience.
 Schema v1 is a public contract. Preserve backward compatibility unless a new schema version is explicitly introduced.
 
 Core commands:
+- `voices`: publish the tested voice palette, quality gate and casting rules;
+- `recommend`: rank presets for a requested vocal target without synthesis;
 - `render`: one program → one audio asset;
 - `batch`: many programs → independent best-effort renders;
 - `assemble`: existing audio assets → one longer asset;
 - `validate`: contract validation without synthesis.
+
+## Voice governance
+
+- Linguistic quality precedes role fit.
+- French pronunciation is an eliminatory quality criterion inherited from the initial blind benchmark.
+- Casting scores are advisory rankings, not historical quality scores.
+- Do not invent benchmark scores that were not measured.
+- A consumer may override a recommendation with an explicit validated preset or provider voice.
+- Keep the recommendation rules visible and machine-readable.
 
 ## Engineering rules
 
