@@ -1,8 +1,10 @@
 # Ambience catalog
 
-Audio Engine exposes a small **curated ambience catalog**, not a Web search engine and not a repository of arbitrary audio files.
+Audio Engine separates **broad discovery** from the small **curated ambience catalog** used in production. It is not a crawler and not a repository of arbitrary audio files.
 
 ## Commands
+
+Curated production catalog:
 
 ```bash
 audio-engine ambiences
@@ -11,21 +13,38 @@ audio-engine ambiences --tag interior --tag calm
 audio-engine ambiences --id cathedral-calm
 ```
 
-The output is JSON so humans, agents, Audioguide, Learn-it, or other clients can consume the same collection metadata.
+Candidate discovery and intake:
 
-## Current state
+```bash
+audio-engine ambience discover "quiet cathedral room tone"
+audio-engine ambience discover "forest at dawn" --source freesound --source pixabay
 
-The catalog may legitimately contain zero entries. An ambience is added only after all production gates are satisfied:
+audio-engine ambience qualify assets/cathedral.wav \
+  --id cathedral-calm-candidate \
+  --source-provider "Provider name" \
+  --source-page "https://provider.example/asset/123" \
+  --source-identifier "123" \
+  --license "CC0-1.0" \
+  --raw-redistribution allowed \
+  --tag interior --tag calm
+```
 
-1. provenance identified;
-2. licence verified;
-3. content hash captured;
-4. listening quality reviewed;
-5. suitability as a background bed reviewed;
-6. loopability recorded when relevant;
-7. durable production snapshot strategy established.
+All command output is JSON so humans, agents, Audioguide, Learn-it, or other clients can use the same evidence.
 
-A small curated catalog is preferable to an impressive but unreliable sound library. Discovery, however, must be broad.
+`ambience discover` performs **zero network requests**. It turns one semantic query into a machine-readable plan across the known sourcing surface, including direct search URLs where a stable provider search URL is known. Humans or agents perform the actual Web search outside the rendering process.
+
+`ambience qualify` operates only on a file that has already been downloaded under the applicable terms. It probes the local asset and records:
+
+- SHA-256 and byte size;
+- codec;
+- sample rate;
+- channel count when identifiable;
+- duration;
+- declared source/provider metadata;
+- declared licence and redistribution mode;
+- pending listening, loopability, speech-masking, licence-verification and snapshot gates.
+
+A successful technical probe **never means the asset is approved**. Qualified output deliberately remains `status: candidate` and `promotion.eligible: false` until the human/editorial and rights gates are completed.
 
 ## Broad discovery, narrow promotion
 
@@ -33,31 +52,37 @@ The sourcing rule is:
 
 > Search widely. Qualify strictly. Produce from a locked asset.
 
-Discovery should not be limited to one or two websites. Useful source families include:
+Discovery should not be limited to one or two websites. The machine-readable source registry currently covers:
 
-### Open / broadly redistributable discovery
+- Openverse;
+- Wikimedia Commons;
+- Freesound;
+- Pixabay Sound Effects;
+- ZapSplat;
+- Mixkit;
+- Sonniss GameAudioGDC;
+- Free To Use Sounds;
+- Soundly;
+- BOOM Library;
+- Pro Sound Effects;
+- Pond5.
 
-- Openverse — cross-provider discovery of openly licensed audio; verify the upstream licence before promotion;
-- Wikimedia Commons — strong provenance and open licences, but uneven ambience coverage;
-- Freesound — very broad field-recording community with CC0 / CC BY / CC BY-NC assets; filter licence deliberately;
-- Internet Archive and other open archives may be searched when a specific recording is relevant, with per-item licence verification.
+The registry is a discovery surface, not an allow-list. A provider name never substitutes for checking the licence of the exact asset.
 
-### Free / royalty-free production libraries
+## Promotion gates
 
-- Pixabay — large royalty-free sound-effects catalogue; raw standalone redistribution restrictions must be respected;
-- Mixkit — free commercial-use sound effects, useful for common ambience categories;
-- ZapSplat — large catalogue, including some CC0 material plus provider-specific licensed sounds;
-- Sonniss #GameAudioGDC — professional royalty-free giveaway archives; raw standalone redistribution is not allowed.
+An ambience enters the curated catalog only after all production gates are satisfied:
 
-### Professional field-recording and SFX libraries
+1. provenance identified;
+2. licence verified;
+3. content hash captured;
+4. listening quality reviewed;
+5. suitability as a background bed reviewed;
+6. loopability recorded when relevant;
+7. speech masking checked;
+8. durable production snapshot strategy established.
 
-- Free To Use Sounds — high-resolution real-world and immersive field recordings;
-- Soundly — large searchable cloud library and add-on ecosystem;
-- BOOM Library — studio-grade professional SFX and ambience libraries;
-- Pro Sound Effects — professional commercial SFX catalogue;
-- Pond5 and similar stock-audio marketplaces — useful fallback when a precise ambience cannot be sourced elsewhere.
-
-This list is a discovery surface, not an allow-list. A provider name never substitutes for checking the licence of the exact asset.
+A small curated catalog is preferable to an impressive but unreliable sound library. Discovery, however, should remain broad.
 
 ## Web discovery versus production
 
@@ -94,7 +119,7 @@ The catalog policy is machine-readable in `ambiences.json`; it is guidance, not 
 
 ## Entry shape
 
-A future qualified entry should look broadly like:
+A promoted entry should look broadly like:
 
 ```json
 {
