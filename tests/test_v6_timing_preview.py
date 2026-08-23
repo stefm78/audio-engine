@@ -129,7 +129,9 @@ class V6TimingPreviewTests(unittest.TestCase):
                 event=1,
                 before_ms=300,
                 after_ms=300,
+                provider=provider,
             )
+            self.assertEqual(provider.calls, 2)
             preview_path = Path(result["previews"][0]["file"])
             self.assertTrue(preview_path.exists())
             self.assertGreater(probe_duration_seconds(preview_path), 1.0)
