@@ -31,6 +31,8 @@ def _validate_position(value, label, errors):
     if not isinstance(value, dict):
         errors.append(f"{label} must be an object")
         return
+    if "pan" in value:
+        errors.append(f"{label}.pan is not a public contract field; use placement")
     if "placement" in value and value["placement"] not in PLACEMENTS:
         errors.append(f"{label}.placement must be one of {', '.join(PLACEMENTS)}")
 
@@ -98,11 +100,11 @@ def validate_program(program):
             pause = segment.get("pause_after_ms", 350)
             if not isinstance(pause, (int, float)) or pause < 0:
                 errors.append(f"segments[{index}].pause_after_ms must be >= 0")
-            if "placement" in segment:
+            if "placement" in segment or "pan" in segment:
                 _validate_position(segment, f"segments[{index}]", errors)
 
     uses_v2 = bool(program.get("ambience") or program.get("actors")) or any(
-        isinstance(segment, dict) and "placement" in segment
+        isinstance(segment, dict) and ("placement" in segment or "pan" in segment)
         for segment in (segments or [])
     )
     if version == 1 and uses_v2:
