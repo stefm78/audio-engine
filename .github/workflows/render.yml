@@ -1,0 +1,68 @@
+name: Render audio
+
+on:
+  workflow_call:
+    inputs:
+      source_glob:
+        description: Glob of program JSON files in the caller repository
+        required: true
+        type: string
+      output_dir:
+        description: Output directory in the caller workspace
+        required: false
+        default: generated/audio
+        type: string
+      artifact_name:
+        description: Uploaded artifact name
+        required: false
+        default: audio-assets
+        type: string
+      engine_ref:
+        description: audio-engine branch, tag, or SHA to execute
+        required: false
+        default: main
+        type: string
+      voices_path:
+        description: Optional voice configuration path in caller repository
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout caller
+        uses: actions/checkout@v6
+      - name: Checkout audio-engine
+        uses: actions/checkout@v6
+        with:
+          repository: stefm78/audio-engine
+          ref: ${{ inputs.engine_ref }}
+          path: .audio-engine
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install audio-engine
+        run: python -m pip install --disable-pip-version-check ./.audio-engine
+      - name: Render batch, best effort
+        shell: bash
+        env:
+          SOURCE_GLOB: ${{ inputs.source_glob }}
+          OUTPUT_DIR: ${{ inputs.output_dir }}
+          VOICES_PATH: ${{ inputs.voices_path }}
+        run: |
+          args=()
+          if [[ -n "$VOICES_PATH" ]]; then
+            args+=(--voices "$VOICES_PATH")
+          fi
+          audio-engine batch "$SOURCE_GLOB" --out "$OUTPUT_DIR" "${args[@]}"
+      - name: Upload audio assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.output_dir }}
+          if-no-files-found: error

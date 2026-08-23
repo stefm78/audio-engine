@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recit-audio-engine"
+version = "0.1.0"
+description = "Generic audio rendering and assembly engine for structured spoken-word programs."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "edge-tts==7.2.8",
+  "imageio-ffmpeg==0.6.0"
+]
+
+[project.scripts]
+audio-engine = "audio_engine.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+audio_engine = ["voices.json"]

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "demo-dialogue",
+  "title": "Démonstration dialogue",
+  "language": "fr-FR",
+  "profile": "speech",
+  "segments": [
+    {
+      "character_id": "narrator",
+      "speaker": "Narrateur",
+      "preset": "narrateur-vif",
+      "text": "Deux voix peuvent partager le même programme.",
+      "pause_after_ms": 450
+    },
+    {
+      "character_id": "guest",
+      "speaker": "Invitée",
+      "preset": "conteuse-chaleureuse",
+      "text": "Le moteur assemble ensuite les segments dans une seule unité d'écoute.",
+      "pause_after_ms": 300
+    }
+  ]
+}

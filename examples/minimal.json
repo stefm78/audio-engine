@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "demo-minimal",
+  "title": "Démonstration minimale",
+  "language": "fr-FR",
+  "profile": "speech",
+  "segments": [
+    {
+      "speaker": "Narrateur",
+      "voice": "fr-FR-RemyMultilingualNeural",
+      "text": "Bonjour. Ceci est une démonstration minimale du moteur audio.",
+      "pause_after_ms": 400
+    }
+  ]
+}
