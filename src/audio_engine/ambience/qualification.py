@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from ..audio import ffmpeg_exe
+from ..sound.source_policy import assess_source_license
 
 
 PREVIEW_BITRATE_KBPS = 160
@@ -12,7 +13,7 @@ PREVIEW_SAMPLE_RATE_HZ = 44100
 
 def _slug(value):
     value = re.sub(r"[^a-z0-9]+", "-", str(value).lower()).strip("-")
-    return value or "ambience-candidate"
+    return value or "sound-candidate"
 
 
 def _sha256(path):
@@ -40,23 +41,17 @@ def _probe_audio(path):
     audio_line = next((line for line in stderr.splitlines() if "Audio:" in line), None)
     if not audio_line:
         raise ValueError(f"No audio stream found in {path}")
-
     codec_match = re.search(r"Audio:\s*([^,\s]+)", audio_line)
     rate_match = re.search(r",\s*(\d+)\s*Hz", audio_line)
     if not codec_match or not rate_match:
         raise ValueError(f"Unable to read audio stream properties from {path}")
-
     if re.search(r"\bmono\b", audio_line):
         channels = 1
     elif re.search(r"\bstereo\b", audio_line):
         channels = 2
     else:
         layout_match = re.search(r"\b(\d+(?:\.\d+)?)\b", audio_line.split("Hz", 1)[-1])
-        channels = None
-        if layout_match:
-            layout = layout_match.group(1)
-            channels = {"5.1": 6, "7.1": 8}.get(layout)
-
+        channels = {"5.1": 6, "7.1": 8}.get(layout_match.group(1)) if layout_match else None
     return {
         "codec": codec_match.group(1),
         "sample_rate_hz": int(rate_match.group(1)),
@@ -70,19 +65,11 @@ def _make_listening_preview(path, preview_dir=None):
     destination_dir = Path(preview_dir) if preview_dir else source.parent
     destination_dir.mkdir(parents=True, exist_ok=True)
     preview = destination_dir / f"{source.stem}.preview.mp3"
-
     result = subprocess.run(
         [
-            ffmpeg_exe(),
-            "-hide_banner",
-            "-loglevel", "error",
-            "-y",
-            "-i", str(source),
-            "-vn",
-            "-c:a", "libmp3lame",
-            "-b:a", f"{PREVIEW_BITRATE_KBPS}k",
-            "-ar", str(PREVIEW_SAMPLE_RATE_HZ),
-            str(preview),
+            ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(source), "-vn", "-c:a", "libmp3lame",
+            "-b:a", f"{PREVIEW_BITRATE_KBPS}k", "-ar", str(PREVIEW_SAMPLE_RATE_HZ), str(preview),
         ],
         text=True,
         stdout=subprocess.PIPE,
@@ -90,11 +77,10 @@ def _make_listening_preview(path, preview_dir=None):
     )
     if result.returncode != 0 or not preview.exists():
         detail = result.stderr.strip() or "unknown ffmpeg error"
-        raise ValueError(f"Unable to create listening preview for {source}: {detail}")
-
+        raise ValueError(f"Unable to create audit preview for {source}: {detail}")
     preview_audio = _probe_audio(preview)
     return {
-        "purpose": "listening-only",
+        "purpose": "audit-only",
         "canonical": False,
         "path": str(preview),
         "name": preview.name,
@@ -105,14 +91,36 @@ def _make_listening_preview(path, preview_dir=None):
         "duration_seconds": preview_audio["duration_seconds"],
         "size_bytes": preview.stat().st_size,
         "content_sha256": _sha256(preview),
-        "note": "Universal derivative for human listening only; never use this hash as the production asset identity.",
+        "note": "Universal audit derivative; never use this hash as the production asset identity.",
     }
+
+
+def _automated_quality(audio, candidate_type):
+    duration = float(audio.get("duration_seconds") or 0)
+    rate = int(audio.get("sample_rate_hz") or 0)
+    channels = audio.get("channels")
+    reasons = []
+    passed = True
+    if rate < 22050:
+        passed = False
+        reasons.append("sample-rate-too-low")
+    if channels not in {1, 2}:
+        passed = False
+        reasons.append("unsupported-channel-layout")
+    if candidate_type == "ambience" and duration < 20:
+        passed = False
+        reasons.append("ambience-too-short")
+    if candidate_type == "event" and (duration <= 0 or duration > 120):
+        passed = False
+        reasons.append("event-duration-out-of-policy")
+    return {"status": "passed" if passed else "failed", "reasons": reasons}
 
 
 def qualify_candidate(
     file_path,
     *,
     candidate_id=None,
+    candidate_type="ambience",
     source_provider=None,
     source_page=None,
     source_identifier=None,
@@ -126,7 +134,9 @@ def qualify_candidate(
     if not path.exists():
         raise FileNotFoundError(path)
     if not path.is_file():
-        raise ValueError(f"Ambience candidate is not a file: {path}")
+        raise ValueError(f"Sound candidate is not a file: {path}")
+    if candidate_type not in {"ambience", "event"}:
+        raise ValueError("candidate_type must be ambience or event")
     if raw_redistribution not in {"unknown", "allowed", "embedded-only", "forbidden"}:
         raise ValueError("raw_redistribution must be unknown, allowed, embedded-only, or forbidden")
 
@@ -134,14 +144,20 @@ def qualify_candidate(
     canonical_sha256 = _sha256(path)
     preview = _make_listening_preview(path, preview_dir)
     source_complete = bool(source_provider and source_page)
-    license_declared = bool(license_id)
+    licence = assess_source_license(source_provider, source_page, license_id)
+    quality = _automated_quality(audio, candidate_type)
+    effective_redistribution = raw_redistribution
+    if effective_redistribution == "unknown" and licence.get("policy_raw_redistribution"):
+        effective_redistribution = licence["policy_raw_redistribution"]
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "candidate",
         "id": candidate_id or _slug(path.stem),
+        "type": candidate_type,
         "file": {
             "name": path.name,
+            "path": str(path),
             "size_bytes": path.stat().st_size,
             "content_sha256": canonical_sha256,
             "canonical": True,
@@ -150,42 +166,40 @@ def qualify_candidate(
         "audio": audio,
         "tags": list(tags or []),
         "source": {
-            "provider": source_provider,
+            "provider": licence.get("provider") or source_provider,
             "page": source_page,
             "identifier": source_identifier,
             "provenance_complete": source_complete,
+            "provider_verified": licence.get("provider_verified", False),
         },
         "license": {
+            "id": license_id,
             "declared": license_id,
-            "verified": False,
+            "verified": licence.get("verified", False),
+            "verification_method": licence.get("verification_method"),
             "attribution": attribution,
-            "raw_redistribution": raw_redistribution,
+            "raw_redistribution": effective_redistribution,
         },
         "review": {
             "technical_probe": "passed",
-            "listening_preview": "generated",
-            "listening_quality": "pending",
-            "background_suitability": "pending",
-            "loopability": "pending",
-            "speech_masking": "pending",
+            "audit_preview": "generated",
+            "automated_quality": quality["status"],
+            "automated_quality_reasons": quality["reasons"],
         },
         "snapshot": {
             "status": "pending",
-            "note": "Choose a durable production snapshot compatible with the asset licence before promotion.",
+            "note": "Durable materialization is automated by the consumer/storage workflow after selection.",
         },
         "promotion": {
-            "eligible": False,
-            "required": [
-                "licence verification",
-                "listening quality review",
-                "background suitability review",
-                "snapshot strategy",
-            ],
+            "eligible": bool(licence.get("verified") and quality["status"] == "passed"),
+            "decision_mode": "automatic",
+            "required": ["autonomous selection", "durable snapshot materialization"],
             "evidence": {
                 "technical_probe": True,
-                "listening_preview_generated": True,
+                "audit_preview_generated": True,
                 "provenance_declared": source_complete,
-                "license_declared": license_declared,
+                "license_machine_verified": licence.get("verified", False),
+                "automated_quality": quality["status"],
             },
         },
     }
