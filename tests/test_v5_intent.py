@@ -13,14 +13,15 @@ class FakeProvider:
     name = "fake"
     processing = "local-test"
 
-    def __init__(self):
+    def __init__(self, duration=2.0):
         self.calls = 0
+        self.duration = duration
 
     def synthesize(self, segment, path):
         self.calls += 1
         run_ffmpeg([
             "-f", "lavfi",
-            "-i", "sine=frequency=440:sample_rate=24000:duration=0.25",
+            "-i", f"sine=frequency=440:sample_rate=24000:duration={self.duration}",
             "-ac", "1",
             "-c:a", "libmp3lame",
             "-b:a", "64k",
@@ -124,8 +125,6 @@ class V5IntentTests(unittest.TestCase):
             self.assertGreater(bridge["fade_in_ms"], 0)
             self.assertGreater(bridge["fade_out_ms"], 0)
 
-            # Bridge begins after a small pre-roll. The next voice starts exactly
-            # foreground_ms later, so the declared foreground is real solo sound time.
             solo_ms = timeline[2]["start_ms"] - bridge["at_ms"]
             self.assertAlmostEqual(solo_ms, 1800.0, delta=2.0)
             self.assertGreater(
@@ -142,6 +141,18 @@ class V5IntentTests(unittest.TestCase):
             self.assertEqual(remixed["mix"]["voice_fingerprints"], fingerprints)
             bridge2 = remixed["mix"]["soundscape"]["components"][0]
             self.assertEqual(bridge2["requested_play_duration_ms"], 4000.0)
+
+    def test_bridge_reports_clipping_when_master_ends_before_requested_carry(self):
+        with tempfile.TemporaryDirectory() as temp_value:
+            root = Path(temp_value)
+            make_event(root / "hooves.wav")
+            program = root / "bridge.json"
+            program.write_text(json.dumps(bridge_program()), encoding="utf-8")
+            result = render_program(program, root / "out", provider=FakeProvider(duration=0.25))
+            bridge = result["mix"]["soundscape"]["components"][0]
+            self.assertTrue(bridge["duration_clipped"])
+            self.assertTrue(bridge["clipped_by_master"])
+            self.assertFalse(bridge["clipped_by_source"])
 
 
 if __name__ == "__main__":
