@@ -10,6 +10,7 @@ from .contract import load_json, sha256_file, validate_program
 from .mix.render import render_master, render_speech_track, stereo_required
 from .profiles import get_profile
 from .providers.edge import EdgeProvider
+from .sound.render import render_soundscape, soundscape_source_sha256
 from .voice.render import render_voice_clip
 from .voices import load_voice_config, resolve_segments
 
@@ -25,6 +26,8 @@ def engine_code_sha256():
         root / "providers" / "edge.py",
         root / "voice" / "render.py",
         root / "ambience" / "prepare.py",
+        root / "sound" / "catalog.py",
+        root / "sound" / "render.py",
         root / "mix" / "render.py",
     ]
     digest = hashlib.sha256()
@@ -40,6 +43,7 @@ def render_fingerprint(
     provider_name,
     profile_name,
     ambience_source_sha=None,
+    soundscape_source_sha=None,
 ):
     payload = {
         "source_sha256": source_sha,
@@ -48,6 +52,7 @@ def render_fingerprint(
         "provider": provider_name,
         "profile": profile_name,
         "ambience_source_sha256": ambience_source_sha,
+        "soundscape_source_sha256": soundscape_source_sha,
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -75,7 +80,7 @@ def cached_manifest(output_dir, expected_fingerprint):
     return manifest
 
 
-def render_program(program_path, output_root, voices_path=None, provider=None):
+def render_program(program_path, output_root, voices_path=None, provider=None, sounds_path=None):
     program_path = Path(program_path)
     program = validate_program(load_json(program_path))
     profile_name = program.get("profile", "speech")
@@ -88,8 +93,13 @@ def render_program(program_path, output_root, voices_path=None, provider=None):
     voice_config_sha = sha256_file(voice_config_path)
     engine_sha = engine_code_sha256()
     ambience_sha = None
+    soundscape_sha = None
     if program.get("ambience"):
         ambience_sha = ambience_source_sha256(program["ambience"], program_path)
+    if program.get("soundscape"):
+        soundscape_sha = soundscape_source_sha256(
+            program["soundscape"], program_path, sounds_path
+        )
     fingerprint = render_fingerprint(
         source_sha,
         voice_config_sha,
@@ -97,6 +107,7 @@ def render_program(program_path, output_root, voices_path=None, provider=None):
         provider.name,
         profile_name,
         ambience_sha,
+        soundscape_sha,
     )
 
     output_root = Path(output_root)
@@ -125,6 +136,8 @@ def render_program(program_path, output_root, voices_path=None, provider=None):
     audio_path = output_dir / "audio.mp3"
     ambience_manifest = None
     ambience_cache_hit = None
+    soundscape_manifest = None
+    soundscape_cache_hit = None
 
     with tempfile.TemporaryDirectory() as temp_value:
         temp_dir = Path(temp_value)
@@ -139,9 +152,10 @@ def render_program(program_path, output_root, voices_path=None, provider=None):
         if duration is None:
             raise RuntimeError("Could not determine rendered speech duration")
 
-        ambience_path = None
+        environment_path = None
+        ducking = "speech"
         if program.get("ambience"):
-            ambience_path, ambience_cache_hit, ambience_manifest = prepare_ambience(
+            environment_path, ambience_cache_hit, ambience_manifest = prepare_ambience(
                 program["ambience"],
                 program_path,
                 output_root / ".cache" / "ambience",
@@ -149,12 +163,25 @@ def render_program(program_path, output_root, voices_path=None, provider=None):
                 profile["sample_rate_hz"],
                 channels=2,
             )
+            ducking = program["ambience"].get("ducking", "speech")
+        elif program.get("soundscape"):
+            environment_path, soundscape_cache_hit, soundscape_manifest = render_soundscape(
+                program["soundscape"],
+                program_path,
+                output_root / ".cache" / "soundscapes",
+                duration,
+                profile["sample_rate_hz"],
+                sounds_path=sounds_path,
+                channels=2,
+            )
+            ducking = program["soundscape"].get("ducking", "speech")
+
         render_master(
             speech_path,
             audio_path,
             profile,
-            ambience_path=ambience_path,
-            ducking=program.get("ambience", {}).get("ducking", "speech"),
+            ambience_path=environment_path,
+            ducking=ducking,
         )
 
     transcript = {
@@ -171,6 +198,12 @@ def render_program(program_path, output_root, voices_path=None, provider=None):
         json.dumps(transcript, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+    mix_ducking = None
+    if program.get("ambience"):
+        mix_ducking = program["ambience"].get("ducking", "speech")
+    elif program.get("soundscape"):
+        mix_ducking = program["soundscape"].get("ducking", "speech")
 
     manifest = {
         "schema_version": 1,
@@ -202,7 +235,9 @@ def render_program(program_path, output_root, voices_path=None, provider=None):
             "voice_fingerprints": voice_fingerprints,
             "ambience": ambience_manifest,
             "ambience_cache_hit": ambience_cache_hit,
-            "ducking": program.get("ambience", {}).get("ducking") if program.get("ambience") else None,
+            "soundscape": soundscape_manifest,
+            "soundscape_cache_hit": soundscape_cache_hit,
+            "ducking": mix_ducking,
         },
         "transcript": "transcript.json",
         "warnings": [],
