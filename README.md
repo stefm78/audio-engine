@@ -73,6 +73,20 @@ Segments may use an explicit provider voice, a validated `preset`, or a `target`
 
 The engine normalizes the final assembled asset. Segment files are temporary and are never part of the published output.
 
+## Content-addressed reuse
+
+A completed render is reusable only when its render fingerprint still matches. The fingerprint includes:
+
+- source JSON SHA-256;
+- voice configuration SHA-256;
+- rendering-code SHA-256;
+- provider name;
+- output profile.
+
+If those inputs are unchanged and `audio.mp3` plus `transcript.json` are present, `render` returns a cache hit without calling the TTS provider. The reusable GitHub workflow also restores the previous generated-audio directory with `actions/cache`, so a consumer changing one episode normally regenerates only that episode.
+
+`render-report.json` distinguishes `rendered_count`, `cached_count`, and failures.
+
 ## Provider and privacy
 
 The current provider is Edge TTS. Processing is **remote**: text sent for synthesis leaves the runner. Do not use the remote provider for content that must not be sent to an external TTS service.
