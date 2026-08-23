@@ -3,6 +3,7 @@ import json
 import sys
 
 from . import __version__
+from .ambience.catalog import ambience_info, public_catalog as public_ambience_catalog
 from .assemble import assemble_plan
 from .batch import render_batch
 from .contract import ContractError, load_json, validate_assembly, validate_program
@@ -40,6 +41,10 @@ def build_parser():
     recommend.add_argument("--target", required=True, help="Target profile as a JSON object")
     recommend.add_argument("--limit", type=int, default=3)
     recommend.add_argument("--voices", default=None)
+
+    ambiences = sub.add_parser("ambiences", help="Publish the curated ambience catalog and asset policy")
+    ambiences.add_argument("--id", default=None, help="Return one curated ambience by id")
+    ambiences.add_argument("--tag", action="append", default=[], help="Require a tag; repeat to combine tags")
     return parser
 
 
@@ -64,6 +69,8 @@ def main(argv=None):
                 raise ValueError("--target must be a JSON object")
             config, _ = load_voice_config(args.voices)
             result = recommend_presets(target, config, args.limit)
+        elif args.command == "ambiences":
+            result = ambience_info(args.id) if args.id else public_ambience_catalog(tags=args.tag)
         else:
             data = load_json(args.file)
             result = validate_program(data) if args.kind == "program" else validate_assembly(data)

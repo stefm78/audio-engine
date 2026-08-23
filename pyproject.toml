@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "recit-audio-engine"
-version = "0.2.0"
+version = "0.2.1"
 description = "Generic audio rendering and assembly engine for structured spoken-word programs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,4 +20,4 @@ audio-engine = "audio_engine.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-audio_engine = ["voices.json"]
+audio_engine = ["voices.json", "ambiences.json"]
