@@ -36,7 +36,7 @@ output/
     transcript.json
 ```
 
-Default `speech` output is MP3, mono, 24 kHz, 80 kbit/s, normalized for spoken-word listening. A v2 program that declares stereo placement or ambience automatically renders stereo at at least 96 kbit/s.
+Default `speech` output is MP3, mono, 24 kHz, 80 kbit/s, normalized for spoken-word listening. A v2 program that declares stereo placement or ambience automatically renders stereo at least 96 kbit/s.
 
 ## Commands
 
@@ -181,8 +181,8 @@ P1 intentionally supports:
 - automatic mono/stereo output;
 - final normalization and encoding.
 
-P1 intentionally does **not** implement HRTF/binaural 3D, front/rear/height positioning, room simulation, reverb design, effects timelines, arbitrary Web fetching during render, or a general-purpose multitrack workstation.
+P1 intentionally does **not** implement public numeric pan controls, HRTF/binaural 3D, front/rear/height positioning, room simulation, reverb design, effects timelines, arbitrary Web fetching during render, or a general-purpose multitrack workstation.
 
-Read [`AGENTS.md`](AGENTS.md) before changing architecture. The core rule remains:
+Read [`docs/MIXING.md`](docs/MIXING.md) for client guidance and [`AGENTS.md`](AGENTS.md) before changing architecture. The core rule remains:
 
 > Input contract → audio assets + manifest.
