@@ -43,4 +43,5 @@ jobs:
         with:
           name: seed-sound-candidates
           path: .seed-sounds
+          include-hidden-files: true
           if-no-files-found: error
