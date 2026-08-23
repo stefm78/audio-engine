@@ -6,7 +6,7 @@ from ..contract import sha256_file
 from .acquisition import ensure_sound
 
 MAX_REQUIREMENTS = 32
-MAX_QUERY_VARIANTS = 6
+MAX_QUERY_VARIANTS = 10
 MAX_DISCOVERY_LIMIT = 24
 
 
@@ -48,6 +48,13 @@ def _validate_requirements(data):
     return items
 
 
+def _simple_plural(value):
+    value = str(value).strip()
+    if not value or value.casefold().endswith("s"):
+        return value
+    return value + "s"
+
+
 def _query_variants(requirement):
     original = " ".join(str(requirement.get("query") or "").split())
     required = [str(value).strip() for value in requirement.get("required_tags", []) if str(value).strip()]
@@ -56,11 +63,21 @@ def _query_variants(requirement):
 
     candidates = [original]
 
-    # Preserve the intrinsic hard meaning while exploring each soft context
-    # independently before falling back to a generic hard-tag query. This avoids
-    # jumping from e.g. "cathedral bell" straight to "bell" merely because a
-    # broad source index does not use the same exact phrase.
-    if required:
+    # Search natural contextual phrases before a generic fallback. For one
+    # intrinsic noun (e.g. bell), both singular and plural variants matter on
+    # media indexes because titles often use "church bells" rather than the
+    # semantically equivalent "bell church".
+    if len(required) == 1:
+        noun = required[0]
+        plural = _simple_plural(noun)
+        for context in preferred:
+            candidates.append(f"{context} {noun}")
+            if plural != noun:
+                candidates.append(f"{context} {plural}")
+        if preferred:
+            candidates.append(" ".join(preferred + [noun]))
+        candidates.append(noun)
+    elif required:
         candidates.extend(" ".join(required + [value]) for value in preferred)
         if preferred:
             candidates.append(" ".join(required + preferred))
