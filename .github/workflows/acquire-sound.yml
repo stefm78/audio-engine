@@ -163,6 +163,7 @@ jobs:
           set -euo pipefail
           if [[ -n "$REQUESTED_CATALOG" ]]; then
             echo "catalog_path=$REQUESTED_CATALOG" >> "$GITHUB_OUTPUT"
+            echo "restored=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           restore=".sound-release-cache"
@@ -172,14 +173,7 @@ jobs:
             gh release download "$RELEASE_TAG" --pattern "${SOUND_ID}.catalog.json" --dir "$restore" --clobber >/dev/null 2>&1 || true
           fi
           if [[ -f "$catalog" ]]; then
-            asset_name="$(python - "$catalog" <<'PY'
-          import json, sys
-          from pathlib import Path
-          data = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
-          entry = data['entries'][0]
-          print(Path(entry['asset']['file']).name)
-          PY
-            )"
+            asset_name="$(python -c 'import json,sys; from pathlib import Path; data=json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")); print(Path(data["entries"][0]["asset"]["file"]).name)' "$catalog")"
             gh release download "$RELEASE_TAG" --pattern "$asset_name" --dir "$restore/assets" --clobber >/dev/null 2>&1 || true
             if [[ -s "$restore/assets/$asset_name" ]]; then
               echo "catalog_path=$catalog" >> "$GITHUB_OUTPUT"
