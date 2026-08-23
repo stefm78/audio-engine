@@ -4,7 +4,7 @@ Small, reusable spoken-audio renderer.
 
 `audio-engine` turns a declared JSON audio program into publication-ready audio assets. It is deliberately product-agnostic: it does not know about audioguides, learning kits, websites, releases, or storage.
 
-Internally, the pipeline is deliberately split into three responsibilities:
+Internally, the pipeline is split into three responsibilities:
 
 ```text
 text ──► voice ──┐
@@ -97,7 +97,7 @@ See [`docs/CONTRACT.md`](docs/CONTRACT.md).
 }
 ```
 
-Clients describe the scene. Audio Engine owns constant-power channel gains and output encoding.
+Clients describe the scene with only `left`, `center`, and `right`. Audio Engine owns constant-power channel gains and output encoding.
 
 ### Schema v2 — optional ambience
 
@@ -112,7 +112,9 @@ Clients describe the scene. Audio Engine owns constant-power channel gains and o
     "loop": true,
     "fade_in_ms": 1000,
     "fade_out_ms": 1500,
-    "ducking": "speech"
+    "ducking": "speech",
+    "license": "CC0-1.0",
+    "attribution": "Optional attribution"
   },
   "segments": [
     {"preset": "narrateur-vif", "text": "Bienvenue."}
@@ -120,7 +122,7 @@ Clients describe the scene. Audio Engine owns constant-power channel gains and o
 }
 ```
 
-The ambience is a local/snapshotted production asset relative to the JSON program. Arbitrary Web URLs are rejected. Use the Web to discover candidates; qualify licence/quality once, then render from a locked asset.
+The ambience is a local/snapshotted production asset relative to the JSON program. Arbitrary Web URLs, absolute paths, and paths escaping the caller workspace are rejected. Use the Web to discover candidates; qualify licence/quality once, then render from a locked asset.
 
 ## Profiles
 
@@ -134,7 +136,6 @@ The engine normalizes only the final master.
 A completed master is reusable only when its render fingerprint still matches. In addition, expensive TTS clips have their own content-addressed cache keyed by text, resolved voice settings, provider, and provider code.
 
 That means changing only:
-
 - `left` → `right`;
 - ambience level;
 - fades;
@@ -142,7 +143,7 @@ That means changing only:
 
 normally remixes locally without calling the remote TTS provider again.
 
-Ambience preparation has its own cache keyed by source content hash and processing settings.
+Ambience preparation has its own cache keyed by source content hash, processing settings, target duration, output format, and ambience-engine code.
 
 Internal stage caches live below `OUT/.cache/`; they are not listening assets and should not be published as product content.
 
@@ -173,16 +174,14 @@ For production, pin both the called workflow and `engine_ref` to the same tested
 ## Current design boundary
 
 P1 intentionally supports:
-
 - mono narration;
 - stable left/center/right dialogue placement;
-- numeric pan as an advanced override;
 - one optional background ambience;
 - gain, loop, fades, and simple speech ducking;
 - automatic mono/stereo output;
 - final normalization and encoding.
 
-P1 intentionally does **not** implement HRTF/binaural 3D, front/rear/height positioning, room simulation, reverb design, effects timelines, or a general-purpose multitrack workstation.
+P1 intentionally does **not** implement HRTF/binaural 3D, front/rear/height positioning, room simulation, reverb design, effects timelines, arbitrary Web fetching during render, or a general-purpose multitrack workstation.
 
 Read [`AGENTS.md`](AGENTS.md) before changing architecture. The core rule remains:
 
