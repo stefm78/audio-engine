@@ -3,7 +3,12 @@ name: Qualify seed sounds
 on:
   push:
     branches: [research/sound-pack-seed]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   qualify:
