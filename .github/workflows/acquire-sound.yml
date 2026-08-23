@@ -151,6 +151,45 @@ jobs:
           python-version: '3.12'
       - name: Install audio-engine
         run: python -m pip install --disable-pip-version-check ./.audio-engine
+      - name: Restore durable sound from Release
+        id: restore
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOUND_ID: ${{ inputs.sound_id }}
+          REQUESTED_CATALOG: ${{ inputs.catalog_path }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$REQUESTED_CATALOG" ]]; then
+            echo "catalog_path=$REQUESTED_CATALOG" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          restore=".sound-release-cache"
+          mkdir -p "$restore/assets"
+          catalog="$restore/${SOUND_ID}.catalog.json"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release download "$RELEASE_TAG" --pattern "${SOUND_ID}.catalog.json" --dir "$restore" --clobber >/dev/null 2>&1 || true
+          fi
+          if [[ -f "$catalog" ]]; then
+            asset_name="$(python - "$catalog" <<'PY'
+          import json, sys
+          from pathlib import Path
+          data = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          entry = data['entries'][0]
+          print(Path(entry['asset']['file']).name)
+          PY
+            )"
+            gh release download "$RELEASE_TAG" --pattern "$asset_name" --dir "$restore/assets" --clobber >/dev/null 2>&1 || true
+            if [[ -s "$restore/assets/$asset_name" ]]; then
+              echo "catalog_path=$catalog" >> "$GITHUB_OUTPUT"
+              echo "restored=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          rm -f "$catalog"
+          echo "catalog_path=" >> "$GITHUB_OUTPUT"
+          echo "restored=false" >> "$GITHUB_OUTPUT"
       - name: Resolve or acquire sound autonomously
         id: acquire
         shell: bash
@@ -161,7 +200,7 @@ jobs:
           REQUIRED_TAGS: ${{ inputs.required_tags }}
           PREFERRED_TAGS: ${{ inputs.preferred_tags }}
           PROVIDERS: ${{ inputs.providers }}
-          CATALOG_PATH: ${{ inputs.catalog_path }}
+          CATALOG_PATH: ${{ steps.restore.outputs.catalog_path }}
           MIN_SCORE: ${{ inputs.min_score }}
         run: |
           set -euo pipefail
@@ -208,6 +247,7 @@ jobs:
           path: |
             .sound-acquisition
             .sound-acquisition.result.json
+            .sound-release-cache
           if-no-files-found: warn
           retention-days: 30
       - name: Publish durable selected asset
