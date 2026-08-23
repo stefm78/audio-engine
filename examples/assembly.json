@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "demo-assembled",
+  "profile": "speech",
+  "inputs": [
+    {
+      "file": "../output/demo-minimal/audio.mp3",
+      "pause_after_ms": 1000
+    },
+    {
+      "file": "../output/demo-dialogue/audio.mp3"
+    }
+  ]
+}
