@@ -51,5 +51,9 @@ def scene_transition_defaults():
     return load_capabilities()["effects"]["transitions"]["scene"]
 
 
+def bridge_transition_defaults():
+    return load_capabilities()["effects"]["transitions"]["bridge"]
+
+
 def punctuation_transition_defaults():
     return load_capabilities()["effects"]["transitions"]["punctuation"]
