@@ -22,6 +22,7 @@ Requires Python 3.11+.
 python -m pip install -e .
 audio-engine validate examples/minimal.json
 audio-engine voices
+audio-engine ambiences
 audio-engine render examples/minimal.json --out output
 audio-engine render examples/dialogue.json --out output
 ```
@@ -43,6 +44,9 @@ Default `speech` output is MP3, mono, 24 kHz, 80 kbit/s, normalized for spoken-w
 ```bash
 audio-engine voices
 audio-engine recommend --target '{"gender":"male","age":"adult","energy":5,"tags":["narrateur","vif"]}'
+audio-engine ambiences
+audio-engine ambiences --tag interior
+audio-engine ambiences --id cathedral-calm
 audio-engine render PROGRAM.json --out output/
 audio-engine batch "content/**/*.json" --out output/
 audio-engine assemble ASSEMBLY.json --out output/
@@ -50,6 +54,8 @@ audio-engine validate PROGRAM.json
 ```
 
 `voices` publishes the human-validated French palette, the quality criteria inherited from the initial blind benchmark, and the casting rules. `recommend` ranks suitable presets for a requested vocal profile without synthesizing anything. See [`docs/VOICES.md`](docs/VOICES.md).
+
+`ambiences` publishes the curated reusable-ambience collection and its machine-readable asset/licence policy. The collection may intentionally be empty until qualified assets exist. See [`docs/AMBIENCES.md`](docs/AMBIENCES.md).
 
 `batch` is best effort: one failed program is reported in `render-report.json` and does not delete successful outputs.
 
