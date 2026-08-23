@@ -50,7 +50,7 @@ class AmbienceToolTests(unittest.TestCase):
             self.assertFalse(result["preview"]["canonical"])
             self.assertNotEqual(result["file"]["content_sha256"], result["preview"]["content_sha256"])
 
-    def test_trusted_open_source_is_machine_verified_without_human_gate(self):
+    def test_trusted_open_source_requires_machine_observed_upstream_metadata(self):
         with tempfile.TemporaryDirectory() as temp_value:
             root = Path(temp_value)
             audio = root / "bell.wav"
@@ -58,7 +58,7 @@ class AmbienceToolTests(unittest.TestCase):
                 "-f", "lavfi", "-i", "sine=frequency=500:sample_rate=44100:duration=1",
                 "-ac", "2", "-c:a", "pcm_s16le", str(audio),
             ])
-            result = qualify_candidate(
+            declared_only = qualify_candidate(
                 audio,
                 candidate_type="event",
                 source_provider="wikimedia-commons",
@@ -66,10 +66,41 @@ class AmbienceToolTests(unittest.TestCase):
                 license_id="CC0-1.0",
                 tags=["bell", "church"],
             )
-            self.assertTrue(result["license"]["verified"])
-            self.assertEqual(result["license"]["verification_method"], "trusted-source-metadata")
-            self.assertEqual(result["review"]["automated_quality"], "passed")
-            self.assertTrue(result["promotion"]["eligible"])
+            self.assertFalse(declared_only["license"]["verified"])
+
+            observed = qualify_candidate(
+                audio,
+                candidate_type="event",
+                source_provider="wikimedia-commons",
+                source_page="https://commons.wikimedia.org/wiki/File:Bell.ogg",
+                license_id="CC0-1.0",
+                tags=["bell", "church"],
+                source_metadata_verified=True,
+            )
+            self.assertTrue(observed["license"]["verified"])
+            self.assertEqual(observed["license"]["verification_method"], "upstream-api-metadata")
+            self.assertTrue(observed["source"]["metadata_machine_observed"])
+            self.assertEqual(observed["review"]["automated_quality"], "passed")
+            self.assertTrue(observed["promotion"]["eligible"])
+
+    def test_openverse_metadata_alone_is_not_final_licence_proof(self):
+        with tempfile.TemporaryDirectory() as temp_value:
+            root = Path(temp_value)
+            audio = root / "event.wav"
+            run_ffmpeg([
+                "-f", "lavfi", "-i", "sine=frequency=300:sample_rate=44100:duration=1",
+                "-ac", "1", "-c:a", "pcm_s16le", str(audio),
+            ])
+            result = qualify_candidate(
+                audio,
+                candidate_type="event",
+                source_provider="openverse",
+                source_page="https://openverse.org/audio/example",
+                license_id="CC0-1.0",
+                source_metadata_verified=True,
+            )
+            self.assertFalse(result["license"]["verified"])
+            self.assertFalse(result["promotion"]["eligible"])
 
     def test_qualification_can_redirect_preview_without_changing_source_identity(self):
         with tempfile.TemporaryDirectory() as temp_value:
