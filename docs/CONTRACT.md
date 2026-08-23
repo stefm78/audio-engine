@@ -35,15 +35,9 @@ Top-level fields:
 - `lead_in_ms`: optional initial silence, default 250 ms.
 - `sources`: optional provenance URLs or identifiers.
 
-Each segment requires:
-- `text`;
-- one of `voice`, `preset`, or `target`.
+Each segment requires `text` and one of `voice`, `preset`, or `target`.
 
-Useful optional segment fields:
-- `speaker`;
-- `character_id`;
-- `pause_after_ms` (default 350);
-- `rate`, `pitch`, `volume`.
+Useful optional segment fields are `speaker`, `character_id`, `pause_after_ms` (default 350), `rate`, `pitch`, and `volume`.
 
 `voice` directly selects a provider voice. `preset` selects a configured voice preset. `target` lets the bundled simple casting scorer choose a preset from declared traits.
 
@@ -69,18 +63,16 @@ Schema v2 lets a client describe **where a speaker sits in a stable scene** with
 }
 ```
 
-Supported simple placements:
+Supported public placements are deliberately limited to:
 - `left`;
 - `center`;
 - `right`.
 
-The current mapping intentionally stays moderate: left/right are not hard-panned. The mixer uses constant-power panning.
+The current mapping intentionally stays moderate: left/right are not hard-panned. The mixer uses constant-power panning. Numeric pan is **not** a public contract field; clients describe scene intent and Audio Engine owns the DSP mapping.
 
-An advanced client may declare a numeric `pan` between `-1` and `1` instead of `placement`. Do not use both on the same actor or segment. A segment-level placement/pan overrides the actor-level declaration.
+A segment-level `placement` overrides the actor-level declaration. Scene positions should be stable and meaningful. Do not move voices merely for decoration.
 
-The scene position should be stable and meaningful. Do not move voices merely for decoration.
-
-If no spatial placement and no ambience is present, `speech` remains mono at 80 kbit/s. If stereo is required, Audio Engine automatically renders two channels and raises the speech bitrate to at least 96 kbit/s.
+If no non-center placement and no ambience is present, `speech` remains mono at 80 kbit/s. If stereo is required, Audio Engine automatically renders two channels and raises the speech bitrate to at least 96 kbit/s.
 
 ## Program v2: ambience
 
@@ -92,12 +84,14 @@ A program may declare **one background ambience bed**:
   "id": "scene-with-roomtone",
   "title": "Scene with ambience",
   "ambience": {
-    "file": "assets/cathedral-roomtone.flac",
+    "file": "../assets/cathedral-roomtone.flac",
     "gain_db": -22,
     "loop": true,
     "fade_in_ms": 1000,
     "fade_out_ms": 1500,
-    "ducking": "speech"
+    "ducking": "speech",
+    "license": "CC0-1.0",
+    "attribution": "Optional human-readable attribution"
   },
   "segments": [
     {"preset": "narrateur-vif", "text": "Bienvenue."}
@@ -107,11 +101,13 @@ A program may declare **one background ambience bed**:
 
 Rules:
 - `file` is required and is resolved relative to the program JSON file;
-- arbitrary HTTP(S) URLs are rejected;
+- arbitrary HTTP(S) URLs and absolute paths are rejected;
+- when rendering inside a repository, a relative path may not escape the caller workspace;
 - `gain_db` defaults to `-22` and must be between `-60` and `+6`;
 - `loop` defaults to `true`;
 - fades default to 1000 ms in and 1500 ms out;
-- `ducking` is `speech` (default) or `off`.
+- `ducking` is `speech` (default) or `off`;
+- optional `license` and `attribution` metadata are copied to the manifest.
 
 The background file belongs to the consumer or to a separately locked asset snapshot. Discovery on the Web is outside the render contract. Production inputs should be licence-checked and content-addressed before publication.
 
@@ -128,12 +124,12 @@ content-addressed voice clip cache
         ↓
 placement / ambience preparation
         ↓
-master mix cache
+master mix
 ```
 
-Changing only `placement`, `pan`, ambience gain, fades, or ducking does **not** require a new TTS call when the text and resolved voice settings are unchanged.
+Changing only `placement`, ambience gain, fades, or ducking does **not** require a new TTS call when the text and resolved voice settings are unchanged.
 
-The ambience preparation cache includes the source file hash plus ambience processing settings and target duration.
+The ambience preparation cache includes the source file hash, preparation settings, target duration, output format, and ambience-engine code. A change to ambience processing therefore cannot silently reuse an old prepared asset.
 
 ## Render output
 
@@ -146,9 +142,9 @@ OUT/episode-01/
   transcript.json
 ```
 
-`manifest.json` records the render status, source SHA-256, voice-config SHA-256, engine version, provider processing mode, profile, codec, bitrate, sample rate, channels, duration, cache information, and ambience source identity when present.
+`manifest.json` records the render status, source SHA-256, voice-config SHA-256, engine version, provider processing mode, profile, codec, bitrate, sample rate, channels, duration, cache information, and ambience source identity/provenance when present.
 
-`transcript.json` contains resolved segments, resolved pan values, and sources. Consumers should use the manifest instead of probing the MP3.
+`transcript.json` contains resolved segments, resolved semantic placement, internal resolved pan for diagnostics, and sources. Consumers should use the manifest instead of probing the MP3.
 
 Internal caches are stored below `OUT/.cache/` and are implementation details, not published listening assets.
 
@@ -160,7 +156,7 @@ A bad member does not roll back or delete successful renders.
 
 ## Assembly
 
-Assembly joins already-rendered listening units. It does **not** imply that every series should be concatenated.
+Assembly joins already-rendered listening units and remains schema v1. It does **not** imply that every series should be concatenated.
 
 ```json
 {
@@ -174,9 +170,7 @@ Assembly joins already-rendered listening units. It does **not** imply that ever
 }
 ```
 
-Paths are relative to the assembly JSON file.
-
-Output is `OUT/long-program/audio.mp3` plus `manifest.json`.
+Paths are relative to the assembly JSON file. Output is `OUT/long-program/audio.mp3` plus `manifest.json`.
 
 Audioguide visit/route episodes should normally remain separate because movement occurs between listening units. Audiobooks are a typical case where `assemble` can be useful.
 
@@ -184,7 +178,8 @@ Audioguide visit/route episodes should normally remain separate because movement
 
 Single `render`/`assemble`:
 - malformed contract or missing input → non-zero exit;
-- provider or FFmpeg failure → non-zero exit.
+- provider or FFmpeg failure → non-zero exit;
+- forbidden or escaping ambience asset → non-zero exit.
 
 `batch`:
 - failures are isolated and recorded in `render-report.json`;
