@@ -19,14 +19,14 @@
     },
     {
       "character_id": "speaker-a",
-      "preset": "temoin-adulte",
-      "speaker": "Interlocuteur A",
-      "text": "Je suis placé légèrement à gauche.",
+      "preset": "conteuse-chaleureuse",
+      "speaker": "Interlocutrice A",
+      "text": "Je suis placée légèrement à gauche.",
       "pause_after_ms": 350
     },
     {
       "character_id": "speaker-b",
-      "preset": "narrateur-vif",
+      "preset": "officier-autorite",
       "speaker": "Interlocuteur B",
       "text": "Et moi légèrement à droite.",
       "pause_after_ms": 350
