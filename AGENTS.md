@@ -51,7 +51,7 @@ Core commands:
 
 - Mono remains the default for ordinary narration.
 - Stereo is activated only when a declared scene or ambience needs it.
-- Simple client vocabulary is `left`, `center`, `right`; numeric pan is an advanced override.
+- Public client vocabulary is strictly `left`, `center`, `right`; numeric pan remains an implementation detail.
 - Use constant-power panning; do not hard-pan ordinary dialogue by default.
 - Spatial placement represents a stable scene, not decorative movement.
 - One background ambience bed is enough for the current contract.
@@ -62,9 +62,11 @@ Core commands:
 ## Asset governance
 
 - `ambience.file` is a local/snapshotted production input relative to the program file.
-- Do not accept arbitrary HTTP(S) URLs in the render contract.
+- Do not accept arbitrary HTTP(S) URLs or absolute file paths in the render contract.
+- A program running inside a repository must not read an ambience asset outside the caller workspace.
 - Web search is discovery, not rendering.
 - Production ambience must have known provenance, licence, and content hash before durable publication.
+- Preserve optional licence/attribution metadata in the manifest.
 - Curated reusable ambience packs may be added as data later; do not create a separate asset service without evidence.
 
 ## Engineering rules
@@ -74,6 +76,7 @@ Core commands:
 - A batch failure must not destroy successful outputs.
 - Voice synthesis is the expensive remote stage; keep its cache independent from placement and mixing.
 - Ambience preparation and final mix are local deterministic stages.
+- Ambience-cache fingerprints must include source content, settings, target format/duration, and ambience-processing code.
 - Final spoken-word output defaults to `speech`: MP3, mono, 24 kHz, 80 kbit/s.
 - Stereo `speech` uses at least 96 kbit/s automatically.
 - Keep provider code behind the provider boundary.
