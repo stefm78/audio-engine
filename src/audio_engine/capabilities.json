@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "feature_level": "narrative-sound-direction-v1",
+  "program_schema_versions": [1, 2, 3, 4],
+  "effects": {
+    "acoustic_spaces": [
+      {
+        "id": "dry",
+        "label": "Dry / close",
+        "description": "No added room coloration; default for narration.",
+        "kind": "voice-space",
+        "authenticity": "synthetic"
+      },
+      {
+        "id": "outdoor-open",
+        "label": "Open exterior",
+        "description": "Very dry, open-air presentation with no room tail.",
+        "kind": "voice-space",
+        "authenticity": "synthetic"
+      },
+      {
+        "id": "small-stone-room",
+        "label": "Small stone room",
+        "description": "Subtle early reflections suggesting a chapel or small masonry room while preserving speech intelligibility.",
+        "kind": "voice-space",
+        "authenticity": "synthetic"
+      },
+      {
+        "id": "large-stone-interior",
+        "label": "Large stone interior",
+        "description": "Restrained early reflections suggesting a nave or large masonry hall; not an authentic impulse response of a named place.",
+        "kind": "voice-space",
+        "authenticity": "synthetic"
+      },
+      {
+        "id": "confined-stone",
+        "label": "Confined stone space",
+        "description": "Short, close reflections suggesting a crypt, cellar or confined masonry volume.",
+        "kind": "voice-space",
+        "authenticity": "synthetic"
+      }
+    ],
+    "sound_roles": [
+      {
+        "id": "texture",
+        "applies_to": ["bed", "layer"],
+        "description": "Continuous context under narration."
+      },
+      {
+        "id": "punctuation",
+        "applies_to": ["event"],
+        "description": "A punctual sound that underlines an idea without taking over the narration."
+      },
+      {
+        "id": "scene",
+        "applies_to": ["event"],
+        "description": "A sound given explicit narration-free space after a segment because it carries useful information or emotion.",
+        "requires": ["after_segment", "space_ms"]
+      }
+    ],
+    "transitions": {
+      "continuous": {
+        "default_fade_in_ms": 1000,
+        "default_fade_out_ms": 1500
+      },
+      "punctuation": {
+        "default_fade_in_ms": 0,
+        "default_fade_out_ms": 250
+      },
+      "scene": {
+        "default_fade_in_ms": 180,
+        "default_fade_out_ms": 500,
+        "pre_roll_ms": 200,
+        "post_roll_ms": 250
+      },
+      "hard_cut": {
+        "supported": true,
+        "policy": "explicit-zero-only"
+      }
+    },
+    "placement": ["left", "center", "right"],
+    "ducking": ["speech", "off"]
+  },
+  "limits": {
+    "continuous_layers": 2,
+    "events": 16,
+    "scene_space_ms": {"min": 750, "max": 15000}
+  },
+  "policy": {
+    "voice_intelligibility_first": true,
+    "dry_voice_cache": true,
+    "web_resolution_during_render": false,
+    "arbitrary_plugin_chain": false,
+    "binaural_hrtf": false,
+    "named_place_acoustic_authenticity": false
+  }
+}
