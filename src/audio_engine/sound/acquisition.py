@@ -11,10 +11,11 @@ from ..ambience.qualification import qualify_candidate
 from .catalog import load_catalog
 from .selection import select_candidates
 
-USER_AGENT = "recit-audio-engine/0.5 (+https://github.com/stefm78/audio-engine)"
+USER_AGENT = "recit-audio-engine/0.6.2 (+https://github.com/stefm78/audio-engine)"
 DEFAULT_PROVIDERS = ("wikimedia-commons", "openverse")
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 AUDIO_EXTENSIONS = {".ogg", ".oga", ".wav", ".flac", ".mp3", ".m4a", ".aac", ".opus", ".webm"}
+OPENVERSE_AUTONOMOUS_LICENSES = ("cc0", "pdm", "by")
 
 
 def _slug(value, fallback="sound"):
@@ -110,7 +111,14 @@ def _commons_record(page, discovery_provider="wikimedia-commons", rank=1, query=
     }
 
 
-def discover_wikimedia(query, limit=8):
+def _record_is_autonomously_eligible(record, required_tags=None):
+    if not record or not record.get("license_id") or record.get("source_metadata_verified") is not True:
+        return False
+    required = set(required_tags or [])
+    return required.issubset(set(record.get("tags", [])))
+
+
+def discover_wikimedia(query, limit=8, required_tags=None):
     params = {
         "action": "query",
         "format": "json",
@@ -118,7 +126,7 @@ def discover_wikimedia(query, limit=8):
         "generator": "search",
         "gsrsearch": query,
         "gsrnamespace": "6",
-        "gsrlimit": str(min(max(int(limit) * 4, 8), 50)),
+        "gsrlimit": str(min(max(int(limit) * 6, 12), 50)),
         "prop": "imageinfo",
         "iiprop": "url|mime|mediatype|size|extmetadata",
         "iiextmetadatafilter": "LicenseShortName|LicenseUrl|Artist|Credit|AttributionRequired|ImageDescription",
@@ -128,9 +136,9 @@ def discover_wikimedia(query, limit=8):
     data = _http_json(url)
     pages = (data.get("query") or {}).get("pages") or []
     results = []
-    for page in pages:
-        record = _commons_record(page, rank=len(results) + 1, query=query)
-        if record:
+    for source_rank, page in enumerate(pages, start=1):
+        record = _commons_record(page, rank=source_rank, query=query)
+        if _record_is_autonomously_eligible(record, required_tags):
             results.append(record)
         if len(results) >= int(limit):
             break
@@ -166,26 +174,31 @@ def _commons_lookup(source_page, discovery_provider, rank, query):
     return _commons_record(pages[0], discovery_provider=discovery_provider, rank=rank, query=query)
 
 
-def discover_openverse(query, limit=8):
-    params = {"q": query, "page_size": str(min(max(int(limit) * 3, 8), 20))}
-    data = _http_json("https://api.openverse.org/v1/audio/?" + urlencode(params))
+def discover_openverse(query, limit=8, required_tags=None):
+    # Openverse remains discovery-only: its licence field is useful for narrowing
+    # search, but final licence/provenance proof always comes from the upstream
+    # Commons API before a record becomes eligible.
     results = []
-    for index, item in enumerate(data.get("results") or [], start=1):
-        landing = item.get("foreign_landing_url")
-        if not landing:
-            continue
-        # Openverse is discovery-only. Final licence/provenance proof must come
-        # from a supported upstream verifier. Commons is the first one.
-        record = _commons_lookup(landing, "openverse", index, query)
-        if record:
-            record["openverse_id"] = item.get("id")
-            results.append(record)
-        if len(results) >= int(limit):
-            break
+    seen = set()
+    page_size = str(min(max(int(limit) * 3, 8), 20))
+    for license_slug in OPENVERSE_AUTONOMOUS_LICENSES:
+        params = {"q": query, "license": license_slug, "page_size": page_size}
+        data = _http_json("https://api.openverse.org/v1/audio/?" + urlencode(params))
+        for item in data.get("results") or []:
+            landing = item.get("foreign_landing_url")
+            if not landing or landing in seen:
+                continue
+            seen.add(landing)
+            record = _commons_lookup(landing, "openverse", len(results) + 1, query)
+            if _record_is_autonomously_eligible(record, required_tags):
+                record["openverse_id"] = item.get("id")
+                results.append(record)
+            if len(results) >= int(limit):
+                return results
     return results
 
 
-def discover_candidates(query, providers=None, limit=8):
+def discover_candidates(query, providers=None, limit=8, required_tags=None):
     requested = list(providers or DEFAULT_PROVIDERS)
     unknown = sorted(set(requested) - set(DEFAULT_PROVIDERS))
     if unknown:
@@ -194,7 +207,11 @@ def discover_candidates(query, providers=None, limit=8):
     diagnostics = []
     for provider in requested:
         try:
-            found = discover_wikimedia(query, limit) if provider == "wikimedia-commons" else discover_openverse(query, limit)
+            found = (
+                discover_wikimedia(query, limit, required_tags=required_tags)
+                if provider == "wikimedia-commons"
+                else discover_openverse(query, limit, required_tags=required_tags)
+            )
             diagnostics.append({"provider": provider, "status": "success", "count": len(found)})
             results.extend(found)
         except Exception as exc:  # provider failure must not abort multi-source discovery
@@ -305,7 +322,12 @@ def ensure_sound(
     previews_dir = root / "audit-previews"
     assets_dir = root / "assets"
     root.mkdir(parents=True, exist_ok=True)
-    records, diagnostics = discover_candidates(query, providers=providers, limit=limit)
+    records, diagnostics = discover_candidates(
+        query,
+        providers=providers,
+        limit=limit,
+        required_tags=required_tags,
+    )
     qualified = []
     failures = []
 
