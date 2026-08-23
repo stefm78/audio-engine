@@ -1,23 +1,35 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "demo-dialogue",
-  "title": "Démonstration dialogue",
+  "title": "Dialogue stéréo",
   "language": "fr-FR",
   "profile": "speech",
+  "actors": {
+    "narrator": {"placement": "center"},
+    "speaker-a": {"placement": "left"},
+    "speaker-b": {"placement": "right"}
+  },
   "segments": [
     {
       "character_id": "narrator",
-      "speaker": "Narrateur",
       "preset": "narrateur-vif",
-      "text": "Deux voix peuvent partager le même programme.",
+      "speaker": "Narrateur",
+      "text": "Deux personnes se font face.",
       "pause_after_ms": 450
     },
     {
-      "character_id": "guest",
-      "speaker": "Invitée",
+      "character_id": "speaker-a",
       "preset": "conteuse-chaleureuse",
-      "text": "Le moteur assemble ensuite les segments dans une seule unité d'écoute.",
-      "pause_after_ms": 300
+      "speaker": "Interlocutrice A",
+      "text": "Je suis placée légèrement à gauche.",
+      "pause_after_ms": 350
+    },
+    {
+      "character_id": "speaker-b",
+      "preset": "officier-autorite",
+      "speaker": "Interlocuteur B",
+      "text": "Et moi légèrement à droite.",
+      "pause_after_ms": 350
     }
   ]
 }

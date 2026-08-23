@@ -21,8 +21,8 @@ class FakeProvider:
         self.calls += 1
         run_ffmpeg([
             "-f", "lavfi",
-            "-i", "anullsrc=r=24000:cl=mono",
-            "-t", "0.20",
+            "-i", "sine=frequency=440:sample_rate=24000:duration=0.20",
+            "-ac", "1",
             "-c:a", "libmp3lame",
             "-b:a", "64k",
             str(path),
@@ -37,6 +37,19 @@ class SmokeTests(unittest.TestCase):
                 "id": "bad",
                 "title": "Bad",
                 "segments": [],
+            })
+
+    def test_schema_v1_rejects_spatial_fields(self):
+        with self.assertRaises(ContractError):
+            validate_program({
+                "schema_version": 1,
+                "id": "bad-spatial",
+                "title": "Bad spatial",
+                "segments": [{
+                    "voice": "test",
+                    "text": "Test",
+                    "placement": "left",
+                }],
             })
 
     def test_voice_catalog_publishes_quality_gate(self):
@@ -118,6 +131,95 @@ class SmokeTests(unittest.TestCase):
             self.assertFalse(changed["cache_hit"])
             self.assertEqual(provider.calls, 2)
             self.assertNotEqual(changed["render_fingerprint"], manifest["render_fingerprint"])
+
+    def test_stereo_placement_reuses_voice_clips_when_mix_changes(self):
+        with tempfile.TemporaryDirectory() as temp_value:
+            root = Path(temp_value)
+            program = root / "dialogue.json"
+            base = {
+                "schema_version": 2,
+                "id": "dialogue",
+                "title": "Dialogue",
+                "profile": "speech",
+                "actors": {
+                    "a": {"placement": "left"},
+                    "b": {"placement": "right"},
+                },
+                "segments": [
+                    {"character_id": "a", "voice": "voice-a", "text": "Bonjour.", "pause_after_ms": 50},
+                    {"character_id": "b", "voice": "voice-b", "text": "Bonjour aussi.", "pause_after_ms": 50},
+                ],
+            }
+            program.write_text(json.dumps(base), encoding="utf-8")
+            out = root / "out"
+            provider = FakeProvider()
+            first = render_program(program, out, provider=provider)
+            self.assertEqual(first["audio"]["channels"], 2)
+            self.assertEqual(first["audio"]["bitrate_kbps"], 96)
+            self.assertEqual(provider.calls, 2)
+            self.assertEqual(first["mix"]["voice_cache_hits"], 0)
+
+            base["actors"] = {
+                "a": {"placement": "right"},
+                "b": {"placement": "left"},
+            }
+            program.write_text(json.dumps(base), encoding="utf-8")
+            remixed = render_program(program, out, provider=provider)
+            self.assertFalse(remixed["cache_hit"])
+            self.assertEqual(provider.calls, 2)
+            self.assertEqual(remixed["mix"]["voice_cache_hits"], 2)
+            pans = [segment["resolved_pan"] for segment in json.loads(
+                (out / "dialogue" / "transcript.json").read_text(encoding="utf-8")
+            )["segments"]]
+            self.assertEqual(pans, [0.45, -0.45])
+
+    def test_ambience_mix_and_ambience_cache(self):
+        with tempfile.TemporaryDirectory() as temp_value:
+            root = Path(temp_value)
+            ambience = root / "room.wav"
+            run_ffmpeg([
+                "-f", "lavfi",
+                "-i", "anoisesrc=color=pink:sample_rate=24000:duration=1.5",
+                "-ac", "2",
+                "-c:a", "pcm_s16le",
+                str(ambience),
+            ])
+            program = root / "scene.json"
+            data = {
+                "schema_version": 2,
+                "id": "scene",
+                "title": "Scene",
+                "profile": "speech",
+                "ambience": {
+                    "file": "room.wav",
+                    "gain_db": -24,
+                    "loop": True,
+                    "fade_in_ms": 50,
+                    "fade_out_ms": 50,
+                    "ducking": "speech",
+                },
+                "segments": [{
+                    "voice": "voice-a",
+                    "text": "Test with ambience.",
+                    "pause_after_ms": 100,
+                }],
+            }
+            program.write_text(json.dumps(data), encoding="utf-8")
+            out = root / "out"
+            provider = FakeProvider()
+            first = render_program(program, out, provider=provider)
+            self.assertEqual(first["audio"]["channels"], 2)
+            self.assertEqual(first["mix"]["ducking"], "speech")
+            self.assertIsNotNone(first["mix"]["ambience"])
+            self.assertFalse(first["mix"]["ambience_cache_hit"])
+            self.assertEqual(provider.calls, 1)
+
+            data["ambience"]["gain_db"] = -20
+            program.write_text(json.dumps(data), encoding="utf-8")
+            remixed = render_program(program, out, provider=provider)
+            self.assertEqual(provider.calls, 1)
+            self.assertEqual(remixed["mix"]["voice_cache_hits"], 1)
+            self.assertFalse(remixed["mix"]["ambience_cache_hit"])
 
     def test_assemble(self):
         with tempfile.TemporaryDirectory() as temp_value:
