@@ -18,8 +18,10 @@ jobs:
         run: python -m pip install --disable-pip-version-check -e .
       - name: Offline smoke tests
         run: python -m unittest discover -s tests -v
-      - name: Validate example contract
-        run: audio-engine validate examples/minimal.json
+      - name: Validate example contracts
+        run: |
+          audio-engine validate examples/minimal.json
+          audio-engine validate examples/dialogue.json
       - name: Provider smoke evidence
         continue-on-error: true
         run: audio-engine render examples/minimal.json --out .provider-smoke
