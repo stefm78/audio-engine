@@ -46,6 +46,13 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      - name: Restore generated audio cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ inputs.output_dir }}
+          key: audio-engine-v1-${{ runner.os }}-${{ github.repository }}-${{ inputs.engine_ref }}-${{ github.sha }}
+          restore-keys: |
+            audio-engine-v1-${{ runner.os }}-${{ github.repository }}-${{ inputs.engine_ref }}-
       - name: Install audio-engine
         run: python -m pip install --disable-pip-version-check ./.audio-engine
       - name: Render batch, best effort
