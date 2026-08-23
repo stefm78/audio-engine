@@ -29,3 +29,13 @@ jobs:
       - name: Provider smoke evidence
         continue-on-error: true
         run: audio-engine render examples/minimal.json --out .provider-smoke
+      - name: Autonomous Commons acquisition evidence
+        continue-on-error: true
+        run: |
+          audio-engine sound ensure "200357 bigben12345 pretiosa" \
+            --type event \
+            --id ci-pretiosa \
+            --provider wikimedia-commons \
+            --out .acquisition-smoke \
+            --limit 5 \
+            --min-score 60
