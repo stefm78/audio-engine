@@ -89,6 +89,31 @@ class SoundAcquisitionTests(unittest.TestCase):
             self.assertEqual(result["status"], "catalog-hit")
             self.assertFalse(result["network_requests_required"])
 
+    def test_explicit_sound_id_never_substitutes_different_catalog_entry(self):
+        with tempfile.TemporaryDirectory() as temp_value:
+            root = Path(temp_value)
+            catalog = root / "sounds.json"
+            catalog.write_text(json.dumps({
+                "version": 1,
+                "description": "test",
+                "entries": [{
+                    "id": "other-cathedral",
+                    "type": "ambience",
+                    "status": "validated",
+                    "tags": ["cathedral", "calm"],
+                    "content_sha256": "b" * 64,
+                    "license": {"id": "CC0-1.0", "verified": True},
+                    "asset": {"file": "assets/other.ogg"},
+                }],
+            }), encoding="utf-8")
+            self.assertIsNone(acquisition._catalog_hit(
+                "cathedral-calm",
+                "ambience",
+                ["cathedral", "calm"],
+                [],
+                catalog,
+            ))
+
     def test_ensure_materializes_selected_commons_event_and_runtime_catalog(self):
         with tempfile.TemporaryDirectory() as temp_value:
             root = Path(temp_value)
