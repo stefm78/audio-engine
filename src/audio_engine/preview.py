@@ -20,6 +20,7 @@ def preview_program(
     event=None,
     before_ms=2500,
     after_ms=2500,
+    provider=None,
 ):
     if before_ms < 0 or after_ms < 0:
         raise ValueError("preview before/after durations must be >= 0")
@@ -28,6 +29,7 @@ def preview_program(
         output_root,
         voices_path=voices_path,
         sounds_path=sounds_path,
+        provider=provider,
     )
     output_root = Path(output_root)
     program_dir = output_root / manifest["id"]
