@@ -9,39 +9,92 @@ NUMERIC_TRAITS = {
     "darkness": 1.1,
     "proximity": 1.0,
 }
+GENDER_MISMATCH_PENALTY = 25.0
+AGE_DISTANCE_PENALTY = 7.0
+TAG_MATCH_BONUS = 2.0
+
 
 def default_voice_config():
     return Path(__file__).with_name("voices.json")
+
 
 def load_voice_config(path=None):
     source = Path(path) if path else default_voice_config()
     data = json.loads(source.read_text(encoding="utf-8"))
     return data, source
 
+
+def selection_rules():
+    return {
+        "score_direction": "lower-is-better",
+        "gender_mismatch_penalty": GENDER_MISMATCH_PENALTY,
+        "age_distance_penalty_per_class": AGE_DISTANCE_PENALTY,
+        "numeric_trait_weights": NUMERIC_TRAITS,
+        "tag_match_bonus_per_tag": TAG_MATCH_BONUS,
+    }
+
+
+def public_catalog(voice_config):
+    return {
+        "version": voice_config.get("version"),
+        "description": voice_config.get("description"),
+        "validation": voice_config.get("validation", {}),
+        "selection_rules": selection_rules(),
+        "presets": voice_config.get("presets", []),
+    }
+
+
 def casting_score(target, preset):
     traits = preset.get("traits", {})
     score = 0.0
     gender = target.get("gender", "any")
     if gender != "any" and traits.get("gender") != gender:
-        score += 25.0
+        score += GENDER_MISMATCH_PENALTY
     age = target.get("age", "any")
     if age != "any" and age in AGE_ORDER and traits.get("age") in AGE_ORDER:
-        score += 7.0 * abs(AGE_ORDER[age] - AGE_ORDER[traits["age"]])
+        score += AGE_DISTANCE_PENALTY * abs(AGE_ORDER[age] - AGE_ORDER[traits["age"]])
     for key, weight in NUMERIC_TRAITS.items():
         if key in target and key in traits:
             delta = float(target[key]) - float(traits[key])
             score += weight * delta * delta
-    score -= 2.0 * len(set(target.get("tags", [])) & set(preset.get("tags", [])))
+    score -= TAG_MATCH_BONUS * len(set(target.get("tags", [])) & set(preset.get("tags", [])))
     return score
 
-def choose_preset(target, presets):
+
+def rank_presets(target, presets, limit=None):
     ranked = sorted(
         ((casting_score(target, preset), preset) for preset in presets),
         key=lambda item: (item[0], item[1]["id"]),
     )
     if not ranked:
         raise ValueError("Voice config contains no presets")
-    return ranked[0][1], ranked[:3]
+    if limit is not None:
+        ranked = ranked[:limit]
+    return ranked
+
+
+def recommend_presets(target, voice_config, limit=3):
+    if limit < 1:
+        raise ValueError("limit must be >= 1")
+    ranked = rank_presets(target, voice_config.get("presets", []), limit=limit)
+    return {
+        "target": target,
+        "selection_rules": selection_rules(),
+        "recommendations": [
+            {
+                "rank": index,
+                "score": round(score, 3),
+                "preset": preset,
+            }
+            for index, (score, preset) in enumerate(ranked, start=1)
+        ],
+    }
+
+
+def choose_preset(target, presets):
+    ranked = rank_presets(target, presets, limit=3)
+    return ranked[0][1], ranked
+
 
 def resolve_segments(program, voice_config):
     presets = voice_config.get("presets", [])
@@ -72,7 +125,7 @@ def resolve_segments(program, voice_config):
                 character_cast[character_id] = preset
                 alternatives = [
                     {"preset": candidate["id"], "score": round(score, 3)}
-                    for score, candidate in ranked[:3]
+                    for score, candidate in ranked
                 ]
             voice = preset["voice"]
             rate = segment.get("rate", preset.get("rate", "+0%"))
