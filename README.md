@@ -23,6 +23,7 @@ python -m pip install -e .
 audio-engine validate examples/minimal.json
 audio-engine voices
 audio-engine ambiences
+audio-engine ambience discover "quiet cathedral room tone"
 audio-engine render examples/minimal.json --out output
 audio-engine render examples/dialogue.json --out output
 ```
@@ -47,6 +48,8 @@ audio-engine recommend --target '{"gender":"male","age":"adult","energy":5,"tags
 audio-engine ambiences
 audio-engine ambiences --tag interior
 audio-engine ambiences --id cathedral-calm
+audio-engine ambience discover "quiet cathedral room tone"
+audio-engine ambience qualify FILE.wav --source-provider PROVIDER --source-page URL --license LICENSE
 audio-engine render PROGRAM.json --out output/
 audio-engine batch "content/**/*.json" --out output/
 audio-engine assemble ASSEMBLY.json --out output/
@@ -55,7 +58,9 @@ audio-engine validate PROGRAM.json
 
 `voices` publishes the human-validated French palette, the quality criteria inherited from the initial blind benchmark, and the casting rules. `recommend` ranks suitable presets for a requested vocal profile without synthesizing anything. See [`docs/VOICES.md`](docs/VOICES.md).
 
-`ambiences` publishes the curated reusable-ambience collection and its machine-readable asset/licence policy. The collection may intentionally be empty until qualified assets exist. See [`docs/AMBIENCES.md`](docs/AMBIENCES.md).
+`ambiences` publishes the curated reusable-ambience collection and its machine-readable asset/licence policy. The collection may intentionally be empty until qualified assets exist.
+
+`ambience discover` creates an offline, multi-source discovery plan. It performs no Web request and does not scrape providers. `ambience qualify` fingerprints and technically probes a previously downloaded local candidate while deliberately leaving licence verification and listening approval pending. See [`docs/AMBIENCES.md`](docs/AMBIENCES.md).
 
 `batch` is best effort: one failed program is reported in `render-report.json` and does not delete successful outputs.
 
@@ -186,6 +191,8 @@ P1 intentionally supports:
 - gain, loop, fades, and simple speech ducking;
 - automatic mono/stereo output;
 - final normalization and encoding.
+
+Candidate discovery/qualification is a separate pre-production surface. It does not change the render contract and never makes a network request during rendering.
 
 P1 intentionally does **not** implement public numeric pan controls, HRTF/binaural 3D, front/rear/height positioning, room simulation, reverb design, effects timelines, arbitrary Web fetching during render, or a general-purpose multitrack workstation.
 
