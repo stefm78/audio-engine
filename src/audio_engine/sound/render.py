@@ -5,7 +5,11 @@ from pathlib import Path
 
 from ..audio import probe_duration_seconds, run_ffmpeg
 from ..contract import sha256_file
-from ..effects import punctuation_transition_defaults, scene_transition_defaults
+from ..effects import (
+    bridge_transition_defaults,
+    punctuation_transition_defaults,
+    scene_transition_defaults,
+)
 from .catalog import load_catalog, sound_info
 
 PLACEMENT_PAN = {
@@ -15,15 +19,26 @@ PLACEMENT_PAN = {
 }
 
 
-def scene_space_requirements(soundscape, schema_version):
+def narration_space_requirements(soundscape, schema_version):
     if schema_version < 4:
         return {}
     spaces = {}
     for item in soundscape.get("events", []):
-        if item.get("role", "punctuation") == "scene":
+        role = item.get("role", "punctuation")
+        if role == "scene":
             sequence = int(item["after_segment"])
             spaces[sequence] = max(float(item["space_ms"]), spaces.get(sequence, 0.0))
+        elif schema_version >= 5 and role == "bridge":
+            sequence = int(item["after_segment"])
+            pre_roll_ms = float(bridge_transition_defaults()["pre_roll_ms"])
+            pause_ms = pre_roll_ms + float(item["foreground_ms"])
+            spaces[sequence] = max(pause_ms, spaces.get(sequence, 0.0))
     return spaces
+
+
+def scene_space_requirements(soundscape, schema_version):
+    """Compatibility alias for callers written against Audio Engine 0.7."""
+    return narration_space_requirements(soundscape, schema_version)
 
 
 def _asset_root(reference_path):
@@ -160,6 +175,10 @@ def _bounded_fades(play_duration, fade_in_ms, fade_out_ms):
 def _resolve_event_window(merged, source, schema_version, timeline, master_duration):
     source_duration = probe_duration_seconds(source)
     intent_role = merged.get("role", "punctuation") if schema_version >= 4 else "punctuation"
+    requested_play_ms = None
+    foreground_ms = None
+    carry_under_speech_ms = None
+
     if intent_role == "scene":
         defaults = scene_transition_defaults()
         sequence = int(merged["after_segment"])
@@ -170,12 +189,27 @@ def _resolve_event_window(merged, source, schema_version, timeline, master_durat
         post_roll_ms = float(defaults["post_roll_ms"])
         at_ms = float(timeline[sequence]["end_ms"]) + pre_roll_ms
         available_ms = max(1.0, space_ms - pre_roll_ms - post_roll_ms)
+        requested_play_ms = available_ms
+        requested_fade_in = merged.get("fade_in_ms", defaults["default_fade_in_ms"])
+        requested_fade_out = merged.get("fade_out_ms", defaults["default_fade_out_ms"])
+    elif intent_role == "bridge":
+        defaults = bridge_transition_defaults()
+        sequence = int(merged["after_segment"])
+        if not timeline or sequence not in timeline:
+            raise ValueError(f"Bridge event references unavailable segment {sequence}")
+        pre_roll_ms = float(defaults["pre_roll_ms"])
+        foreground_ms = float(merged["foreground_ms"])
+        carry_under_speech_ms = float(merged["carry_under_speech_ms"])
+        at_ms = float(timeline[sequence]["end_ms"]) + pre_roll_ms
+        requested_play_ms = foreground_ms + carry_under_speech_ms
+        available_ms = requested_play_ms
         requested_fade_in = merged.get("fade_in_ms", defaults["default_fade_in_ms"])
         requested_fade_out = merged.get("fade_out_ms", defaults["default_fade_out_ms"])
     else:
         defaults = punctuation_transition_defaults()
         at_ms = float(merged.get("at_ms", 0))
         available_ms = max(1.0, (master_duration * 1000.0) - at_ms)
+        requested_play_ms = available_ms
         if schema_version >= 4:
             requested_fade_in = merged.get("fade_in_ms", defaults["default_fade_in_ms"])
             requested_fade_out = merged.get("fade_out_ms", defaults["default_fade_out_ms"])
@@ -186,9 +220,15 @@ def _resolve_event_window(merged, source, schema_version, timeline, master_durat
     if at_ms / 1000.0 >= master_duration:
         raise ValueError(f"Sound event at {round(at_ms)} ms starts after program audio ends")
     play_duration = available_ms / 1000.0
-    if source_duration is not None:
-        play_duration = min(play_duration, source_duration)
-    play_duration = min(play_duration, master_duration - (at_ms / 1000.0))
+    clipped_by_source = False
+    clipped_by_master = False
+    if source_duration is not None and source_duration < play_duration:
+        play_duration = source_duration
+        clipped_by_source = True
+    master_available = master_duration - (at_ms / 1000.0)
+    if master_available < play_duration:
+        play_duration = master_available
+        clipped_by_master = True
     if play_duration <= 0:
         raise ValueError("Sound event has no renderable duration")
     fade_in_ms, fade_out_ms = _bounded_fades(
@@ -200,10 +240,16 @@ def _resolve_event_window(merged, source, schema_version, timeline, master_durat
         "intent_role": intent_role,
         "at_ms": int(round(at_ms)),
         "play_duration": play_duration,
+        "requested_play_duration_ms": round(float(requested_play_ms), 3),
+        "duration_clipped": bool(clipped_by_source or clipped_by_master),
+        "clipped_by_source": clipped_by_source,
+        "clipped_by_master": clipped_by_master,
         "fade_in_ms": fade_in_ms,
         "fade_out_ms": fade_out_ms,
         "after_segment": merged.get("after_segment"),
         "space_ms": merged.get("space_ms"),
+        "foreground_ms": foreground_ms,
+        "carry_under_speech_ms": carry_under_speech_ms,
     }
 
 
@@ -274,7 +320,13 @@ def render_soundscape(
                 "requested_at_ms": merged.get("at_ms"),
                 "after_segment": event_window["after_segment"],
                 "space_ms": event_window["space_ms"],
+                "foreground_ms": event_window["foreground_ms"],
+                "carry_under_speech_ms": event_window["carry_under_speech_ms"],
+                "requested_play_duration_ms": event_window["requested_play_duration_ms"],
                 "play_duration_ms": round(event_window["play_duration"] * 1000.0, 3),
+                "duration_clipped": event_window["duration_clipped"],
+                "clipped_by_source": event_window["clipped_by_source"],
+                "clipped_by_master": event_window["clipped_by_master"],
                 "fade_in_ms": round(event_window["fade_in_ms"], 3),
                 "fade_out_ms": round(event_window["fade_out_ms"], 3),
                 "placement": merged.get("placement", "center"),
