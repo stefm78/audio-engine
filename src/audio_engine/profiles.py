@@ -1,3 +1,6 @@
+LOSSY_TRUE_PEAK_DB = -2.5
+
+
 PROFILES = {
     "speech": {
         "codec": "libmp3lame",
@@ -6,7 +9,7 @@ PROFILES = {
         "sample_rate_hz": 24000,
         "channels": 1,
         "loudness_lufs": -16,
-        "true_peak_db": -1.5,
+        "true_peak_db": LOSSY_TRUE_PEAK_DB,
         "lra": 11,
     },
     "speech-high": {
@@ -16,7 +19,7 @@ PROFILES = {
         "sample_rate_hz": 24000,
         "channels": 1,
         "loudness_lufs": -16,
-        "true_peak_db": -1.5,
+        "true_peak_db": LOSSY_TRUE_PEAK_DB,
         "lra": 11,
     },
 }
