@@ -1,0 +1,260 @@
+name: Acquire sound
+
+on:
+  workflow_call:
+    inputs:
+      query:
+        description: Semantic sound request
+        required: true
+        type: string
+      sound_type:
+        description: ambience or event
+        required: true
+        type: string
+      sound_id:
+        description: Stable semantic sound id
+        required: true
+        type: string
+      required_tags:
+        description: Optional comma-separated hard semantic tags
+        required: false
+        default: ''
+        type: string
+      preferred_tags:
+        description: Optional comma-separated soft semantic tags
+        required: false
+        default: ''
+        type: string
+      providers:
+        description: Comma-separated autonomous acquisition providers
+        required: false
+        default: 'wikimedia-commons,openverse'
+        type: string
+      catalog_path:
+        description: Optional validated catalog in the caller repository
+        required: false
+        default: ''
+        type: string
+      min_score:
+        description: Automatic selection threshold
+        required: false
+        default: 70
+        type: number
+      engine_ref:
+        description: Audio Engine ref to execute
+        required: false
+        default: main
+        type: string
+      artifact_name:
+        description: CI artifact containing the selected asset and evidence
+        required: false
+        default: sound-acquisition
+        type: string
+      publish_release:
+        description: Publish selected assets durably to a GitHub Release in the caller repository
+        required: false
+        default: true
+        type: boolean
+      release_tag:
+        description: Durable sound library release tag
+        required: false
+        default: sound-library
+        type: string
+    outputs:
+      status:
+        description: catalog-hit, selected, or no-selection
+        value: ${{ jobs.acquire.outputs.status }}
+      selected_id:
+        description: Stable selected sound id when available
+        value: ${{ jobs.acquire.outputs.selected_id }}
+  workflow_dispatch:
+    inputs:
+      query:
+        description: Semantic sound request
+        required: true
+        type: string
+      sound_type:
+        description: ambience or event
+        required: true
+        type: choice
+        options: [ambience, event]
+      sound_id:
+        description: Stable semantic sound id
+        required: true
+        type: string
+      required_tags:
+        description: Optional comma-separated hard semantic tags
+        required: false
+        default: ''
+        type: string
+      preferred_tags:
+        description: Optional comma-separated soft semantic tags
+        required: false
+        default: ''
+        type: string
+      providers:
+        description: Comma-separated providers
+        required: false
+        default: 'wikimedia-commons,openverse'
+        type: string
+      catalog_path:
+        description: Optional validated catalog path
+        required: false
+        default: ''
+        type: string
+      min_score:
+        description: Automatic selection threshold
+        required: false
+        default: '70'
+        type: string
+      engine_ref:
+        description: Audio Engine ref
+        required: false
+        default: main
+        type: string
+      artifact_name:
+        description: Artifact name
+        required: false
+        default: sound-acquisition
+        type: string
+      publish_release:
+        description: Publish durably to GitHub Release
+        required: false
+        default: true
+        type: boolean
+      release_tag:
+        description: Durable sound library release tag
+        required: false
+        default: sound-library
+        type: string
+
+jobs:
+  acquire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      status: ${{ steps.result.outputs.status }}
+      selected_id: ${{ steps.result.outputs.selected_id }}
+    steps:
+      - name: Checkout caller
+        uses: actions/checkout@v6
+      - name: Checkout audio-engine
+        uses: actions/checkout@v6
+        with:
+          repository: stefm78/audio-engine
+          ref: ${{ inputs.engine_ref }}
+          path: .audio-engine
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install audio-engine
+        run: python -m pip install --disable-pip-version-check ./.audio-engine
+      - name: Restore durable sound from Release
+        id: restore
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOUND_ID: ${{ inputs.sound_id }}
+          REQUESTED_CATALOG: ${{ inputs.catalog_path }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$REQUESTED_CATALOG" ]]; then
+            echo "catalog_path=$REQUESTED_CATALOG" >> "$GITHUB_OUTPUT"
+            echo "restored=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          restore=".sound-release-cache"
+          mkdir -p "$restore/assets"
+          catalog="$restore/${SOUND_ID}.catalog.json"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release download "$RELEASE_TAG" --pattern "${SOUND_ID}.catalog.json" --dir "$restore" --clobber >/dev/null 2>&1 || true
+          fi
+          if [[ -f "$catalog" ]]; then
+            asset_name="$(python -c 'import json,sys; from pathlib import Path; data=json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")); print(Path(data["entries"][0]["asset"]["file"]).name)' "$catalog")"
+            gh release download "$RELEASE_TAG" --pattern "$asset_name" --dir "$restore/assets" --clobber >/dev/null 2>&1 || true
+            if [[ -s "$restore/assets/$asset_name" ]]; then
+              echo "catalog_path=$catalog" >> "$GITHUB_OUTPUT"
+              echo "restored=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          rm -f "$catalog"
+          echo "catalog_path=" >> "$GITHUB_OUTPUT"
+          echo "restored=false" >> "$GITHUB_OUTPUT"
+      - name: Resolve or acquire sound autonomously
+        id: acquire
+        shell: bash
+        env:
+          QUERY: ${{ inputs.query }}
+          SOUND_TYPE: ${{ inputs.sound_type }}
+          SOUND_ID: ${{ inputs.sound_id }}
+          REQUIRED_TAGS: ${{ inputs.required_tags }}
+          PREFERRED_TAGS: ${{ inputs.preferred_tags }}
+          PROVIDERS: ${{ inputs.providers }}
+          CATALOG_PATH: ${{ steps.restore.outputs.catalog_path }}
+          MIN_SCORE: ${{ inputs.min_score }}
+        run: |
+          set -euo pipefail
+          out=".sound-acquisition"
+          args=(sound ensure "$QUERY" --type "$SOUND_TYPE" --id "$SOUND_ID" --out "$out" --min-score "$MIN_SCORE")
+          if [[ -n "$CATALOG_PATH" ]]; then
+            args+=(--catalog "$CATALOG_PATH")
+          fi
+          IFS=',' read -ra provider_values <<< "$PROVIDERS"
+          for value in "${provider_values[@]}"; do
+            value="${value// /}"
+            [[ -n "$value" ]] && args+=(--provider "$value")
+          done
+          IFS=',' read -ra required_values <<< "$REQUIRED_TAGS"
+          for value in "${required_values[@]}"; do
+            value="${value// /}"
+            [[ -n "$value" ]] && args+=(--require-tag "$value")
+          done
+          IFS=',' read -ra preferred_values <<< "$PREFERRED_TAGS"
+          for value in "${preferred_values[@]}"; do
+            value="${value// /}"
+            [[ -n "$value" ]] && args+=(--prefer-tag "$value")
+          done
+          audio-engine "${args[@]}" | tee "$out.result.json"
+      - name: Export acquisition result
+        id: result
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path('.sound-acquisition.result.json').read_text(encoding='utf-8'))
+          status = data.get('status', 'unknown')
+          selected_id = data.get('selected_id') or ''
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
+              out.write(f"status={status}\n")
+              out.write(f"selected_id={selected_id}\n")
+          PY
+      - name: Upload acquisition evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}-${{ inputs.sound_id }}
+          path: |
+            .sound-acquisition
+            .sound-acquisition.result.json
+            .sound-release-cache
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Publish durable selected asset
+        if: steps.result.outputs.status == 'selected' && inputs.publish_release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOUND_ID: ${{ inputs.sound_id }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --title "Sound library" --notes "Autonomously selected, hash-locked sound assets used by this repository."
+          fi
+          files=(.sound-acquisition/assets/* ".sound-acquisition/${SOUND_ID}.catalog.json" ".sound-acquisition/${SOUND_ID}.selection.json")
+          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber

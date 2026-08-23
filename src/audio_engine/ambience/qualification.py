@@ -129,6 +129,7 @@ def qualify_candidate(
     raw_redistribution="unknown",
     tags=None,
     preview_dir=None,
+    source_metadata_verified=False,
 ):
     path = Path(file_path)
     if not path.exists():
@@ -144,7 +145,12 @@ def qualify_candidate(
     canonical_sha256 = _sha256(path)
     preview = _make_listening_preview(path, preview_dir)
     source_complete = bool(source_provider and source_page)
-    licence = assess_source_license(source_provider, source_page, license_id)
+    licence = assess_source_license(
+        source_provider,
+        source_page,
+        license_id,
+        machine_observed=bool(source_metadata_verified),
+    )
     quality = _automated_quality(audio, candidate_type)
     effective_redistribution = raw_redistribution
     if effective_redistribution == "unknown" and licence.get("policy_raw_redistribution"):
@@ -170,7 +176,9 @@ def qualify_candidate(
             "page": source_page,
             "identifier": source_identifier,
             "provenance_complete": source_complete,
+            "provider_known": licence.get("provider_known", False),
             "provider_verified": licence.get("provider_verified", False),
+            "metadata_machine_observed": bool(source_metadata_verified),
         },
         "license": {
             "id": license_id,
@@ -198,6 +206,7 @@ def qualify_candidate(
                 "technical_probe": True,
                 "audit_preview_generated": True,
                 "provenance_declared": source_complete,
+                "source_metadata_machine_observed": bool(source_metadata_verified),
                 "license_machine_verified": licence.get("verified", False),
                 "automated_quality": quality["status"],
             },

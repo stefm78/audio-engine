@@ -2,9 +2,13 @@
 
 Audio Engine separates **finding sounds** from **using sounds in production**.
 
-- `ambience discover` / `ambience qualify` handle candidates before production.
-- `sounds` exposes only resources that have passed provenance, licence, listening, content-hash and asset-locking gates.
+- `sound ensure` resolves a semantic request from the validated meta-index or acquires it autonomously.
+- `sound qualify` and `sound select` expose lower-level machine qualification/selection primitives.
+- `ambience discover` remains the broad source-discovery registry.
+- `sounds` exposes only production-ready resources with verified provenance/licence, exact content hash and locked asset reference.
 - schema v3 `soundscape` combines validated or explicit local assets deterministically.
+
+There is no required human selection or listening-approval gate. MP3 previews exist only for optional audit/debugging.
 
 ## Public sound meta-index
 
@@ -22,7 +26,23 @@ The intrinsic resource types are deliberately limited to:
 
 `layer` is a **mix role**, not a duplicated catalog type. The same rain recording may be the main bed in one scene and a secondary layer in another.
 
-A public catalog entry is rejected unless it is explicitly `validated`, has a verified licence, a SHA-256 content hash and a locked asset reference. A catalog id is usable at render time only when its materialized file matches the recorded SHA-256 exactly.
+A public catalog entry is rejected unless it is explicitly `validated`, has a machine-verified licence, a SHA-256 content hash and a locked asset reference. A catalog id is usable at render time only when its materialized file matches the recorded SHA-256 exactly.
+
+## Zero-touch resolution
+
+The product-level primitive is:
+
+```bash
+audio-engine sound ensure "quiet cathedral room tone" \
+  --type ambience \
+  --id cathedral-calm
+```
+
+`ensure` first checks the validated catalog. A hit uses the existing exact resource without network access. A miss runs bounded autonomous acquisition outside rendering: provider discovery, upstream metadata verification, download, technical qualification, deterministic scoring and materialization.
+
+If no candidate satisfies policy, the engine returns `no-selection` / `continue-discovery`; it does not ask a human to choose a weaker candidate.
+
+See [`ACQUISITION.md`](ACQUISITION.md).
 
 ## Soundscape contract
 
@@ -69,7 +89,7 @@ Bounds are intentional:
 - optional semantic event placement is `left`, `center` or `right`;
 - one global environment ducking mode: `speech` or `off`.
 
-There is no random scheduling in P2. Two renders of the same declared program and assets must produce the same scene structure.
+There is no random scheduling. Two renders of the same declared program and assets must produce the same scene structure.
 
 ## Local files versus catalog ids
 
@@ -117,19 +137,19 @@ Soundscape preparation has its own content-addressed cache. Its fingerprint incl
 
 ## Asset governance
 
-A validated catalog entry should contain at least:
+A validated catalog entry contains at least:
 
 - stable `id`;
 - `type`: `ambience` or `event`;
 - useful semantic tags;
 - source/provider provenance;
-- verified licence and attribution obligations;
+- machine-verified licence and attribution obligations;
 - exact `content_sha256`;
 - a locked/materialized asset strategy;
 - optional safe defaults such as recommended gain.
 
-Commercial-library assets whose licence forbids raw redistribution may still be represented in the meta-index, but their raw file must live in an authorized location. `asset.location` may document that state; rendering by catalog id requires an available local `asset.file` whose hash matches the validated entry.
+Commercial-library assets whose licence forbids raw redistribution may still be represented in a product-specific meta-index, but they are not eligible for generic zero-touch promotion until an adapter can enforce their provider-specific rules automatically. Their raw file must live in an authorized location.
 
-The central rule remains:
+The central rule is:
 
-> Discover broadly. Validate narrowly. Render from exact locked content.
+> Discover broadly. Verify upstream. Select automatically. Render from exact locked content.
