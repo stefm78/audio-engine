@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "sounds": [
+    {
+      "id": "ci-pretiosa",
+      "type": "event",
+      "query": "200357 bigben12345 pretiosa",
+      "required_tags": ["bell"],
+      "preferred_tags": ["cathedral", "cologne"],
+      "providers": ["wikimedia-commons"],
+      "limit": 5,
+      "min_score": 60
+    }
+  ]
+}
