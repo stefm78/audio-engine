@@ -11,17 +11,13 @@ PLACEMENT_PAN = {
 
 
 def _declared_position(segment, actors):
-    if "pan" in segment:
-        return float(segment["pan"])
     if "placement" in segment:
-        return PLACEMENT_PAN[segment["placement"]]
+        placement = segment["placement"]
+        return placement, PLACEMENT_PAN[placement]
     character_id = segment.get("character_id")
     actor = actors.get(character_id, {}) if character_id else {}
-    if "pan" in actor:
-        return float(actor["pan"])
-    if "placement" in actor:
-        return PLACEMENT_PAN[actor["placement"]]
-    return 0.0
+    placement = actor.get("placement", "center")
+    return placement, PLACEMENT_PAN[placement]
 
 
 def stereo_required(program):
@@ -29,7 +25,8 @@ def stereo_required(program):
         return True
     actors = program.get("actors", {})
     for segment in program.get("segments", []):
-        if abs(_declared_position(segment, actors)) > 1e-9:
+        _, pan = _declared_position(segment, actors)
+        if abs(pan) > 1e-9:
             return True
     return False
 
@@ -110,7 +107,8 @@ def render_speech_track(program, resolved_segments, voice_clips, temp_dir, profi
         parts.append(lead)
 
     for segment, source in zip(resolved_segments, voice_clips):
-        pan = _declared_position(segment, actors)
+        placement, pan = _declared_position(segment, actors)
+        segment["resolved_placement"] = placement
         segment["resolved_pan"] = round(pan, 4)
         destination = temp_dir / f"voice-{segment['sequence']:03d}.wav"
         _prepare_voice_clip(source, destination, sample_rate_hz, channels, pan)
