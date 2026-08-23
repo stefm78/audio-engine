@@ -54,17 +54,27 @@ def _query_variants(requirement):
     preferred = [str(value).strip() for value in requirement.get("preferred_tags", []) if str(value).strip()]
     original_tokens = original.split()
 
-    candidates = [
-        original,
-        " ".join(required + preferred),
-        " ".join(required),
-    ]
+    candidates = [original]
+
+    # Preserve the intrinsic hard meaning while exploring each soft context
+    # independently before falling back to a generic hard-tag query. This avoids
+    # jumping from e.g. "cathedral bell" straight to "bell" merely because a
+    # broad source index does not use the same exact phrase.
+    if required:
+        candidates.extend(" ".join(required + [value]) for value in preferred)
+        if preferred:
+            candidates.append(" ".join(required + preferred))
+        candidates.append(" ".join(required))
+    else:
+        candidates.extend(preferred)
+        if preferred:
+            candidates.append(" ".join(preferred))
+
     if len(original_tokens) > 2:
         candidates.extend([
             " ".join(original_tokens[-3:]),
             " ".join(original_tokens[-2:]),
         ])
-    candidates.extend(required)
 
     variants = []
     seen = set()
