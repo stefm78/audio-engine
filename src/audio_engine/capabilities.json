@@ -1,7 +1,7 @@
 {
-  "version": 1,
-  "feature_level": "narrative-sound-direction-v1",
-  "program_schema_versions": [1, 2, 3, 4],
+  "version": 2,
+  "feature_level": "narrative-sound-direction-v2",
+  "program_schema_versions": [1, 2, 3, 4, 5],
   "effects": {
     "acoustic_spaces": [
       {
@@ -40,6 +40,18 @@
         "authenticity": "synthetic"
       }
     ],
+    "acoustic_usage": [
+      {
+        "id": "segment",
+        "description": "Apply one semantic acoustic space to a complete authored segment."
+      },
+      {
+        "id": "accent",
+        "description": "Use a deliberately short authored segment to make the acoustic space a brief narrative accent rather than a sustained voice effect.",
+        "implementation": "short-segment",
+        "recommended_max_rendered_ms": 2500
+      }
+    ],
     "sound_roles": [
       {
         "id": "texture",
@@ -56,6 +68,12 @@
         "applies_to": ["event"],
         "description": "A sound given explicit narration-free space after a segment because it carries useful information or emotion.",
         "requires": ["after_segment", "space_ms"]
+      },
+      {
+        "id": "bridge",
+        "applies_to": ["event"],
+        "description": "A sound fades in after a segment, owns a declared foreground interval, then carries under the next spoken segment before fading out.",
+        "requires": ["after_segment", "foreground_ms", "carry_under_speech_ms"]
       }
     ],
     "transitions": {
@@ -73,6 +91,12 @@
         "pre_roll_ms": 200,
         "post_roll_ms": 250
       },
+      "bridge": {
+        "default_fade_in_ms": 500,
+        "default_fade_out_ms": 1200,
+        "pre_roll_ms": 150,
+        "duck_under_speech": true
+      },
       "hard_cut": {
         "supported": true,
         "policy": "explicit-zero-only"
@@ -84,7 +108,10 @@
   "limits": {
     "continuous_layers": 2,
     "events": 16,
-    "scene_space_ms": {"min": 750, "max": 15000}
+    "scene_space_ms": {"min": 750, "max": 15000},
+    "bridge_foreground_ms": {"min": 1000, "max": 10000},
+    "bridge_carry_under_speech_ms": {"min": 250, "max": 10000},
+    "acoustic_accent_recommended_max_rendered_ms": 2500
   },
   "policy": {
     "voice_intelligibility_first": true,
@@ -92,6 +119,7 @@
     "web_resolution_during_render": false,
     "arbitrary_plugin_chain": false,
     "binaural_hrtf": false,
-    "named_place_acoustic_authenticity": false
+    "named_place_acoustic_authenticity": false,
+    "acoustic_accent_requires_short_authored_segment": true
   }
 }

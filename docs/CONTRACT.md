@@ -1,216 +1,69 @@
 # Contract
 
-Audio Engine accepts four program schema versions plus assembly schema v1.
+Audio Engine accepts five program schema versions plus assembly schema v1.
 
-- **Program v1** — stable narration; mono by default.
-- **Program v2** — v1 plus semantic stereo placement and one optional legacy ambience bed.
-- **Program v3** — v2 plus one bounded deterministic `soundscape` with explicitly timed events.
-- **Program v4** — v3 plus semantic acoustic spaces, safe event fades, and narration-free `scene` windows anchored after segments.
+- **Program v1** — stable narration.
+- **Program v2** — semantic stereo placement and one optional legacy ambience bed.
+- **Program v3** — bounded deterministic `soundscape` with explicitly timed events.
+- **Program v4** — semantic acoustic spaces, safe event fades and narration-free `scene` windows anchored after segments.
+- **Program v5** — v4 plus `bridge`: sound foreground that carries under the following spoken segment.
 - **Assembly v1** — joins already-rendered listening units.
 
 Older contracts remain valid unchanged. Newer-only fields are rejected rather than silently ignored.
 
 ## Shared program fields
 
-Every program requires:
-- `schema_version`: `1`, `2`, `3`, or `4`;
-- `id`: stable output identifier;
-- `title`: human-readable title;
-- non-empty `segments`.
+Every program requires `schema_version`, `id`, `title`, and non-empty `segments`. Each segment requires `text` plus one of `voice`, `preset`, or `target`.
 
-Useful optional top-level fields include `language`, `profile`, `lead_in_ms`, and `sources`. V2+ may use `actors`; v3+ may use `soundscape`; v4 may use `acoustic_space`.
+V2+ may use `actors`; v3+ may use `soundscape`; v4/v5 may use `acoustic_space` on program, actor or segment. Resolution order is segment → actor → program → `dry`.
 
-Each segment requires `text` and one of `voice`, `preset`, or `target`. Optional fields include `speaker`, `character_id`, `pause_after_ms`, `rate`, `pitch`, `volume`; v2+ may use semantic `placement`; v4 may use `acoustic_space`.
+## V1 and V2
 
-## Program v1 — narration
+V1 is narration only. V2 adds semantic `left`, `center`, `right` placement and one optional legacy ambience. Numeric panning remains internal.
 
-```json
-{
-  "schema_version": 1,
-  "id": "episode-01",
-  "title": "Episode 1",
-  "segments": [
-    {"preset": "narrateur-vif", "text": "Text to synthesize."}
-  ]
-}
-```
+## V3 — deterministic soundscape
 
-Spatial placement, legacy ambience, soundscape and acoustic-space processing are not valid v1 fields.
+A v3+ soundscape supports zero or one `bed`, at most **2** continuous `layers`, at most **16** `events`, and global ducking `speech` or `off`.
 
-## Program v2 — stereo scene
+Every component declares exactly one validated catalog `sound` id or workspace-bounded local `file`. Catalog contents are SHA-256 verified before render. Bed and layers carry the narrative role `texture`.
 
-```json
-{
-  "schema_version": 2,
-  "id": "dialogue-01",
-  "title": "Dialogue",
-  "actors": {
-    "narrator": {"placement": "center"},
-    "alice": {"placement": "left"},
-    "bob": {"placement": "right"}
-  },
-  "segments": [
-    {"character_id": "narrator", "preset": "narrateur-vif", "text": "Deux personnes discutent."},
-    {"character_id": "alice", "preset": "conteuse-chaleureuse", "text": "Bonjour."},
-    {"character_id": "bob", "preset": "officier-autorite", "text": "Bonjour."}
-  ]
-}
-```
+V3 events use explicit `at_ms` timing plus optional gain and placement.
 
-Public placements are strictly `left`, `center`, and `right`. Numeric pan remains internal. A segment-level placement overrides its actor placement.
-
-### v2 legacy ambience
-
-A v2+ program may declare one background file:
-
-```json
-{
-  "ambience": {
-    "file": "../assets/cathedral-roomtone.flac",
-    "gain_db": -22,
-    "loop": true,
-    "fade_in_ms": 1000,
-    "fade_out_ms": 1500,
-    "ducking": "speech"
-  }
-}
-```
-
-`file` is local, relative and workspace-bounded. HTTP(S), absolute paths and workspace escapes are rejected. Gain is `-60..+6` dB; ducking is `speech` or `off`. A program may not declare both `ambience` and `soundscape`.
-
-## Program v3 — deterministic soundscape
-
-```json
-{
-  "schema_version": 3,
-  "id": "cathedral-scene",
-  "title": "Inside the cathedral",
-  "soundscape": {
-    "bed": {"sound": "cathedral-calm", "gain_db": -23},
-    "layers": [
-      {"sound": "crowd-distant", "gain_db": -30}
-    ],
-    "events": [
-      {
-        "sound": "church-bell-distant",
-        "at_ms": 42000,
-        "gain_db": -18,
-        "placement": "right"
-      }
-    ],
-    "ducking": "speech"
-  },
-  "segments": [
-    {"preset": "narrateur-vif", "text": "Bienvenue dans la nef."}
-  ]
-}
-```
-
-### Bounds
-
-A v3/v4 soundscape supports:
-- zero or one `bed`;
-- at most **2** `layers`;
-- at most **16** `events`;
-- one global `ducking`: `speech` (default) or `off`.
-
-At least one bed/layer/event must be present. These limits are deliberate API constraints, not current performance limits.
-
-### Sound references
-
-Every bed/layer/event declares exactly one of:
-
-```json
-{"sound": "validated-catalog-id"}
-```
-
-or:
-
-```json
-{"file": "assets/product-specific.wav"}
-```
-
-Catalog ids are type checked: bed/layer require intrinsic `ambience`; event requires intrinsic `event`. Materialized catalog content must match its exact `content_sha256`. Local file inputs remain workspace-bounded and network-free.
-
-### Bed and layers
-
-Continuous components support:
-- `gain_db`: default `-22` for bed and `-28` for layer, range `-60..+6`;
-- `loop`: default `true`;
-- `fade_in_ms`: default `1000`, non-negative;
-- `fade_out_ms`: default `1500`, non-negative.
-
-Bed and layer carry the narrative role `texture`.
-
-### V3 events
-
-V3 events require:
-- `at_ms`: explicit non-negative timestamp;
-- optional `gain_db`, default `-18`;
-- optional `placement`: `left`, `center`, or `right`.
-
-V4-only event fields are rejected in v3. This prevents older engines from silently ignoring newer sound direction.
-
-## Program v4 — narrative sound direction
-
-V4 adds two independent concepts: **acoustic space for voices** and **narrative intent for sound events**.
+## V4 — narrative scene and acoustic space
 
 ### Acoustic space
 
 ```json
 {
   "schema_version": 4,
-  "acoustic_space": "large-stone-interior",
   "segments": [
     {
       "preset": "narrateur-vif",
-      "text": "Le volume de pierre change notre perception de la voix."
-    },
-    {
-      "preset": "narrateur-vif",
-      "acoustic_space": "dry",
-      "text": "Puis le narrateur revient au premier plan."
+      "acoustic_space": "large-stone-interior",
+      "text": "Une courte phrase placée dans un grand volume de pierre."
     }
   ]
 }
 ```
 
-Available ids are published by:
+Public ids are `dry`, `outdoor-open`, `small-stone-room`, `large-stone-interior`, and `confined-stone`. These are restrained synthetic evocations, not authentic impulse responses of named places. TTS clips remain dry in cache and acoustic processing is local.
 
-```bash
-audio-engine capabilities --category acoustic_spaces
-```
+For an **acoustic accent**, author a deliberately short semantic segment and apply the space only there. The capability catalog recommends a rendered duration of no more than 2500 ms. Audio Engine does not expose arbitrary millisecond slicing inside a phrase.
 
-Initial ids are:
-- `dry`;
-- `outdoor-open`;
-- `small-stone-room`;
-- `large-stone-interior`;
-- `confined-stone`.
-
-Resolution order is segment → actor → program → `dry`.
-
-These are restrained synthetic acoustic evocations. They are not authentic impulse responses of named places. TTS clips remain dry in cache; acoustic processing happens locally afterwards.
-
-### V4 punctuation events
-
-A punctuation event remains explicitly timed:
+### Punctuation
 
 ```json
 {
   "sound": "church-bell-distant",
   "role": "punctuation",
   "at_ms": 42000,
-  "gain_db": -24,
-  "placement": "right"
+  "gain_db": -24
 }
 ```
 
-`role` defaults to `punctuation`. V4 punctuation defaults to `fade_in_ms: 0` and `fade_out_ms: 250`. A hard edge is possible only by explicitly declaring a zero fade.
+V4+ punctuation defaults to 0 ms fade-in and 250 ms fade-out.
 
-### V4 scene events
-
-A `scene` event is anchored to the narration rather than an absolute millisecond:
+### Scene
 
 ```json
 {
@@ -218,99 +71,88 @@ A `scene` event is anchored to the narration rather than an absolute millisecond
   "role": "scene",
   "after_segment": 3,
   "space_ms": 3200,
-  "gain_db": -18,
-  "placement": "left"
+  "gain_db": -18
+}
+```
+
+`scene` is foreground-only: Audio Engine reserves at least `space_ms` after the referenced segment, starts the sound after a short pre-roll and keeps a short post-roll before narration resumes. Long audio is trimmed to the available window with safe fades. V4 semantics remain unchanged for compatibility.
+
+## V5 — bridge: foreground then carry
+
+V5 adds the missing hand-off from sound back to narration:
+
+```json
+{
+  "schema_version": 5,
+  "soundscape": {
+    "events": [
+      {
+        "sound": "historic-horse-hooves",
+        "role": "bridge",
+        "after_segment": 3,
+        "foreground_ms": 3500,
+        "carry_under_speech_ms": 2500,
+        "gain_db": -23,
+        "placement": "left"
+      }
+    ],
+    "ducking": "speech"
+  },
+  "segments": [
+    {"preset": "narrateur-vif", "text": "Jeanne entre dans la ville."},
+    {"preset": "narrateur-vif", "text": "Le récit reprend pendant que les sabots s'éloignent."}
+  ]
 }
 ```
 
 Rules:
-- `after_segment` references an existing 1-based segment number;
-- `space_ms` is bounded from **750** to **15000** ms;
-- `scene` may not also declare `at_ms`;
-- Audio Engine makes the effective pause after that segment at least `space_ms`;
-- the event starts after a short engine-owned pre-roll and stops before a short post-roll;
-- long source audio is trimmed to the available window;
-- default fades are 180 ms in and 500 ms out, clamped for short assets.
 
-The narration therefore genuinely stops while a scene sound carries information or emotion. This is not simulated by merely raising background volume.
+- `after_segment` must reference an existing segment **with a following segment**;
+- `foreground_ms` is bounded from **1000** to **10000** ms;
+- `carry_under_speech_ms` is bounded from **250** to **10000** ms;
+- `bridge` may not declare `at_ms` or `space_ms`;
+- after a short engine-owned pre-roll, the event receives the full declared `foreground_ms` before the next voice starts;
+- the same event continues under the next speech for `carry_under_speech_ms` when source/master duration permits;
+- with `ducking: speech`, sidechain compression automatically lowers the bridge under narration;
+- bridge defaults are 500 ms fade-in and 1200 ms fade-out;
+- manifests expose requested/rendered event duration and clipping diagnostics.
+
+This distinction is intentional: `scene` means **sound then speech**; `bridge` means **sound → sound under speech → speech**.
+
+V4 rejects bridge fields so an Audio Engine 0.7 installation cannot silently ignore them.
 
 ## Capability catalog
 
-`audio-engine capabilities` is the machine-readable source of truth for what an application may offer. It publishes:
-- supported program schema versions;
-- acoustic spaces;
-- narrative sound roles;
-- transition defaults;
-- placement and ducking vocabularies;
-- hard limits and explicit non-capabilities.
+`audio-engine capabilities` is the machine-readable source of truth for supported schema versions, acoustic spaces, acoustic usage patterns, sound roles, transition defaults, placement/ducking vocabularies and hard limits.
 
-The capability catalog and the sound catalog answer different questions: **what operations can the engine perform?** versus **which validated audio resources are available?**
-
-See [`EFFECTS.md`](EFFECTS.md) and [`SOUNDS.md`](SOUNDS.md).
+The capability catalog answers **what can the engine do?** The sound catalog answers **which validated sound assets are available?**
 
 ## Rendering model
 
 ```text
-dry voice cache
+dry TTS cache
       ↓
 semantic acoustic-space processing
       ↓
   speech.wav
 
-bed + layers + punctuation + scenes
-              ↓
- deterministic environment.wav
-              ↓
-       speech + environment
-              ↓
-           ducking
-              ↓
-        final loudnorm
+bed + layers + punctuation + scene + bridge
+                    ↓
+        deterministic environment.wav
+                    ↓
+             speech + environment
+                    ↓
+                  ducking
+                    ↓
+               final loudnorm
 ```
 
-One soundscape does not turn `mix` into a general multitrack engine.
+Voice synthesis is cached independently from sound direction. Changing placement, acoustic space, fades, scene/bridge timings or gains should normally remix locally without synthesizing unchanged speech again.
 
-## Stereo
+## Output and graceful batch behavior
 
-`speech` remains mono 80 kbit/s when no scene feature needs stereo. Non-center dialogue, legacy ambience, or a v3/v4 soundscape produces stereo and raises output to at least 96 kbit/s. Acoustic-space processing alone does not force stereo.
-
-## Stage-level caching
-
-Expensive TTS clips are content-addressed independently from placement, acoustic space and sound design.
-
-Environment caches include exact source hashes, declared processing settings, resolved scene timing, target duration/format and relevant engine code. Changing only an event timestamp, scene spacing, fade, layer gain, acoustic space, ducking or speaker placement normally remixes locally without synthesizing unchanged speech again.
-
-## Output
-
-For program id `episode-01`:
-
-```text
-OUT/episode-01/
-  audio.mp3
-  manifest.json
-  transcript.json
-```
-
-The manifest records engine/provider/profile data, source and render fingerprints, audio properties, stage-cache information, resolved acoustic spaces/timeline, and soundscape component provenance/licence/transition metadata.
-
-Internal caches live below `OUT/.cache/` and are not publication assets.
-
-## Batch
-
-`audio-engine batch "path/**/*.json"` renders members independently and writes `OUT/render-report.json`. A failed program does not remove successful outputs.
-
-## Assembly
-
-Assembly remains schema v1 and joins existing listening units.
+Each program produces `audio.mp3`, `manifest.json`, and `transcript.json`. `audio-engine batch` renders members independently and writes `render-report.json`; one failed program does not erase successful outputs.
 
 ## Explicit non-goals
 
-The public program schemas do not define:
-- HRTF/binaural 3D or front/rear/height positioning;
-- arbitrary user-defined reverb/plugin parameters;
-- claims of authentic named-room acoustics from synthetic presets;
-- overlapping dialogue authoring;
-- random event scheduling;
-- unlimited tracks/events or arbitrary automation;
-- plugin/effects chains;
-- Internet search/download during rendering.
+The public contract does not define HRTF/binaural 3D, front/rear/height placement, arbitrary user-defined reverb/plugin parameters, authentic named-room claims from synthetic presets, overlapping-dialogue authoring, random scheduling, unlimited tracks, arbitrary automation, or Internet access during render.
