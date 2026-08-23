@@ -4,6 +4,8 @@ import sys
 
 from . import __version__
 from .ambience.catalog import ambience_info, public_catalog as public_ambience_catalog
+from .ambience.discovery import discovery_plan
+from .ambience.qualification import qualify_candidate
 from .assemble import assemble_plan
 from .batch import render_batch
 from .contract import ContractError, load_json, validate_assembly, validate_program
@@ -45,6 +47,28 @@ def build_parser():
     ambiences = sub.add_parser("ambiences", help="Publish the curated ambience catalog and asset policy")
     ambiences.add_argument("--id", default=None, help="Return one curated ambience by id")
     ambiences.add_argument("--tag", action="append", default=[], help="Require a tag; repeat to combine tags")
+
+    ambience = sub.add_parser("ambience", help="Discover and qualify ambience candidates before rendering")
+    ambience_sub = ambience.add_subparsers(dest="ambience_command", required=True)
+
+    discover = ambience_sub.add_parser("discover", help="Create a multi-source discovery plan without network requests")
+    discover.add_argument("query")
+    discover.add_argument("--source", action="append", default=[], help="Limit to a source id; repeat to combine sources")
+
+    qualify = ambience_sub.add_parser("qualify", help="Probe and fingerprint a downloaded local ambience candidate")
+    qualify.add_argument("file")
+    qualify.add_argument("--id", default=None, help="Stable candidate id; defaults to a slug of the filename")
+    qualify.add_argument("--source-provider", default=None)
+    qualify.add_argument("--source-page", default=None)
+    qualify.add_argument("--source-identifier", default=None)
+    qualify.add_argument("--license", default=None, dest="license_id")
+    qualify.add_argument("--attribution", default=None)
+    qualify.add_argument(
+        "--raw-redistribution",
+        choices=("unknown", "allowed", "embedded-only", "forbidden"),
+        default="unknown",
+    )
+    qualify.add_argument("--tag", action="append", default=[])
     return parser
 
 
@@ -71,6 +95,21 @@ def main(argv=None):
             result = recommend_presets(target, config, args.limit)
         elif args.command == "ambiences":
             result = ambience_info(args.id) if args.id else public_ambience_catalog(tags=args.tag)
+        elif args.command == "ambience":
+            if args.ambience_command == "discover":
+                result = discovery_plan(args.query, args.source)
+            else:
+                result = qualify_candidate(
+                    args.file,
+                    candidate_id=args.id,
+                    source_provider=args.source_provider,
+                    source_page=args.source_page,
+                    source_identifier=args.source_identifier,
+                    license_id=args.license_id,
+                    attribution=args.attribution,
+                    raw_redistribution=args.raw_redistribution,
+                    tags=args.tag,
+                )
         else:
             data = load_json(args.file)
             result = validate_program(data) if args.kind == "program" else validate_assembly(data)
