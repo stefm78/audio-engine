@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from audio_engine.sound.library import hydrate_sound_library
+from audio_engine.sound.library import _query_variants, hydrate_sound_library
 
 
 def sha256_bytes(value):
@@ -57,6 +57,20 @@ def selected_result(output_dir, sound_id="church-bell-distant", audio=b"newly-ac
 
 
 class SoundLibraryTests(unittest.TestCase):
+    def test_natural_contextual_queries_precede_generic_fallback(self):
+        item = {
+            "query": "cathedral bell",
+            "required_tags": ["bell"],
+            "preferred_tags": ["cathedral", "church", "distant"],
+        }
+        variants = _query_variants(item)
+        self.assertEqual(variants[0], "cathedral bell")
+        self.assertIn("cathedral bells", variants)
+        self.assertIn("church bell", variants)
+        self.assertIn("church bells", variants)
+        self.assertIn("distant bell", variants)
+        self.assertLess(variants.index("church bells"), variants.index("bell"))
+
     def test_restores_exact_validated_seed_without_network(self):
         with tempfile.TemporaryDirectory() as temp_value:
             root = Path(temp_value)
