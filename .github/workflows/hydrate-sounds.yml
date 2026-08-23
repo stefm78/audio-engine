@@ -72,6 +72,7 @@ jobs:
           name: ${{ inputs.artifact_name }}
           path: sound-library
           if-no-files-found: error
+          retention-days: 1
       - name: Enforce unresolved policy
         if: inputs.fail_on_unresolved
         run: |

@@ -104,3 +104,4 @@ jobs:
           name: ${{ inputs.artifact_name }}
           path: ${{ inputs.output_dir }}
           if-no-files-found: error
+          retention-days: 1
