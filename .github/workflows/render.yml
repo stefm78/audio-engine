@@ -32,6 +32,16 @@ on:
         required: false
         default: ''
         type: string
+      sounds_artifact_name:
+        description: Optional hydrated sound-library artifact produced earlier in the same workflow run
+        required: false
+        default: ''
+        type: string
+      sounds_artifact_path:
+        description: Local directory used when downloading the hydrated sound-library artifact
+        required: false
+        default: sound-library
+        type: string
 
 jobs:
   render:
@@ -60,6 +70,12 @@ jobs:
             audio-engine-v3-${{ runner.os }}-${{ github.repository }}-
             audio-engine-v2-${{ runner.os }}-${{ github.repository }}-
             audio-engine-v1-${{ runner.os }}-${{ github.repository }}-
+      - name: Download hydrated sound library
+        if: inputs.sounds_artifact_name != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.sounds_artifact_name }}
+          path: ${{ inputs.sounds_artifact_path }}
       - name: Install audio-engine
         run: python -m pip install --disable-pip-version-check ./.audio-engine
       - name: Render batch, best effort
@@ -69,6 +85,8 @@ jobs:
           OUTPUT_DIR: ${{ inputs.output_dir }}
           VOICES_PATH: ${{ inputs.voices_path }}
           SOUNDS_PATH: ${{ inputs.sounds_path }}
+          SOUNDS_ARTIFACT_NAME: ${{ inputs.sounds_artifact_name }}
+          SOUNDS_ARTIFACT_PATH: ${{ inputs.sounds_artifact_path }}
         run: |
           args=()
           if [[ -n "$VOICES_PATH" ]]; then
@@ -76,6 +94,8 @@ jobs:
           fi
           if [[ -n "$SOUNDS_PATH" ]]; then
             args+=(--sounds "$SOUNDS_PATH")
+          elif [[ -n "$SOUNDS_ARTIFACT_NAME" ]]; then
+            args+=(--sounds "$SOUNDS_ARTIFACT_PATH/sounds.json")
           fi
           audio-engine batch "$SOURCE_GLOB" --out "$OUTPUT_DIR" "${args[@]}"
       - name: Upload audio assets

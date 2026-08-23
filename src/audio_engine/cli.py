@@ -12,6 +12,7 @@ from .contract import ContractError, load_json, validate_assembly, validate_prog
 from .render import render_program
 from .sound.acquisition import DEFAULT_PROVIDERS, ensure_sound
 from .sound.catalog import SOUND_TYPES, public_catalog as public_sound_catalog, sound_info
+from .sound.library import hydrate_sound_library
 from .sound.selection import select_candidates
 from .voices import load_voice_config, public_catalog, recommend_presets
 
@@ -98,6 +99,13 @@ def build_parser():
     sound_ensure.add_argument("--prefer-tag", action="append", default=[])
     sound_ensure.add_argument("--limit", type=int, default=8)
     sound_ensure.add_argument("--min-score", type=float, default=70.0)
+    sound_hydrate = sound_sub.add_parser(
+        "hydrate",
+        help="Hydrate a complete local sound library from requirements, durable seed assets, then autonomous acquisition",
+    )
+    sound_hydrate.add_argument("requirements")
+    sound_hydrate.add_argument("--out", default=".sound-library")
+    sound_hydrate.add_argument("--seed-dir", default=None)
 
     ambiences = sub.add_parser("ambiences", help="Publish the legacy curated ambience catalog and asset policy")
     ambiences.add_argument("--id", default=None)
@@ -163,7 +171,7 @@ def main(argv=None):
                     preferred_tags=args.prefer_tag,
                     min_score=args.min_score,
                 )
-            else:
+            elif args.sound_command == "ensure":
                 result = ensure_sound(
                     args.query,
                     sound_type=args.sound_type,
@@ -176,6 +184,8 @@ def main(argv=None):
                     limit=args.limit,
                     min_score=args.min_score,
                 )
+            else:
+                result = hydrate_sound_library(args.requirements, output_dir=args.out, seed_dir=args.seed_dir)
         elif args.command == "ambiences":
             result = ambience_info(args.id) if args.id else public_ambience_catalog(tags=args.tag)
         elif args.command == "ambience":
