@@ -6,6 +6,10 @@ from pathlib import Path
 from ..audio import ffmpeg_exe
 
 
+PREVIEW_BITRATE_KBPS = 160
+PREVIEW_SAMPLE_RATE_HZ = 44100
+
+
 def _slug(value):
     value = re.sub(r"[^a-z0-9]+", "-", str(value).lower()).strip("-")
     return value or "ambience-candidate"
@@ -61,6 +65,50 @@ def _probe_audio(path):
     }
 
 
+def _make_listening_preview(path, preview_dir=None):
+    source = Path(path)
+    destination_dir = Path(preview_dir) if preview_dir else source.parent
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    preview = destination_dir / f"{source.stem}.preview.mp3"
+
+    result = subprocess.run(
+        [
+            ffmpeg_exe(),
+            "-hide_banner",
+            "-loglevel", "error",
+            "-y",
+            "-i", str(source),
+            "-vn",
+            "-c:a", "libmp3lame",
+            "-b:a", f"{PREVIEW_BITRATE_KBPS}k",
+            "-ar", str(PREVIEW_SAMPLE_RATE_HZ),
+            str(preview),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0 or not preview.exists():
+        detail = result.stderr.strip() or "unknown ffmpeg error"
+        raise ValueError(f"Unable to create listening preview for {source}: {detail}")
+
+    preview_audio = _probe_audio(preview)
+    return {
+        "purpose": "listening-only",
+        "canonical": False,
+        "path": str(preview),
+        "name": preview.name,
+        "format": "mp3",
+        "bitrate_kbps": PREVIEW_BITRATE_KBPS,
+        "sample_rate_hz": preview_audio["sample_rate_hz"],
+        "channels": preview_audio["channels"],
+        "duration_seconds": preview_audio["duration_seconds"],
+        "size_bytes": preview.stat().st_size,
+        "content_sha256": _sha256(preview),
+        "note": "Universal derivative for human listening only; never use this hash as the production asset identity.",
+    }
+
+
 def qualify_candidate(
     file_path,
     *,
@@ -72,6 +120,7 @@ def qualify_candidate(
     attribution=None,
     raw_redistribution="unknown",
     tags=None,
+    preview_dir=None,
 ):
     path = Path(file_path)
     if not path.exists():
@@ -82,6 +131,8 @@ def qualify_candidate(
         raise ValueError("raw_redistribution must be unknown, allowed, embedded-only, or forbidden")
 
     audio = _probe_audio(path)
+    canonical_sha256 = _sha256(path)
+    preview = _make_listening_preview(path, preview_dir)
     source_complete = bool(source_provider and source_page)
     license_declared = bool(license_id)
 
@@ -92,8 +143,10 @@ def qualify_candidate(
         "file": {
             "name": path.name,
             "size_bytes": path.stat().st_size,
-            "content_sha256": _sha256(path),
+            "content_sha256": canonical_sha256,
+            "canonical": True,
         },
+        "preview": preview,
         "audio": audio,
         "tags": list(tags or []),
         "source": {
@@ -110,6 +163,7 @@ def qualify_candidate(
         },
         "review": {
             "technical_probe": "passed",
+            "listening_preview": "generated",
             "listening_quality": "pending",
             "background_suitability": "pending",
             "loopability": "pending",
@@ -129,6 +183,7 @@ def qualify_candidate(
             ],
             "evidence": {
                 "technical_probe": True,
+                "listening_preview_generated": True,
                 "provenance_declared": source_complete,
                 "license_declared": license_declared,
             },
