@@ -6,13 +6,17 @@ from ..audio import run_ffmpeg
 from ..contract import sha256_file
 
 
-def _resolve_local_source(program_path, value):
+def resolve_ambience_source(program_path, value):
     if "://" in value:
         raise ValueError("ambience.file must be a local file path, not a URL")
     source = (Path(program_path).parent / value).resolve()
     if not source.exists() or not source.is_file():
         raise FileNotFoundError(f"Ambience input not found: {source}")
     return source
+
+
+def ambience_source_sha256(config, program_path):
+    return sha256_file(resolve_ambience_source(program_path, config["file"]))
 
 
 def _fingerprint(source_sha, config, duration_seconds, sample_rate_hz, channels):
@@ -32,7 +36,7 @@ def _fingerprint(source_sha, config, duration_seconds, sample_rate_hz, channels)
 
 
 def prepare_ambience(config, program_path, cache_root, duration_seconds, sample_rate_hz, channels=2):
-    source = _resolve_local_source(program_path, config["file"])
+    source = resolve_ambience_source(program_path, config["file"])
     source_sha = sha256_file(source)
     fingerprint = _fingerprint(source_sha, config, duration_seconds, sample_rate_hz, channels)
     cache_root = Path(cache_root)
