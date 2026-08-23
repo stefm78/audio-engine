@@ -34,18 +34,25 @@ jobs:
         run: |
           audio-engine sound hydrate examples/sound-requirements-smoke.json --out .hydration-smoke
           audio-engine sounds --catalog .hydration-smoke/sounds.json --id ci-pretiosa
-      - name: Generic eligible discovery evidence
+      - name: Generic eligible hydration evidence
         continue-on-error: true
         run: |
-          audio-engine sound ensure "cathedral bell" \
-            --type event \
-            --id ci-generic-cathedral-bell \
-            --provider wikimedia-commons \
-            --provider openverse \
-            --require-tag bell \
-            --prefer-tag cathedral \
-            --prefer-tag church \
-            --prefer-tag distant \
-            --out .generic-discovery-smoke \
-            --limit 8 \
-            --min-score 70
+          cat > .generic-sound-requirements.json <<'JSON'
+          {
+            "version": 1,
+            "sounds": [
+              {
+                "id": "ci-generic-cathedral-bell",
+                "type": "event",
+                "query": "cathedral bell",
+                "required_tags": ["bell"],
+                "preferred_tags": ["cathedral", "church", "distant"],
+                "providers": ["wikimedia-commons", "openverse"],
+                "limit": 8,
+                "min_score": 70
+              }
+            ]
+          }
+          JSON
+          audio-engine sound hydrate .generic-sound-requirements.json --out .generic-hydration-smoke
+          audio-engine sounds --catalog .generic-hydration-smoke/sounds.json --id ci-generic-cathedral-bell
