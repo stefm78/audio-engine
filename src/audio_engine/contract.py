@@ -31,14 +31,8 @@ def _validate_position(value, label, errors):
     if not isinstance(value, dict):
         errors.append(f"{label} must be an object")
         return
-    if "placement" in value and "pan" in value:
-        errors.append(f"{label} may use placement or pan, not both")
     if "placement" in value and value["placement"] not in PLACEMENTS:
         errors.append(f"{label}.placement must be one of {', '.join(PLACEMENTS)}")
-    if "pan" in value:
-        pan = value["pan"]
-        if not isinstance(pan, (int, float)) or not -1 <= pan <= 1:
-            errors.append(f"{label}.pan must be between -1 and 1")
 
 
 def _validate_ambience(ambience, errors):
@@ -48,8 +42,11 @@ def _validate_ambience(ambience, errors):
     file_value = ambience.get("file")
     if not _non_empty_string(file_value):
         errors.append("ambience.file is required")
-    elif "://" in file_value:
-        errors.append("ambience.file must be a local file path, not a URL")
+    else:
+        if "://" in file_value:
+            errors.append("ambience.file must be a local relative path, not a URL")
+        if Path(file_value).is_absolute():
+            errors.append("ambience.file must be relative")
     gain = ambience.get("gain_db", -22)
     if not isinstance(gain, (int, float)) or not -60 <= gain <= 6:
         errors.append("ambience.gain_db must be between -60 and 6")
@@ -101,15 +98,15 @@ def validate_program(program):
             pause = segment.get("pause_after_ms", 350)
             if not isinstance(pause, (int, float)) or pause < 0:
                 errors.append(f"segments[{index}].pause_after_ms must be >= 0")
-            if "placement" in segment or "pan" in segment:
+            if "placement" in segment:
                 _validate_position(segment, f"segments[{index}]", errors)
 
     uses_v2 = bool(program.get("ambience") or program.get("actors")) or any(
-        isinstance(segment, dict) and ("placement" in segment or "pan" in segment)
+        isinstance(segment, dict) and "placement" in segment
         for segment in (segments or [])
     )
     if version == 1 and uses_v2:
-        errors.append("actors, placement, pan, and ambience require schema_version 2")
+        errors.append("actors, placement, and ambience require schema_version 2")
     if version == 2 and "ambience" in program:
         _validate_ambience(program["ambience"], errors)
 
