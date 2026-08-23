@@ -41,9 +41,10 @@ def make_event(path, duration=1.0):
 class V4EffectsTests(unittest.TestCase):
     def test_capability_catalog_contains_only_bounded_public_features(self):
         catalog = public_capabilities(engine_version="test")
-        self.assertEqual(catalog["version"], 2)
+        self.assertEqual(catalog["version"], 3)
         self.assertIn(4, catalog["program_schema_versions"])
         self.assertIn(5, catalog["program_schema_versions"])
+        self.assertIn(6, catalog["program_schema_versions"])
         spaces = {item["id"] for item in catalog["effects"]["acoustic_spaces"]}
         self.assertEqual(
             spaces,
@@ -51,6 +52,8 @@ class V4EffectsTests(unittest.TestCase):
         )
         self.assertFalse(catalog["policy"]["binaural_hrtf"])
         self.assertFalse(catalog["policy"]["arbitrary_plugin_chain"])
+        self.assertTrue(catalog["policy"]["measured_audio_timeline_is_authority"])
+        self.assertFalse(catalog["policy"]["mp3_tags_are_timing_authority"])
 
     def test_v3_rejects_v4_scene_fields(self):
         data = {
@@ -58,13 +61,7 @@ class V4EffectsTests(unittest.TestCase):
             "id": "old",
             "title": "Old",
             "soundscape": {
-                "events": [
-                    {
-                        "file": "bell.wav",
-                        "at_ms": 100,
-                        "role": "punctuation",
-                    }
-                ]
+                "events": [{"file": "bell.wav", "at_ms": 100, "role": "punctuation"}]
             },
             "segments": [{"voice": "voice-a", "text": "Test."}],
         }
@@ -77,14 +74,12 @@ class V4EffectsTests(unittest.TestCase):
             "id": "scene",
             "title": "Scene",
             "soundscape": {
-                "events": [
-                    {
-                        "file": "bell.wav",
-                        "role": "scene",
-                        "after_segment": 1,
-                        "space_ms": 1200,
-                    }
-                ]
+                "events": [{
+                    "file": "bell.wav",
+                    "role": "scene",
+                    "after_segment": 1,
+                    "space_ms": 1200,
+                }]
             },
             "segments": [{"voice": "voice-a", "text": "Test."}],
         }
@@ -107,20 +102,8 @@ class V4EffectsTests(unittest.TestCase):
                 "lead_in_ms": 100,
                 "soundscape": {
                     "events": [
-                        {
-                            "file": "bell.wav",
-                            "role": "scene",
-                            "after_segment": 1,
-                            "space_ms": 1400,
-                            "gain_db": -20,
-                            "placement": "right"
-                        },
-                        {
-                            "file": "bell.wav",
-                            "role": "punctuation",
-                            "at_ms": 100,
-                            "gain_db": -28
-                        }
+                        {"file": "bell.wav", "role": "scene", "after_segment": 1, "space_ms": 1400, "gain_db": -20, "placement": "right"},
+                        {"file": "bell.wav", "role": "punctuation", "at_ms": 100, "gain_db": -28}
                     ],
                     "ducking": "speech"
                 },
