@@ -7,6 +7,8 @@ from .assemble import assemble_plan
 from .batch import render_batch
 from .contract import ContractError, load_json, validate_assembly, validate_program
 from .render import render_program
+from .voices import load_voice_config, public_catalog, recommend_presets
+
 
 def build_parser():
     parser = argparse.ArgumentParser(prog="audio-engine")
@@ -30,7 +32,16 @@ def build_parser():
     validate = sub.add_parser("validate", help="Validate a JSON contract")
     validate.add_argument("file")
     validate.add_argument("--kind", choices=("program", "assembly"), default="program")
+
+    voices = sub.add_parser("voices", help="Publish the validated voice catalog and selection rules")
+    voices.add_argument("--voices", default=None)
+
+    recommend = sub.add_parser("recommend", help="Rank voice presets for a requested target profile")
+    recommend.add_argument("--target", required=True, help="Target profile as a JSON object")
+    recommend.add_argument("--limit", type=int, default=3)
+    recommend.add_argument("--voices", default=None)
     return parser
+
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
@@ -41,6 +52,18 @@ def main(argv=None):
             result = render_batch(args.pattern, args.out, args.voices)
         elif args.command == "assemble":
             result = assemble_plan(args.plan, args.out)
+        elif args.command == "voices":
+            config, _ = load_voice_config(args.voices)
+            result = public_catalog(config)
+        elif args.command == "recommend":
+            try:
+                target = json.loads(args.target)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"--target must be valid JSON: {exc}") from exc
+            if not isinstance(target, dict):
+                raise ValueError("--target must be a JSON object")
+            config, _ = load_voice_config(args.voices)
+            result = recommend_presets(target, config, args.limit)
         else:
             data = load_json(args.file)
             result = validate_program(data) if args.kind == "program" else validate_assembly(data)
@@ -50,6 +73,7 @@ def main(argv=None):
     except (ContractError, ValueError, FileNotFoundError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
