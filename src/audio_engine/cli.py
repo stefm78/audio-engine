@@ -64,7 +64,10 @@ def build_parser():
     discover.add_argument("query")
     discover.add_argument("--source", action="append", default=[], help="Limit to a source id; repeat to combine sources")
 
-    qualify = ambience_sub.add_parser("qualify", help="Probe and fingerprint a downloaded local ambience candidate")
+    qualify = ambience_sub.add_parser(
+        "qualify",
+        help="Probe and fingerprint a local candidate and automatically create a universal MP3 listening preview",
+    )
     qualify.add_argument("file")
     qualify.add_argument("--id", default=None, help="Stable candidate id; defaults to a slug of the filename")
     qualify.add_argument("--source-provider", default=None)
@@ -78,6 +81,11 @@ def build_parser():
         default="unknown",
     )
     qualify.add_argument("--tag", action="append", default=[])
+    qualify.add_argument(
+        "--preview-dir",
+        default=None,
+        help="Directory for the automatic MP3 listening preview; defaults to the source file directory",
+    )
     return parser
 
 
@@ -134,6 +142,7 @@ def main(argv=None):
                     attribution=args.attribution,
                     raw_redistribution=args.raw_redistribution,
                     tags=args.tag,
+                    preview_dir=args.preview_dir,
                 )
         else:
             data = load_json(args.file)
