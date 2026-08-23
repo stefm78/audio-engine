@@ -11,6 +11,7 @@ Requires Python 3.11+.
 ```bash
 python -m pip install -e .
 audio-engine validate examples/minimal.json
+audio-engine voices
 audio-engine render examples/minimal.json --out output
 ```
 
@@ -29,11 +30,15 @@ Default `speech` output is MP3, mono, 24 kHz, 80 kbit/s, normalized for spoken-w
 ## Commands
 
 ```bash
+audio-engine voices
+audio-engine recommend --target '{"gender":"male","age":"adult","energy":5,"tags":["narrateur","vif"]}'
 audio-engine render PROGRAM.json --out output/
 audio-engine batch "content/**/*.json" --out output/
 audio-engine assemble ASSEMBLY.json --out output/
 audio-engine validate PROGRAM.json
 ```
+
+`voices` publishes the human-validated French palette, the quality criteria inherited from the initial blind benchmark, and the casting rules. `recommend` ranks suitable presets for a requested vocal profile without synthesizing anything. See [`docs/VOICES.md`](docs/VOICES.md).
 
 `batch` is best effort: one failed program is reported in `render-report.json` and does not delete successful outputs.
 
@@ -59,7 +64,7 @@ See [`docs/CONTRACT.md`](docs/CONTRACT.md). A minimal program is:
 }
 ```
 
-Segments may use an explicit provider voice or a preset from the bundled voice palette.
+Segments may use an explicit provider voice, a validated `preset`, or a `target` profile. With `target`, the same recommendation rules exposed by `audio-engine recommend` are used during rendering, and the top alternatives are recorded in the transcript.
 
 ## Profiles
 
