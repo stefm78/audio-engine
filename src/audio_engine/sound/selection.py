@@ -102,14 +102,24 @@ def evaluate_candidate(candidate, *, sound_type, required_tags=None, preferred_t
             reasons.append(f"discovery-rank:{rank}")
 
     preferred_hits = sorted(preferred & tags)
-    score += min(10, 2 * len(preferred_hits))
-    if preferred_hits:
-        reasons.append("preferred-tags:" + ",".join(preferred_hits))
+    if preferred:
+        if preferred_hits:
+            # Preferred context is soft, but materially relevant. One contextual
+            # match should beat a generic technically-perfect sound; more matches
+            # remain a bounded bonus.
+            score += min(12, 4 * len(preferred_hits))
+            reasons.append("preferred-tags:" + ",".join(preferred_hits))
+        else:
+            # Do not turn a soft preference into a hard gate. Instead cap the
+            # practical default quality of a context-free candidate: callers can
+            # still explicitly accept it by choosing a lower min_score.
+            score -= 35
+            reasons.append("preferred-context-miss")
 
     return {
         "id": candidate.get("id"),
         "eligible": True,
-        "score": round(min(score, 100.0), 2),
+        "score": round(max(0.0, min(score, 100.0)), 2),
         "gates": [],
         "reasons": reasons,
     }
