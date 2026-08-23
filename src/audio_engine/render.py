@@ -16,7 +16,7 @@ from .sound.render import (
     scene_space_requirements,
     soundscape_source_sha256,
 )
-from .voice.render import render_voice_clip
+from .voice.render import render_voice_clip, voice_content_key
 from .voices import load_voice_config, resolve_segments
 
 
@@ -85,6 +85,37 @@ def cached_manifest(output_dir, expected_fingerprint):
     if manifest.get("status") != "success":
         return None
     return manifest
+
+
+def _previous_voice_cache_map(output_dir, provider_name):
+    """Map unchanged synthesis content to prior fingerprints from the last output.
+
+    This lets a new engine/cache-wrapper release re-key existing dry voice clips
+    locally instead of calling the remote TTS provider again.
+    """
+    manifest_path = Path(output_dir) / "manifest.json"
+    transcript_path = Path(output_dir) / "transcript.json"
+    if not manifest_path.exists() or not transcript_path.exists():
+        return {}
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if (manifest.get("provider") or {}).get("name") != provider_name:
+        return {}
+    fingerprints = (manifest.get("mix") or {}).get("voice_fingerprints") or []
+    segments = transcript.get("segments") or []
+    if len(fingerprints) != len(segments):
+        return {}
+    result = {}
+    for segment, fingerprint in zip(segments, fingerprints):
+        if isinstance(segment, dict) and isinstance(fingerprint, str) and fingerprint:
+            try:
+                result.setdefault(voice_content_key(segment, provider_name), []).append(fingerprint)
+            except (KeyError, TypeError):
+                continue
+    return result
 
 
 def _resolve_relative_sound_intent(soundscape, schema_version, timeline):
@@ -165,16 +196,21 @@ def render_program(program_path, output_root, voices_path=None, provider=None, s
     if cached:
         return {**cached, "cache_hit": True}
 
+    previous_voice_cache = _previous_voice_cache_map(output_dir, provider.name)
     resolved = resolve_segments(program, voice_config)
     voice_cache_root = output_root / ".cache" / "voices"
     voice_clips = []
     voice_cache_hits = 0
     voice_fingerprints = []
     for segment in resolved:
+        fallback_fingerprints = previous_voice_cache.get(
+            voice_content_key(segment, provider.name), []
+        )
         clip, cache_hit, voice_fingerprint = render_voice_clip(
             segment,
             provider,
             voice_cache_root,
+            fallback_fingerprints=fallback_fingerprints,
         )
         voice_clips.append(clip)
         voice_fingerprints.append(voice_fingerprint)
