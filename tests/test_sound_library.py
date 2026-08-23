@@ -29,6 +29,33 @@ def requirement(sound_id="church-bell-distant"):
     }
 
 
+def selected_result(output_dir, sound_id="church-bell-distant", audio=b"newly-acquired-audio"):
+    digest = sha256_bytes(audio)
+    acquisition = Path(output_dir)
+    assets = acquisition / "assets"
+    assets.mkdir(parents=True, exist_ok=True)
+    source = assets / f"{sound_id}.ogg"
+    source.write_bytes(audio)
+    entry = {
+        "id": sound_id,
+        "type": "event",
+        "status": "validated",
+        "tags": ["bell", "cathedral", "distant"],
+        "content_sha256": digest,
+        "source": {"provider": "wikimedia-commons"},
+        "license": {"id": "CC0-1.0", "verified": True},
+        "asset": {"file": f"assets/{sound_id}.ogg", "status": "locked"},
+    }
+    return {
+        "status": "selected",
+        "selected_id": sound_id,
+        "selected": entry,
+        "selected_score": 92,
+        "materialized": {"asset": str(source)},
+        "network_requests_required": True,
+    }
+
+
 class SoundLibraryTests(unittest.TestCase):
     def test_restores_exact_validated_seed_without_network(self):
         with tempfile.TemporaryDirectory() as temp_value:
@@ -73,32 +100,9 @@ class SoundLibraryTests(unittest.TestCase):
             root = Path(temp_value)
             requirements = root / "requirements.json"
             requirements.write_text(json.dumps(requirement()), encoding="utf-8")
-            audio = b"newly-acquired-audio"
-            digest = sha256_bytes(audio)
 
             def fake_ensure(query, **kwargs):
-                acquisition = Path(kwargs["output_dir"])
-                assets = acquisition / "assets"
-                assets.mkdir(parents=True, exist_ok=True)
-                source = assets / "church-bell-distant.ogg"
-                source.write_bytes(audio)
-                entry = {
-                    "id": "church-bell-distant",
-                    "type": "event",
-                    "status": "validated",
-                    "tags": ["bell", "cathedral", "distant"],
-                    "content_sha256": digest,
-                    "source": {"provider": "wikimedia-commons"},
-                    "license": {"id": "CC0-1.0", "verified": True},
-                    "asset": {"file": "assets/church-bell-distant.ogg", "status": "locked"},
-                }
-                return {
-                    "status": "selected",
-                    "selected_id": "church-bell-distant",
-                    "selected": entry,
-                    "materialized": {"asset": str(source)},
-                    "network_requests_required": True,
-                }
+                return selected_result(kwargs["output_dir"])
 
             with patch("audio_engine.sound.library.ensure_sound", side_effect=fake_ensure):
                 result = hydrate_sound_library(requirements, output_dir=root / "library", seed_dir=root / "missing-seed")
@@ -108,9 +112,40 @@ class SoundLibraryTests(unittest.TestCase):
             self.assertEqual(result["restored_count"], 0)
             hydrated = json.loads((root / "library" / "sounds.json").read_text(encoding="utf-8"))
             self.assertEqual(len(hydrated["entries"]), 1)
-            self.assertEqual(hydrated["entries"][0]["content_sha256"], digest)
+            self.assertEqual(hydrated["entries"][0]["content_sha256"], sha256_bytes(b"newly-acquired-audio"))
             self.assertTrue((root / "library" / "catalogs" / "church-bell-distant.catalog.json").exists())
             self.assertTrue((root / "library" / "selections" / "church-bell-distant.selection.json").exists())
+
+    def test_broadens_query_without_weakening_hard_requirements(self):
+        with tempfile.TemporaryDirectory() as temp_value:
+            root = Path(temp_value)
+            data = requirement()
+            data["sounds"][0]["required_tags"] = ["bell", "cathedral"]
+            data["sounds"][0]["preferred_tags"] = ["church", "distant"]
+            requirements = root / "requirements.json"
+            requirements.write_text(json.dumps(data), encoding="utf-8")
+            calls = []
+
+            def fake_ensure(query, **kwargs):
+                calls.append((query, list(kwargs["required_tags"]), kwargs["limit"]))
+                if len(calls) < 3:
+                    return {"status": "no-selection", "action": "continue-discovery", "qualified_count": 0}
+                return selected_result(kwargs["output_dir"])
+
+            with patch("audio_engine.sound.library.ensure_sound", side_effect=fake_ensure):
+                result = hydrate_sound_library(requirements, output_dir=root / "library")
+
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(calls[0][0], "distant cathedral bell")
+            self.assertNotEqual(calls[1][0], calls[0][0])
+            self.assertTrue(all(tags == ["bell", "cathedral"] for _, tags, _ in calls))
+            self.assertGreater(calls[2][2], calls[0][2])
+            evidence = json.loads(
+                (root / "library" / "selections" / "church-bell-distant.selection.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(evidence["query_attempts"]), 3)
+            self.assertEqual(evidence["query_attempts"][-1]["status"], "selected")
 
     def test_unresolved_requirement_is_reported_without_human_fallback(self):
         with tempfile.TemporaryDirectory() as temp_value:
@@ -120,11 +155,13 @@ class SoundLibraryTests(unittest.TestCase):
             with patch(
                 "audio_engine.sound.library.ensure_sound",
                 return_value={"status": "no-selection", "action": "continue-discovery"},
-            ):
+            ) as mocked:
                 result = hydrate_sound_library(requirements, output_dir=root / "library")
             self.assertEqual(result["status"], "partial")
             self.assertEqual(result["unresolved_count"], 1)
             self.assertEqual(result["unresolved"][0]["action"], "continue-discovery")
+            self.assertGreater(mocked.call_count, 1)
+            self.assertGreater(len(result["unresolved"][0]["query_attempts"]), 1)
 
     def test_duplicate_requirement_ids_are_rejected(self):
         with tempfile.TemporaryDirectory() as temp_value:

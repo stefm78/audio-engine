@@ -6,6 +6,8 @@ from ..contract import sha256_file
 from .acquisition import ensure_sound
 
 MAX_REQUIREMENTS = 32
+MAX_QUERY_VARIANTS = 6
+MAX_DISCOVERY_LIMIT = 24
 
 
 def _load_json(path):
@@ -44,6 +46,37 @@ def _validate_requirements(data):
     if len(ids) != len(set(ids)):
         raise ValueError("Sound requirement ids must be unique")
     return items
+
+
+def _query_variants(requirement):
+    original = " ".join(str(requirement.get("query") or "").split())
+    required = [str(value).strip() for value in requirement.get("required_tags", []) if str(value).strip()]
+    preferred = [str(value).strip() for value in requirement.get("preferred_tags", []) if str(value).strip()]
+    original_tokens = original.split()
+
+    candidates = [
+        original,
+        " ".join(required + preferred),
+        " ".join(required),
+    ]
+    if len(original_tokens) > 2:
+        candidates.extend([
+            " ".join(original_tokens[-3:]),
+            " ".join(original_tokens[-2:]),
+        ])
+    candidates.extend(required)
+
+    variants = []
+    seen = set()
+    for value in candidates:
+        normalized = " ".join(value.split()).strip()
+        key = normalized.casefold()
+        if normalized and key not in seen:
+            seen.add(key)
+            variants.append(normalized)
+        if len(variants) >= MAX_QUERY_VARIANTS:
+            break
+    return variants
 
 
 def _candidate_catalogs(seed_dir):
@@ -144,21 +177,39 @@ def hydrate_sound_library(requirements_path, *, output_dir=".sound-library", see
                 "network_requests_required": False,
                 "materialized": {"asset": str(asset)},
                 "hydration_source": "durable-seed",
+                "query_attempts": [],
             }
         else:
-            acquisition_dir = root / "acquisitions" / sound_id
-            result = ensure_sound(
-                requirement["query"],
-                sound_type=sound_type,
-                sound_id=sound_id,
-                required_tags=requirement.get("required_tags", []),
-                preferred_tags=requirement.get("preferred_tags", []),
-                providers=requirement.get("providers") or None,
-                output_dir=acquisition_dir,
-                catalog_path=catalog_path,
-                limit=int(requirement.get("limit", 8)),
-                min_score=float(requirement.get("min_score", 70.0)),
-            )
+            base_limit = max(1, int(requirement.get("limit", 8)))
+            attempts = []
+            for attempt_index, query in enumerate(_query_variants(requirement), start=1):
+                attempt_limit = min(MAX_DISCOVERY_LIMIT, base_limit * attempt_index)
+                acquisition_dir = root / "acquisitions" / sound_id / f"attempt-{attempt_index:02d}"
+                result = ensure_sound(
+                    query,
+                    sound_type=sound_type,
+                    sound_id=sound_id,
+                    required_tags=requirement.get("required_tags", []),
+                    preferred_tags=requirement.get("preferred_tags", []),
+                    providers=requirement.get("providers") or None,
+                    output_dir=acquisition_dir,
+                    catalog_path=catalog_path,
+                    limit=attempt_limit,
+                    min_score=float(requirement.get("min_score", 70.0)),
+                )
+                attempts.append({
+                    "query": query,
+                    "limit": attempt_limit,
+                    "status": result.get("status"),
+                    "selected_score": result.get("selected_score"),
+                    "qualified_count": result.get("qualified_count"),
+                })
+                if result.get("status") in {"selected", "catalog-hit"}:
+                    break
+            if result is None:
+                result = {"status": "no-selection", "action": "continue-discovery"}
+            result["query_attempts"] = attempts
+
             if result.get("status") in {"selected", "catalog-hit"}:
                 entry = result["selected"]
                 if result.get("status") == "selected":
@@ -183,7 +234,12 @@ def hydrate_sound_library(requirements_path, *, output_dir=".sound-library", see
                 json.dumps(one_catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
             )
         else:
-            unresolved.append({"id": sound_id, "status": result.get("status"), "action": result.get("action")})
+            unresolved.append({
+                "id": sound_id,
+                "status": result.get("status"),
+                "action": result.get("action"),
+                "query_attempts": result.get("query_attempts", []),
+            })
 
         (root / "selections" / f"{sound_id}.selection.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
