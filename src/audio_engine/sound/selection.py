@@ -77,8 +77,7 @@ def evaluate_candidate(candidate, *, sound_type, required_tags=None, preferred_t
             "reasons": reasons,
         }
 
-    score = 40.0
-    score += duration_component
+    score = 40.0 + duration_component
     if audio.get("channels") == 2:
         score += 8
         reasons.append("stereo")
@@ -93,6 +92,15 @@ def evaluate_candidate(candidate, *, sound_type, required_tags=None, preferred_t
     if license_info.get("id") in {"CC0-1.0", "PDM-1.0", "Public-Domain"}:
         score += 10
         reasons.append("frictionless-license")
+
+    discovery = candidate.get("discovery", {}) if isinstance(candidate.get("discovery"), dict) else {}
+    rank = discovery.get("rank")
+    if isinstance(rank, int) and rank > 0:
+        rank_bonus = max(0, 10 - 2 * (rank - 1))
+        score += rank_bonus
+        if rank_bonus:
+            reasons.append(f"discovery-rank:{rank}")
+
     preferred_hits = sorted(preferred & tags)
     score += min(10, 2 * len(preferred_hits))
     if preferred_hits:
