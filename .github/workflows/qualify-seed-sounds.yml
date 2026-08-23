@@ -1,0 +1,37 @@
+name: Qualify seed sounds
+
+on:
+  push:
+    branches: [research/sound-pack-seed]
+  workflow_dispatch:
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download exact candidates
+        run: |
+          mkdir -p .seed-sounds
+          curl -L --fail --retry 3 \
+            'https://upload.wikimedia.org/wikipedia/commons/0/0a/20090610_0_ambience.ogg' \
+            -o .seed-sounds/forest-ambience.ogg
+          curl -L --fail --retry 3 \
+            'https://upload.wikimedia.org/wikipedia/commons/9/9e/200357_bigben12345_pretiosa.ogg' \
+            -o .seed-sounds/church-bell-pretiosa.ogg
+      - name: Record exact technical evidence
+        run: |
+          for f in .seed-sounds/*; do
+            echo "=== $f ==="
+            sha256sum "$f"
+            ffprobe -v error \
+              -show_entries format=duration,size,format_name:stream=codec_name,sample_rate,channels \
+              -of json "$f"
+          done
+      - name: Upload candidate listening files
+        uses: actions/upload-artifact@v4
+        with:
+          name: seed-sound-candidates
+          path: .seed-sounds
+          if-no-files-found: error
