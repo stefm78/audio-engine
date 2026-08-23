@@ -26,7 +26,7 @@ def sha256_file(path):
 
 
 def _non_empty_string(value):
-    return isinstance(value, str) and value.strip()
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _validate_position(value, label, errors):
