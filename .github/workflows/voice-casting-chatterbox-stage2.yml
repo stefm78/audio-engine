@@ -1,0 +1,128 @@
+name: Voice Casting Chatterbox V3 Stage 2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/voice-casting-chatterbox-stage2.yml
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  chatterbox-stage2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      HF_HOME: ${{ github.workspace }}/.hf-cache
+      TOKENIZERS_PARALLELISM: "false"
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      CHATTERBOX_REV: 3f35dfc8fbe63e5b29793289dc68f1875bb317a5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Publish run locator immediately
+        id: locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          ISSUE_URL=$(gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Voice Casting Chatterbox V3 stage2 running $RUN_ID" \
+            --body "Chatterbox V3 stage-2 benchmark started.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- status: running\n- upstream revision: $CHATTERBOX_REV\n- voices: Vivienne + William\n- acting: panic, mystery, polite threat, wonder\n- identity: 4 cross-provider ABX checks\n- design: fixed winning Chatterbox bundle vs Edge baseline\n\nLab evidence only; no production promotion."
+          )
+          echo "issue_url=$ISSUE_URL" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Cache public Chatterbox model files
+        uses: actions/cache@v4
+        with:
+          path: .hf-cache
+          key: chatterbox-multilingual-v3-${{ env.CHATTERBOX_REV }}
+
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+
+      - name: Verify stage-2 contract offline
+        run: python -m unittest tests.test_voice_lab_chatterbox_stage2 -v
+
+      - name: Install pinned upstream Chatterbox V3 source
+        run: |
+          python -m pip install --disable-pip-version-check \
+            "git+https://github.com/resemble-ai/chatterbox.git@${CHATTERBOX_REV}"
+          python -m pip check
+
+      - name: Verify V3 API and French
+        run: |
+          python - <<'PY'
+          import inspect
+          from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+          params = inspect.signature(ChatterboxMultilingualTTS.from_pretrained).parameters
+          if "t3_model" not in params:
+              raise SystemExit("Pinned source lacks the V3 selector.")
+          if "fr" not in ChatterboxMultilingualTTS.get_supported_languages():
+              raise SystemExit("Pinned source does not advertise French support.")
+          PY
+
+      - name: Render stage-2 benchmark
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from audio_engine.voice_lab_chatterbox_stage2 import render_experiment
+          result = render_experiment(Path("chatterbox-stage2-output"))
+          print(json.dumps({
+              "status": result["status"],
+              "rendered_count": result["rendered_count"],
+              "failure_count": result["failure_count"],
+          }, indent=2))
+          if result["status"] != "success":
+              print(json.dumps(result["failures"], indent=2, ensure_ascii=False))
+              raise SystemExit(1)
+          PY
+
+      - name: Upload blind-listening bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-chatterbox-v3-stage2
+          path: chatterbox-stage2-output/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Mark locator completed
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_URL: ${{ steps.locator.outputs.issue_url }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          ISSUE_NUMBER="${ISSUE_URL##*/}"
+          gh issue edit "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
+            --title "Voice Casting Chatterbox V3 stage2 completed $RUN_ID" \
+            --body "Chatterbox V3 stage-2 benchmark completed.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- status: completed\n- artifact: voice-casting-chatterbox-v3-stage2\n- upstream revision: $CHATTERBOX_REV\n- output: 16 comparison clips + 2 synthetic Edge references\n- human boundary: 8 acting choices + 4 identity ABX choices\n\nLab evidence only; no production promotion."
+
+      - name: Mark locator failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_URL: ${{ steps.locator.outputs.issue_url }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$ISSUE_URL" ]; then exit 0; fi
+          ISSUE_NUMBER="${ISSUE_URL##*/}"
+          gh issue edit "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
+            --title "Voice Casting Chatterbox V3 stage2 failed $RUN_ID" \
+            --body "Chatterbox V3 stage-2 benchmark failed.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- status: failed\n- upstream revision: $CHATTERBOX_REV\n\nInspect the workflow logs. Lab evidence only."
