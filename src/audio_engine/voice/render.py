@@ -1,12 +1,19 @@
 import hashlib
 import inspect
 import json
-import shutil
 from pathlib import Path
 
-from ..audio import probe_duration_seconds
+from ..audio import probe_duration_seconds, run_ffmpeg
 
-_SYNTHESIS_CONTRACT = "voice-synthesis-v1"
+_SYNTHESIS_CONTRACT = "voice-synthesis-v2-edge-silence-normalized"
+_EDGE_FILTER = (
+    "silenceremove="
+    "start_periods=1:start_duration=0.02:start_threshold=-45dB:start_silence=0.06,"
+    "areverse,"
+    "silenceremove="
+    "start_periods=1:start_duration=0.02:start_threshold=-45dB:start_silence=0.10,"
+    "areverse"
+)
 
 
 def _provider_code_sha256(provider):
@@ -56,13 +63,40 @@ def _metadata_path(path):
     return Path(path).with_suffix(".json")
 
 
+def _normalize_voice_edges(source, destination):
+    """Remove provider padding at clip edges while preserving internal pauses.
+
+    Edge TTS commonly emits around a second of terminal digital silence. That
+    padding is transport noise, not authored cadence: `pause_after_ms` remains
+    the only explicit inter-segment pause. Reverse + start-only trimming keeps
+    internal hesitations untouched and retains a small safety cushion at both
+    clip boundaries.
+    """
+    source = Path(source)
+    destination = Path(destination)
+    destination.unlink(missing_ok=True)
+    run_ffmpeg([
+        "-i", str(source),
+        "-af", _EDGE_FILTER,
+        "-map_metadata", "-1",
+        "-ac", "1",
+        "-c:a", "libmp3lame",
+        "-b:a", "96k",
+        str(destination),
+    ])
+    duration = probe_duration_seconds(destination)
+    if duration is None or duration <= 0.05:
+        destination.unlink(missing_ok=True)
+        raise RuntimeError("Voice edge normalization produced no usable audio")
+
+
 def _timing_metadata(segment, provider, fingerprint, path):
     duration = probe_duration_seconds(path)
     if duration is None:
         raise RuntimeError("Could not determine rendered voice duration")
     text = segment.get("text", "")
     return {
-        "version": 1,
+        "version": 2,
         "fingerprint": fingerprint,
         "provider": provider.name,
         "voice": segment["voice"],
@@ -71,6 +105,7 @@ def _timing_metadata(segment, provider, fingerprint, path):
         "volume": segment.get("volume", "+0%"),
         "text_chars": len(text),
         "text_words": len(text.split()),
+        "edge_silence_normalized": True,
         "measured_duration_ms": round(duration * 1000.0, 3),
     }
 
@@ -80,7 +115,11 @@ def _ensure_timing_metadata(segment, provider, fingerprint, path):
     if metadata_path.exists():
         try:
             data = json.loads(metadata_path.read_text(encoding="utf-8"))
-            if data.get("fingerprint") == fingerprint and data.get("measured_duration_ms"):
+            if (
+                data.get("fingerprint") == fingerprint
+                and data.get("measured_duration_ms")
+                and data.get("edge_silence_normalized") is True
+            ):
                 return data
         except Exception:
             pass
@@ -112,15 +151,22 @@ def render_voice_clip(segment, provider, cache_root, fallback_fingerprints=None)
             continue
         legacy = cache_root / f"{fallback}.mp3"
         if legacy.exists() and legacy.stat().st_size > 0:
-            shutil.copyfile(legacy, path)
+            _normalize_voice_edges(legacy, path)
             _ensure_timing_metadata(segment, provider, fingerprint, path)
             return path, True, fingerprint
 
-    temporary = path.with_suffix(".tmp.mp3")
-    temporary.unlink(missing_ok=True)
-    provider.synthesize(segment, temporary)
-    if not temporary.exists() or temporary.stat().st_size <= 0:
-        raise RuntimeError("Voice provider produced no audio")
-    temporary.replace(path)
+    raw = path.with_suffix(".raw.tmp.mp3")
+    normalized = path.with_suffix(".normalized.tmp.mp3")
+    raw.unlink(missing_ok=True)
+    normalized.unlink(missing_ok=True)
+    try:
+        provider.synthesize(segment, raw)
+        if not raw.exists() or raw.stat().st_size <= 0:
+            raise RuntimeError("Voice provider produced no audio")
+        _normalize_voice_edges(raw, normalized)
+        normalized.replace(path)
+    finally:
+        raw.unlink(missing_ok=True)
+        normalized.unlink(missing_ok=True)
     _ensure_timing_metadata(segment, provider, fingerprint, path)
     return path, False, fingerprint
