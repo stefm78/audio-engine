@@ -31,6 +31,14 @@ class _FakeProvider:
         Path(path).write_bytes((segment["text"] + str(segment["seed"])).encode())
 
 
+class _UndeclaredModeProvider:
+    def build_identity_prompt(self, anchor):
+        return {"anchor": Path(anchor).name}
+
+    def synthesize(self, segment, path, *, voice_clone_prompt):
+        Path(path).write_bytes(b"should-not-render")
+
+
 class CharacterLabTests(unittest.TestCase):
     def _pack(self, root):
         source = root / "source.wav"
@@ -75,6 +83,20 @@ class CharacterLabTests(unittest.TestCase):
             with self.assertRaisesRegex(CharacterLabError, "hash mismatch"):
                 load_character_identity(pack / "character.json")
 
+    def test_contract_rejects_anchor_path_escape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, pack, _ = self._pack(root)
+            outside = root / "outside.wav"
+            outside.write_bytes(b"outside")
+            spec = pack / "character.json"
+            data = json.loads(spec.read_text(encoding="utf-8"))
+            data["anchor"]["file"] = "../outside.wav"
+            data["anchor"]["sha256"] = hashlib.sha256(outside.read_bytes()).hexdigest()
+            spec.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(CharacterLabError, "inside the character pack"):
+                load_character_identity(spec)
+
     def test_contract_rejects_unqualified_age_claim(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -85,6 +107,18 @@ class CharacterLabTests(unittest.TestCase):
             spec.write_text(json.dumps(data), encoding="utf-8")
             with self.assertRaisesRegex(CharacterLabError, "age-lineage"):
                 load_character_identity(spec)
+
+    def test_render_requires_explicit_xvector_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, pack, _ = self._pack(root)
+            with self.assertRaisesRegex(CharacterLabError, "explicitly use x_vector_only"):
+                render_character_lines(
+                    pack / "character.json",
+                    [{"id": "one", "text": "Une ligne."}],
+                    root / "out",
+                    provider=_UndeclaredModeProvider(),
+                )
 
     def test_render_builds_identity_once_and_is_deterministic(self):
         with tempfile.TemporaryDirectory() as tmp:
