@@ -1,7 +1,15 @@
 import json
 from pathlib import Path
 
-AGE_ORDER = {"child": 0, "young_adult": 1, "adult": 2, "older": 3}
+AGE_ORDER = {
+    "child": 0,
+    "teen": 1,
+    "young_adult": 2,
+    "adult": 3,
+    "mature": 4,
+    "older": 5,
+    "very_old": 6,
+}
 NUMERIC_TRAITS = {
     "energy": 1.5,
     "authority": 1.4,
@@ -12,6 +20,13 @@ NUMERIC_TRAITS = {
 GENDER_MISMATCH_PENALTY = 25.0
 AGE_DISTANCE_PENALTY = 7.0
 TAG_MATCH_BONUS = 2.0
+CASTING_POLICY = {
+    "identity_first": True,
+    "identity_key": "provider_voice",
+    "emotion_may_change_preset_not_voice": True,
+    "silent_recast": "forbidden",
+    "age_lineage": "lab-qualified; explicit production lineage contract pending validation",
+}
 QUALITY_VALIDATION = {
     "origin": "initial blind French voice benchmark and subsequent human casting tests",
     "principle": "language quality is checked before role fit",
@@ -70,6 +85,7 @@ def public_catalog(voice_config):
         "version": voice_config.get("version"),
         "description": voice_config.get("description"),
         "quality_validation": voice_config.get("quality_validation", QUALITY_VALIDATION),
+        "casting_policy": CASTING_POLICY,
         "selection_rules": selection_rules(),
         "presets": voice_config.get("presets", []),
     }
@@ -111,6 +127,7 @@ def recommend_presets(target, voice_config, limit=3):
     return {
         "target": target,
         "quality_validation": voice_config.get("quality_validation", QUALITY_VALIDATION),
+        "casting_policy": CASTING_POLICY,
         "selection_rules": selection_rules(),
         "recommendations": [
             {
@@ -128,6 +145,16 @@ def choose_preset(target, presets):
     return ranked[0][1], ranked
 
 
+def _identity_from_resolution(voice, rate, pitch, volume, resolved_preset):
+    return {
+        "voice": voice,
+        "rate": rate,
+        "pitch": pitch,
+        "volume": volume,
+        "resolved_preset": resolved_preset,
+    }
+
+
 def resolve_segments(program, voice_config):
     presets = voice_config.get("presets", [])
     by_id = {preset["id"]: preset for preset in presets}
@@ -136,7 +163,8 @@ def resolve_segments(program, voice_config):
     for index, segment in enumerate(program["segments"], start=1):
         explicit_voice = segment.get("voice")
         preset_id = segment.get("preset")
-        character_id = segment.get("character_id") or f"segment-{index}"
+        explicit_character_id = segment.get("character_id")
+        character_id = explicit_character_id or f"segment-{index}"
         alternatives = []
 
         if explicit_voice:
@@ -145,25 +173,46 @@ def resolve_segments(program, voice_config):
             pitch = segment.get("pitch", "+0Hz")
             volume = segment.get("volume", "+0%")
             resolved_preset = None
-        else:
-            if preset_id:
-                if preset_id not in by_id:
-                    raise ValueError(f"Unknown voice preset: {preset_id}")
-                preset = by_id[preset_id]
-            elif character_id in character_cast:
-                preset = character_cast[character_id]
-            else:
-                preset, ranked = choose_preset(segment.get("target", {}), presets)
-                character_cast[character_id] = preset
-                alternatives = [
-                    {"preset": candidate["id"], "score": round(score, 3)}
-                    for score, candidate in ranked
-                ]
+        elif preset_id:
+            if preset_id not in by_id:
+                raise ValueError(f"Unknown voice preset: {preset_id}")
+            preset = by_id[preset_id]
             voice = preset["voice"]
             rate = segment.get("rate", preset.get("rate", "+0%"))
             pitch = segment.get("pitch", preset.get("pitch", "+0Hz"))
             volume = segment.get("volume", preset.get("volume", "+0%"))
             resolved_preset = preset["id"]
+        elif explicit_character_id and character_id in character_cast:
+            identity = character_cast[character_id]
+            voice = identity["voice"]
+            rate = segment.get("rate", identity["rate"])
+            pitch = segment.get("pitch", identity["pitch"])
+            volume = segment.get("volume", identity["volume"])
+            resolved_preset = identity["resolved_preset"]
+        else:
+            preset, ranked = choose_preset(segment.get("target", {}), presets)
+            voice = preset["voice"]
+            rate = segment.get("rate", preset.get("rate", "+0%"))
+            pitch = segment.get("pitch", preset.get("pitch", "+0Hz"))
+            volume = segment.get("volume", preset.get("volume", "+0%"))
+            resolved_preset = preset["id"]
+            alternatives = [
+                {"preset": candidate["id"], "score": round(score, 3)}
+                for score, candidate in ranked
+            ]
+
+        if explicit_character_id:
+            previous = character_cast.get(character_id)
+            if previous and previous["voice"] != voice:
+                raise ValueError(
+                    f"Character {character_id!r} cannot silently change provider voice "
+                    f"from {previous['voice']} to {voice}; use a distinct age incarnation until "
+                    "an age lineage has been explicitly qualified"
+                )
+            if previous is None:
+                character_cast[character_id] = _identity_from_resolution(
+                    voice, rate, pitch, volume, resolved_preset
+                )
 
         resolved.append({
             **segment,
@@ -173,6 +222,7 @@ def resolve_segments(program, voice_config):
             "rate": rate,
             "pitch": pitch,
             "volume": volume,
+            "casting_identity": voice if explicit_character_id else None,
             "casting_alternatives": alternatives,
         })
     return resolved
