@@ -4,9 +4,11 @@ import edge_tts
 
 _PATCHED = False
 
+
 def _locale_from_voice(voice):
     match = re.match(r"^([a-z]{2,3}-[A-Z]{2})-", voice or "")
     return match.group(1) if match else None
+
 
 def patch_ssml_locale():
     global _PATCHED
@@ -31,12 +33,33 @@ def patch_ssml_locale():
     finally:
         _PATCHED = True
 
+
 class EdgeProvider:
     name = "edge"
     processing = "remote"
+    expressive_controls = ("rate", "pitch", "volume")
 
     def __init__(self):
         patch_ssml_locale()
+
+    async def list_voices_async(self, locale_prefix=None):
+        voices = await edge_tts.list_voices()
+        normalized = []
+        for item in voices:
+            short_name = item.get("ShortName") or item.get("Name")
+            locale = item.get("Locale") or _locale_from_voice(short_name)
+            if locale_prefix and not str(locale or "").startswith(locale_prefix):
+                continue
+            normalized.append({
+                "voice": short_name,
+                "locale": locale,
+                "gender": str(item.get("Gender") or "").lower() or None,
+                "friendly_name": item.get("FriendlyName"),
+            })
+        return sorted(normalized, key=lambda item: (item.get("locale") or "", item.get("voice") or ""))
+
+    def list_voices(self, locale_prefix=None):
+        return asyncio.run(self.list_voices_async(locale_prefix=locale_prefix))
 
     async def synthesize_async(self, segment, path):
         last_error = None
