@@ -43,6 +43,20 @@ def _seed(base_seed: int, character_id: str, line_id: str, text: str) -> int:
     return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
 
 
+def _resolve_anchor(spec_path: Path, anchor_file: str) -> Path:
+    anchor_file = str(anchor_file or "").strip()
+    relative = Path(anchor_file)
+    if not anchor_file or relative.is_absolute() or ".." in relative.parts:
+        raise CharacterLabError("anchor.file must stay inside the character pack")
+    pack_root = spec_path.parent.resolve()
+    anchor_path = (pack_root / relative).resolve()
+    try:
+        anchor_path.relative_to(pack_root)
+    except ValueError as exc:
+        raise CharacterLabError("anchor.file must stay inside the character pack") from exc
+    return anchor_path
+
+
 def freeze_character_identity(
     character_id,
     anchor_path,
@@ -111,7 +125,7 @@ def load_character_identity(spec_path):
     expected = str(anchor.get("sha256") or "").lower()
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise CharacterLabError("anchor.sha256 must be a lowercase SHA-256 digest")
-    anchor_path = spec_path.parent / str(anchor.get("file") or "")
+    anchor_path = _resolve_anchor(spec_path, anchor.get("file"))
     if not anchor_path.is_file():
         raise FileNotFoundError(anchor_path)
     actual = _sha256(anchor_path)
@@ -141,8 +155,8 @@ def render_character_lines(
         if model_dir is None:
             raise CharacterLabError("model_dir is required when provider is not injected")
         provider = Qwen3XVectorLabProvider(model_dir=model_dir, device="cpu")
-    if getattr(provider, "identity_mode", IDENTITY_MODE) != IDENTITY_MODE:
-        raise CharacterLabError("provider must use x_vector_only identity mode")
+    if getattr(provider, "identity_mode", None) != IDENTITY_MODE:
+        raise CharacterLabError("provider must explicitly use x_vector_only identity mode")
 
     prompt = provider.build_identity_prompt(anchor_path)
     output_dir = Path(output_dir)
@@ -160,7 +174,7 @@ def render_character_lines(
         text = str(raw.get("text") or "").strip()
         if not text:
             raise CharacterLabError(f"line {line_id!r} has empty text")
-        seed = int(raw.get("seed", _seed(base_seed, spec["character_id"], line_id, text)))
+        seed = int(raw["seed"]) if "seed" in raw else _seed(base_seed, spec["character_id"], line_id, text)
         out = clips_dir / f"{index:03d}--{_slug(line_id)}.wav"
         clip_started = time.monotonic()
         try:
