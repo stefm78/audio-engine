@@ -1,0 +1,176 @@
+name: Voice Casting Qwen3 Character Composition
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/qwen3-character-composition
+    paths:
+      - src/audio_engine/voice_lab_qwen3_character_composition.py
+      - src/audio_engine/voice_character_lab.py
+      - src/audio_engine/providers/qwen3_xvector_lab.py
+      - tests/test_voice_lab_qwen3_character_composition.py
+      - .github/workflows/voice-casting-qwen3-character-composition.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  QWEN_REV: 022e286b98fbec7e1e916cb940cdf532cd9f488e
+  MODEL_ID: Qwen/Qwen3-TTS-12Hz-1.7B-Base
+  MODEL_REV: 74a6279626edc2d5a787d5b6467668eba0b86ef6
+  SOURCE_RUN_ID: "32772435007"
+  SOURCE_ARTIFACT: voice-casting-qwen3-xvector-identity-confirm
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Run frozen-character offline gates
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m unittest tests.test_voice_character_lab tests.test_voice_lab_qwen3_character_composition -v
+
+  render:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        character: [claire, lucie]
+    env:
+      CHARACTER: ${{ matrix.character }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          df -h /
+
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+
+      - name: Download exact qualified character anchors
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D prior-qwen3
+          test -f prior-qwen3/reference-claire-qwen3.wav
+          test -f prior-qwen3/reference-lucie-qwen3.wav
+          sha256sum prior-qwen3/reference-*-qwen3.wav
+
+      - name: Checkout pinned Qwen3-TTS source
+        run: |
+          git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
+          cd qwen3-upstream
+          git checkout "$QWEN_REV"
+          test "$(git rev-parse HEAD)" = "$QWEN_REV"
+
+      - name: Install isolated CPU inference stack
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          python -m pip install --disable-pip-version-check -e ./qwen3-upstream
+          python -m pip check
+
+      - name: Download pinned Qwen3 Base model
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          p = snapshot_download(
+              repo_id=os.environ['MODEL_ID'],
+              revision=os.environ['MODEL_REV'],
+              local_dir='qwen3-base-model',
+          )
+          print(p)
+          PY
+          test -f qwen3-base-model/config.json
+          test -f qwen3-base-model/model.safetensors
+
+      - name: Render four new intentions with frozen identity
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from audio_engine.providers.qwen3_xvector_lab import Qwen3XVectorLabProvider
+          from audio_engine.voice_lab_qwen3_character_composition import render_character
+
+          provider = Qwen3XVectorLabProvider(model_dir=Path('qwen3-base-model'), device='cpu')
+          result = render_character(
+              os.environ['CHARACTER'],
+              Path('prior-qwen3'),
+              Path('character-output'),
+              provider=provider,
+          )
+          print(json.dumps(result, ensure_ascii=False, indent=2))
+          if result['status'] != 'success' or result['rendered_count'] != 4:
+              raise SystemExit(1)
+          PY
+
+      - name: Upload per-character composition evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-character-composition-${{ matrix.character }}
+          path: character-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  bundle:
+    needs: render
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+
+      - name: Download both character artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: qwen3-character-composition-*
+          path: composition-inputs
+
+      - name: Assemble four-screen blind listening bundle
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from audio_engine.voice_lab_qwen3_character_composition import assemble_bundle
+
+          result = assemble_bundle(Path('composition-inputs'), Path('composition-bundle'))
+          print(json.dumps({
+              'status': result['status'],
+              'trial_count': result['trial_count'],
+              'decision': result['decision'],
+          }, ensure_ascii=False, indent=2))
+          if result['status'] != 'success' or result['trial_count'] != 4:
+              raise SystemExit(1)
+          PY
+
+      - name: Upload final blind listening bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-qwen3-character-composition
+          path: composition-bundle/
+          if-no-files-found: error
+          retention-days: 14
