@@ -17,6 +17,7 @@ from .sound.catalog import SOUND_TYPES, public_catalog as public_sound_catalog, 
 from .sound.library import hydrate_sound_library
 from .sound.selection import select_candidates
 from .timing import timing_report
+from .voice_lab import build_campaign, probe_catalog, render_campaign
 from .voices import load_voice_config, public_catalog, recommend_presets
 
 
@@ -37,6 +38,19 @@ def _add_qualify_args(parser, include_type=True):
     )
     parser.add_argument("--tag", action="append", default=[])
     parser.add_argument("--preview-dir", default=None)
+
+
+def _add_voice_lab_args(parser, include_out=False):
+    parser.add_argument("--scope", choices=("presets", "provider"), default="presets")
+    parser.add_argument(
+        "--stage",
+        choices=("fingerprint", "expressive", "age", "long-form", "all"),
+        default="fingerprint",
+    )
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--voices", default=None)
+    if include_out:
+        parser.add_argument("--out", default="voice-lab-output")
 
 
 def build_parser():
@@ -92,6 +106,14 @@ def build_parser():
     recommend.add_argument("--target", required=True)
     recommend.add_argument("--limit", type=int, default=3)
     recommend.add_argument("--voices", default=None)
+
+    voice_lab = sub.add_parser("voice-lab", help="Plan and render reproducible voice casting campaigns")
+    voice_lab_sub = voice_lab.add_subparsers(dest="voice_lab_command", required=True)
+    voice_lab_sub.add_parser("catalog", help="Publish the voice-lab probe catalog")
+    voice_lab_plan = voice_lab_sub.add_parser("plan", help="Build a campaign plan without synthesizing audio")
+    _add_voice_lab_args(voice_lab_plan)
+    voice_lab_render = voice_lab_sub.add_parser("render", help="Render a best-effort voice campaign")
+    _add_voice_lab_args(voice_lab_render, include_out=True)
 
     sounds = sub.add_parser("sounds", help="Publish the validated production sound meta-index")
     sounds.add_argument("--catalog", default=None)
@@ -180,6 +202,26 @@ def main(argv=None):
                 raise ValueError("--target must be a JSON object")
             config, _ = load_voice_config(args.voices)
             result = recommend_presets(target, config, args.limit)
+        elif args.command == "voice-lab":
+            if args.voice_lab_command == "catalog":
+                result = probe_catalog()
+            else:
+                config, _ = load_voice_config(args.voices)
+                if args.voice_lab_command == "plan":
+                    result = build_campaign(
+                        voice_config=config,
+                        scope=args.scope,
+                        stage=args.stage,
+                        limit=args.limit,
+                    )
+                else:
+                    result = render_campaign(
+                        args.out,
+                        voice_config=config,
+                        scope=args.scope,
+                        stage=args.stage,
+                        limit=args.limit,
+                    )
         elif args.command == "sounds":
             if args.id:
                 entry, _ = sound_info(args.id, args.catalog)
