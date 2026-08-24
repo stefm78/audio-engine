@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "evaluator_count": 1,
+  "source_schema": "voice-casting-human-evaluation-v1",
+  "source_exported_at": "2026-08-24T09:32:02.938Z",
+  "french_gate": {
+    "comparison_count": 44,
+    "voices": [
+      {"voice": "de-DE-SeraphinaMultilingualNeural", "wins": 3, "ties": 1, "losses": 0, "rejects": 0, "comparisons": 4, "pairwise_score": 0.875},
+      {"voice": "en-AU-WilliamMultilingualNeural", "wins": 3, "ties": 1, "losses": 0, "rejects": 0, "comparisons": 4, "pairwise_score": 0.875},
+      {"voice": "fr-FR-VivienneMultilingualNeural", "wins": 3, "ties": 1, "losses": 0, "rejects": 0, "comparisons": 4, "pairwise_score": 0.875},
+      {"voice": "fr-CH-ArianeNeural", "wins": 2, "ties": 2, "losses": 0, "rejects": 0, "comparisons": 4, "pairwise_score": 0.75},
+      {"voice": "de-DE-FlorianMultilingualNeural", "wins": 1, "ties": 2, "losses": 0, "rejects": 0, "comparisons": 3, "pairwise_score": 0.667},
+      {"voice": "fr-FR-HenriNeural", "wins": 2, "ties": 0, "losses": 1, "rejects": 0, "comparisons": 3, "pairwise_score": 0.667},
+      {"voice": "it-IT-GiuseppeMultilingualNeural", "wins": 1, "ties": 2, "losses": 0, "rejects": 0, "comparisons": 3, "pairwise_score": 0.667},
+      {"voice": "en-US-AvaMultilingualNeural", "wins": 2, "ties": 1, "losses": 1, "rejects": 0, "comparisons": 4, "pairwise_score": 0.625},
+      {"voice": "en-US-BrianMultilingualNeural", "wins": 2, "ties": 1, "losses": 1, "rejects": 0, "comparisons": 4, "pairwise_score": 0.625},
+      {"voice": "fr-BE-CharlineNeural", "wins": 2, "ties": 1, "losses": 1, "rejects": 0, "comparisons": 4, "pairwise_score": 0.625},
+      {"voice": "fr-FR-RemyMultilingualNeural", "wins": 1, "ties": 3, "losses": 0, "rejects": 0, "comparisons": 4, "pairwise_score": 0.625},
+      {"voice": "pt-BR-ThalitaMultilingualNeural", "wins": 2, "ties": 1, "losses": 1, "rejects": 0, "comparisons": 4, "pairwise_score": 0.625},
+      {"voice": "fr-CH-FabriceNeural", "wins": 1, "ties": 2, "losses": 1, "rejects": 0, "comparisons": 4, "pairwise_score": 0.5},
+      {"voice": "en-US-AndrewMultilingualNeural", "wins": 1, "ties": 1, "losses": 1, "rejects": 1, "comparisons": 4, "pairwise_score": 0.375},
+      {"voice": "fr-FR-EloiseNeural", "wins": 1, "ties": 1, "losses": 2, "rejects": 0, "comparisons": 4, "pairwise_score": 0.375},
+      {"voice": "fr-CA-ThierryNeural", "wins": 1, "ties": 0, "losses": 1, "rejects": 1, "comparisons": 3, "pairwise_score": 0.333},
+      {"voice": "en-US-EmmaMultilingualNeural", "wins": 0, "ties": 2, "losses": 2, "rejects": 0, "comparisons": 4, "pairwise_score": 0.25},
+      {"voice": "fr-CA-AntoineNeural", "wins": 1, "ties": 0, "losses": 2, "rejects": 1, "comparisons": 4, "pairwise_score": 0.25},
+      {"voice": "fr-CA-JeanNeural", "wins": 1, "ties": 0, "losses": 3, "rejects": 0, "comparisons": 4, "pairwise_score": 0.25},
+      {"voice": "ko-KR-HyunsuMultilingualNeural", "wins": 0, "ties": 2, "losses": 2, "rejects": 0, "comparisons": 4, "pairwise_score": 0.25},
+      {"voice": "fr-BE-GerardNeural", "wins": 0, "ties": 0, "losses": 3, "rejects": 1, "comparisons": 4, "pairwise_score": 0.0},
+      {"voice": "fr-CA-SylvieNeural", "wins": 0, "ties": 0, "losses": 4, "rejects": 0, "comparisons": 4, "pairwise_score": 0.0},
+      {"voice": "fr-FR-DeniseNeural", "wins": 0, "ties": 0, "losses": 4, "rejects": 0, "comparisons": 4, "pairwise_score": 0.0}
+    ],
+    "note": "Relative pairwise evidence from one evaluator only; pairwise_score is not an absolute French-quality rating."
+  },
+  "identity_abx": {
+    "correct": 46,
+    "total": 46,
+    "accuracy": 1.0,
+    "by_emotion": {
+      "panic": {"correct": 23, "total": 23, "accuracy": 1.0},
+      "tenderness": {"correct": 23, "total": 23, "accuracy": 1.0}
+    },
+    "note": "Each voice was tested once per emotion against one distractor; this is strong tested-condition evidence, not an all-pairs proof."
+  },
+  "perceived_age": {
+    "distribution": {"adult": 11, "child": 1, "mature": 7, "young_adult": 4},
+    "favorite_voices": ["ko-KR-HyunsuMultilingualNeural"],
+    "missing_stages": ["teen", "older", "very_old"],
+    "voices": [
+      {"voice": "de-DE-FlorianMultilingualNeural", "stage": "adult", "favorite": false},
+      {"voice": "de-DE-SeraphinaMultilingualNeural", "stage": "mature", "favorite": false},
+      {"voice": "en-AU-WilliamMultilingualNeural", "stage": "mature", "favorite": false},
+      {"voice": "en-US-AndrewMultilingualNeural", "stage": "mature", "favorite": false},
+      {"voice": "en-US-AvaMultilingualNeural", "stage": "adult", "favorite": false},
+      {"voice": "en-US-BrianMultilingualNeural", "stage": "mature", "favorite": false},
+      {"voice": "en-US-EmmaMultilingualNeural", "stage": "adult", "favorite": false},
+      {"voice": "fr-BE-CharlineNeural", "stage": "young_adult", "favorite": false},
+      {"voice": "fr-BE-GerardNeural", "stage": "adult", "favorite": false},
+      {"voice": "fr-CA-AntoineNeural", "stage": "mature", "favorite": false},
+      {"voice": "fr-CA-JeanNeural", "stage": "adult", "favorite": false},
+      {"voice": "fr-CA-SylvieNeural", "stage": "adult", "favorite": false},
+      {"voice": "fr-CA-ThierryNeural", "stage": "adult", "favorite": false},
+      {"voice": "fr-CH-ArianeNeural", "stage": "young_adult", "favorite": false},
+      {"voice": "fr-CH-FabriceNeural", "stage": "adult", "favorite": false},
+      {"voice": "fr-FR-DeniseNeural", "stage": "young_adult", "favorite": false},
+      {"voice": "fr-FR-EloiseNeural", "stage": "child", "favorite": false},
+      {"voice": "fr-FR-HenriNeural", "stage": "adult", "favorite": false},
+      {"voice": "fr-FR-RemyMultilingualNeural", "stage": "mature", "favorite": false},
+      {"voice": "fr-FR-VivienneMultilingualNeural", "stage": "adult", "favorite": false},
+      {"voice": "it-IT-GiuseppeMultilingualNeural", "stage": "adult", "favorite": false},
+      {"voice": "ko-KR-HyunsuMultilingualNeural", "stage": "young_adult", "favorite": true},
+      {"voice": "pt-BR-ThalitaMultilingualNeural", "stage": "mature", "favorite": false}
+    ],
+    "note": "Perceived age for the tested clip only; not biological age and not lineage validation."
+  },
+  "promotion": {
+    "automatic": false,
+    "note": "No production promotion from one evaluator alone."
+  }
+}
