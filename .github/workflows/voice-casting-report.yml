@@ -25,5 +25,5 @@ jobs:
         run: |
           gh issue create \
             --repo "${{ github.repository }}" \
-            --title "Voice casting fingerprint campaign $RUN_ID" \
-            --body "Automated Voice Casting Lab fingerprint campaign completed.\n\n- run_id: $RUN_ID\n- conclusion: $CONCLUSION\n- head_sha: $HEAD_SHA\n- run: $RUN_URL\n- artifact: voice-casting-provider-fingerprint\n\nThis issue is a machine locator for campaign evidence and may be closed after evidence retrieval."
+            --title "Voice casting campaign $RUN_ID" \
+            --body "Automated Voice Casting Lab campaign completed.\n\n- run_id: $RUN_ID\n- conclusion: $CONCLUSION\n- head_sha: $HEAD_SHA\n- run: $RUN_URL\n\nInspect run artifacts for the campaign evidence. This issue is a machine locator and may be closed after evidence retrieval."
