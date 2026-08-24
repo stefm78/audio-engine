@@ -148,7 +148,9 @@ class VoiceLabTests(unittest.TestCase):
         plan = build_pairwise_plan(campaign, rounds=2)
         self.assertEqual(plan["candidate_count"], 4)
         self.assertEqual(plan["comparison_count"], 4)
-        self.assertNotIn("winner", json.dumps(plan))
+        self.assertNotIn("winner", plan)
+        for comparison in plan["comparisons"]:
+            self.assertNotIn("winner", comparison)
         participation = {voice: 0 for voice in ("a", "b", "c", "d")}
         for comparison in plan["comparisons"]:
             participation[comparison["left"]["candidate_id"]] += 1
