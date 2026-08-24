@@ -1,34 +1,87 @@
 # Open/local expressive TTS challengers
 
-Status: Voice Casting Lab research only.
+Status: Voice Casting Lab research only. Production remains on the validated Edge path.
 
-## Arbitration — 2026-08-24
+## Current arbitration — 2026-08-24
 
-The current Edge path remains the production reference because it is simple, reliable and already validated for narration/identity. Human listening showed that rate/pitch/volume alone does not reliably produce acting on hard intentions, so open/local expressive models are evaluated as challengers.
+The project optimizes for a **character**, not an isolated impressive line. Qualification order is therefore:
 
-### 1. Chatterbox Multilingual V3 — first killer test
+1. correct, natural French;
+2. stable character identity across lines and emotions;
+3. convincing acting;
+4. operational simplicity and reproducibility;
+5. age/lineage only after identity and emotion are independently qualified.
 
-Why first:
+A model that clearly fails an identity or French gate is not rescued through broad parameter tuning. At most one narrow confirmation is allowed for a predeclared borderline result.
 
-- MIT code/model distribution;
-- current multilingual V3 explicitly supports French;
-- 0.5B multilingual T3 family;
-- zero-shot voice cloning from a reference clip;
-- local CPU path exists, although GPU is preferable;
-- simpler experimental integration than CosyVoice;
-- no cloud credentials or per-character pricing.
+For French reference anchors, dedicated `fr-FR` Edge voices are the safe baseline. A targeted sentinel campaign found the dedicated French voices clean while the tested `Multilingual` Edge voices intermittently switched to foreign pronunciation. Multilingual voices therefore remain laboratory candidates only and must not seed a French character identity anchor.
 
-Important limitation: `exaggeration` is an intensity-style scalar, not a semantic acting instruction such as fear, restrained anger or mystery. Earlier multilingual Chatterbox versions also had community reports that exaggeration produced little perceptual effect. V3 claims improved expressive generation, so this must be measured rather than assumed.
+## Challenger status
 
-The first experiment is intentionally tiny: one synthetic French reference identity (Edge Vivienne), two hard intentions (panic and mystery), and four blind options per intention: Edge baseline plus three Chatterbox V3 configurations. Chatterbox remains an optional lab dependency and is not added to `pyproject.toml`.
+### Chatterbox Multilingual V3 — eliminated
 
-### 2. CosyVoice 3 — semantic challenger if needed
+Chatterbox demonstrated strong acting on the initial hard probes but did not preserve character identity reliably when the emotional range was extended.
 
-CosyVoice 3 remains the strongest next candidate when semantic instruction following is required. The public 0.5B model is Apache-2.0 and the family supports multilingual / zero-shot / instruction-oriented inference. It is not first because its installation/deployment surface is significantly heavier (repository/submodules, normalization/runtime tooling and a larger operational envelope).
+Decision: **eliminated for stable-character rendering**. Do not restart tuning.
 
-### 3. Parler-TTS Multilingual — descriptive-style challenger
+### CosyVoice 3 — eliminated
 
-Parler-TTS Multilingual remains useful because speaking style is described in natural language and the model/code are permissively licensed. The current multilingual mini checkpoint is ~0.9B / ~3.75 GB and older than the other two candidates, so it is a second-line research option rather than the first integration.
+CosyVoice 3 won the two initial acting comparisons but failed both identity checks against the reference character.
+
+Decision: **eliminated for stable-character rendering**. Do not restart tuning.
+
+### VoxCPM2 — eliminated
+
+VoxCPM2 initially looked unusually promising: it beat Edge on acting while preserving identity in the first killer, then passed a broader two-character Stage 2. A later French-integrity investigation showed that the original multilingual Edge anchors were contaminated, so a clean confirmation was run with dedicated French anchors (Denise + Henri).
+
+Clean-anchor human result:
+
+- acting: VoxCPM2 `1/4`, Edge `1/4`, neither convincing `2/4`;
+- French: one eliminatory VoxCPM2 defect;
+- identity: `2/2` correct.
+
+Decision: **eliminated**. Identity preservation is interesting research evidence, but French robustness and acting generalization are insufficient. Do not reopen a tuning loop.
+
+The separate VoxCPM2 age-lineage experiment also failed its age-control gate (`1/6` requested ages perceived correctly) despite strong identity recognition. Age transformation by that method is not qualified.
+
+### Qwen3-TTS VoiceDesign 1.7B — excellent acting, identity strategy eliminated
+
+Pinned research source: `QwenLM/Qwen3-TTS` at `022e286b98fbec7e1e916cb940cdf532cd9f488e`.
+
+VoiceDesign human result on two deliberately similar French female characters:
+
+- acting: Qwen3 `4/4` vs dedicated-fr Edge controls;
+- French: `4/4` at least equivalent, zero invalid-French veto;
+- identity ABX: `2/4` correct.
+
+Decision: the **identity-by-description + fixed seed strategy is eliminated**. The result nevertheless establishes that Qwen3 has a very strong French expressive signal worth preserving through a more explicit speaker-identity mechanism.
+
+### Qwen3-TTS Base 1.7B — x-vector stable-identity experiment, borderline
+
+The Base model exposes `x_vector_only_mode=True`, where only the frozen speaker embedding is used; reference speech codes and reference text are not carried as ICL style conditioning. This directly tests the desired separation between **who is speaking** and **how the line is performed**.
+
+The experiment reused byte-for-byte the two VoiceDesign reference anchors; characters were not redesigned.
+
+First human result:
+
+- acting: Qwen3 x-vector `4/4` vs dedicated-fr Edge controls;
+- French: `4/4` equivalent, zero invalid-French veto;
+- identity ABX: `3/4` correct.
+
+This is **BORDERLINE, not PASS**. The single miss was Claire under panic. Per the predeclared rule, exactly one narrow high-arousal identity confirmation was generated with the same frozen anchors and no tuning.
+
+Canonical confirmation run: `32772435007`  
+Artifact: `voice-casting-qwen3-xvector-identity-confirm`  
+Output: two new high-arousal clips + the two frozen references.  
+Human decision still required: `2/2` identity plus no French defect to qualify this architecture in the Lab.
+
+No production promotion is implied by a confirmation pass.
+
+## Next decision tree
+
+If the narrow Qwen3 x-vector confirmation passes, the next work is a **minimal Lab-only character contract**: frozen character anchor / speaker prompt + generated line, followed by a small composition test across a broader emotional set. Production Edge remains unchanged until an explicit later promotion gate.
+
+If the confirmation fails, the x-vector stable-character strategy is eliminated without tuning. A distinct architecture may then be evaluated, but only after verifying French support, licensing, identity mechanism and operational cost. Do not resurrect Chatterbox, CosyVoice or VoxCPM2 tuning.
 
 ## Governance
 
