@@ -56,7 +56,7 @@ VoiceDesign human result on two deliberately similar French female characters:
 
 Decision: the **identity-by-description + fixed seed strategy is eliminated**. The result nevertheless establishes that Qwen3 has a very strong French expressive signal worth preserving through a more explicit speaker-identity mechanism.
 
-### Qwen3-TTS Base 1.7B — x-vector stable-identity experiment, borderline
+### Qwen3-TTS Base 1.7B — x-vector stable identity qualified in Lab
 
 The Base model exposes `x_vector_only_mode=True`, where only the frozen speaker embedding is used; reference speech codes and reference text are not carried as ICL style conditioning. This directly tests the desired separation between **who is speaking** and **how the line is performed**.
 
@@ -68,20 +68,42 @@ First human result:
 - French: `4/4` equivalent, zero invalid-French veto;
 - identity ABX: `3/4` correct.
 
-This is **BORDERLINE, not PASS**. The single miss was Claire under panic. Per the predeclared rule, exactly one narrow high-arousal identity confirmation was generated with the same frozen anchors and no tuning.
+That result was predeclared BORDERLINE because the sole miss was Claire under panic. The one permitted confirmation therefore used a new high-arousal sentence with the same frozen anchors and no tuning.
 
-Canonical confirmation run: `32772435007`  
+Confirmation run: `32772435007`  
 Artifact: `voice-casting-qwen3-xvector-identity-confirm`  
-Output: two new high-arousal clips + the two frozen references.  
-Human decision still required: `2/2` identity plus no French defect to qualify this architecture in the Lab.
+Artifact digest: `sha256:7f75914089e46fa447fdfe2e770213a9a0778a1df7b732510964b16ed8a426c0`
 
-No production promotion is implied by a confirmation pass.
+Human confirmation result:
 
-## Next decision tree
+- Claire / high arousal: identity correct;
+- Lucie / high arousal: identity correct;
+- French: both generated samples judged correct/natural;
+- final confirmation: **2/2 identity, 0 French veto**.
 
-If the narrow Qwen3 x-vector confirmation passes, the next work is a **minimal Lab-only character contract**: frozen character anchor / speaker prompt + generated line, followed by a small composition test across a broader emotional set. Production Edge remains unchanged until an explicit later promotion gate.
+Decision: **PASS the predeclared confirmation rule.** Qwen3 Base x-vector-only is qualified in Voice Casting Lab as a stable-character strategy across the tested panic/high-arousal and polite-threat material. This is not a production promotion and does not establish age-lineage support.
 
-If the confirmation fails, the x-vector stable-character strategy is eliminated without tuning. A distinct architecture may then be evaluated, but only after verifying French support, licensing, identity mechanism and operational cost. Do not resurrect Chatterbox, CosyVoice or VoxCPM2 tuning.
+Qualified anchor hashes used by the confirmation:
+
+- Claire: `1012fdc137a848e71a9403140267e62140ad87b14ee9a3236e106b57775afa55`;
+- Lucie: `f42c27ce633e0d009a95079cdfddc605772bbf48e9806fba6fba3749e5aa1ee2`.
+
+## Current implementation boundary
+
+The next architecture is deliberately small: a **Lab-only frozen character pack** containing a character id, one approved anchor, its SHA-256, and the explicit `x_vector_only` identity mode.
+
+Rules:
+
+- anchor generation is outside the pack and never happens silently;
+- the pack copies and hashes an already approved anchor;
+- hash mismatch aborts before a model is loaded;
+- one speaker prompt is reused for all lines of a character;
+- individual synthesis failures may yield a `partial` render rather than discard successful lines;
+- the anchor hash is verified again after rendering;
+- there is no fallback to another voice or provider;
+- `production_promoted=false` and `age_lineage=false` remain explicit.
+
+Production Edge is untouched until a later explicit promotion gate. Long-form fatigue and age continuity remain separate unresolved questions.
 
 ## Governance
 

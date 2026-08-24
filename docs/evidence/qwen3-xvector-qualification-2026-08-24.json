@@ -1,0 +1,51 @@
+{
+  "schema": "voice-casting-qualification-receipt-v1",
+  "date": "2026-08-24",
+  "candidate": "Qwen3-TTS Base 1.7B x-vector-only",
+  "source": {
+    "repository": "QwenLM/Qwen3-TTS",
+    "revision": "022e286b98fbec7e1e916cb940cdf532cd9f488e",
+    "model": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+    "model_revision": "74a6279626edc2d5a787d5b6467668eba0b86ef6",
+    "license": "Apache-2.0"
+  },
+  "identity_mode": "x_vector_only",
+  "initial_killer": {
+    "issue": 63,
+    "acting_vs_edge": {"qwen3_wins": 4, "total": 4},
+    "french": {"acceptable": 4, "total": 4, "invalid_vetoes": 0},
+    "identity": {"correct": 3, "total": 4},
+    "verdict": "borderline",
+    "rule": "Exactly one independent high-arousal identity confirmation; no tuning."
+  },
+  "narrow_confirmation": {
+    "issue": 65,
+    "run_id": 32772435007,
+    "artifact": "voice-casting-qwen3-xvector-identity-confirm",
+    "artifact_digest": "sha256:7f75914089e46fa447fdfe2e770213a9a0778a1df7b732510964b16ed8a426c0",
+    "probe": "Non ! Ne restez pas là ! Sortez, maintenant !",
+    "identity": {"correct": 2, "total": 2},
+    "french": {"acceptable": 2, "total": 2, "invalid_vetoes": 0},
+    "verdict": "pass"
+  },
+  "anchors": {
+    "claire": "1012fdc137a848e71a9403140267e62140ad87b14ee9a3236e106b57775afa55",
+    "lucie": "f42c27ce633e0d009a95079cdfddc605772bbf48e9806fba6fba3749e5aa1ee2"
+  },
+  "qualified_claims": {
+    "lab_stable_character": true,
+    "tested_high_arousal_identity": true,
+    "tested_polite_threat_identity": true,
+    "french_on_tested_material": true,
+    "production_promoted": false,
+    "age_lineage": false,
+    "long_form_qualified": false
+  },
+  "governance": {
+    "identity_first": true,
+    "no_silent_recast": true,
+    "no_anchor_regeneration": true,
+    "no_tuning_after_confirmation": true,
+    "production_edge_unchanged": true
+  }
+}
