@@ -1,0 +1,29 @@
+name: Voice Casting Campaign Report
+
+on:
+  workflow_run:
+    workflows:
+      - Voice Casting Bootstrap
+    types:
+      - completed
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish campaign run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Voice casting fingerprint campaign $RUN_ID" \
+            --body "Automated Voice Casting Lab fingerprint campaign completed.\n\n- run_id: $RUN_ID\n- conclusion: $CONCLUSION\n- head_sha: $HEAD_SHA\n- run: $RUN_URL\n- artifact: voice-casting-provider-fingerprint\n\nThis issue is a machine locator for campaign evidence and may be closed after evidence retrieval."
