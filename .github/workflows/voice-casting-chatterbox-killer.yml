@@ -1,0 +1,86 @@
+name: Voice Casting Chatterbox V3 Killer Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/voice-casting-chatterbox-killer.yml
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  chatterbox-killer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HF_HOME: ${{ github.workspace }}/.hf-cache
+      TOKENIZERS_PARALLELISM: "false"
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Cache public Chatterbox model files
+        uses: actions/cache@v4
+        with:
+          path: .hf-cache
+          key: chatterbox-multilingual-v3-20260824
+
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+
+      - name: Verify isolated experiment contract
+        run: python -m unittest tests.test_voice_lab_chatterbox_killer -v
+
+      - name: Install optional Chatterbox lab environment
+        run: |
+          python -m pip install --disable-pip-version-check chatterbox-tts==0.1.7
+          python -m pip check
+          df -h .
+
+      - name: Render 2-case CPU killer test
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from audio_engine.voice_lab_chatterbox_killer import render_experiment
+
+          result = render_experiment(Path("chatterbox-killer-output"))
+          print(json.dumps({
+              "status": result["status"],
+              "rendered_count": result["rendered_count"],
+              "failure_count": result["failure_count"],
+              "case_count": len(result["cases"]),
+          }, indent=2))
+          if result["status"] != "success":
+              print(json.dumps(result["failures"], indent=2, ensure_ascii=False))
+              raise SystemExit(1)
+          PY
+
+      - name: Upload blind listening bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-chatterbox-v3-killer
+          path: chatterbox-killer-output/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Voice Casting Chatterbox V3 killer $RUN_ID" \
+            --body "Open/local Chatterbox Multilingual V3 killer test completed.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- artifact: voice-casting-chatterbox-v3-killer\n- reference identity: synthetic Edge Vivienne, French\n- cases: panic + mystery\n- design: Edge baseline vs Chatterbox neutral/dramatic/strong\n- 8 comparison clips / 2 blind decisions\n\nLab evidence only. No production dependency or provider promotion."
