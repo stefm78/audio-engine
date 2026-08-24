@@ -1,6 +1,6 @@
+import tempfile
+import unittest
 from pathlib import Path
-
-import pytest
 
 from audio_engine.voice_lab import AGE_STAGES, build_campaign, probe_catalog, render_campaign
 from audio_engine.voices import resolve_segments
@@ -58,84 +58,90 @@ class FakeProvider:
         Path(path).write_bytes(b"fake-mp3")
 
 
-def test_probe_catalog_separates_identity_emotion_and_age():
-    catalog = probe_catalog()
-    assert catalog["principles"]["identity_first"] is True
-    assert catalog["principles"]["emotion_never_implies_recast"] is True
-    assert tuple(catalog["age_stages"]) == AGE_STAGES
-    assert any(item["kind"] == "age-lineage" for item in catalog["probes"])
-    assert any(item["kind"] == "performance" for item in catalog["probes"])
+class VoiceLabTests(unittest.TestCase):
+    def test_probe_catalog_separates_identity_emotion_and_age(self):
+        catalog = probe_catalog()
+        self.assertTrue(catalog["principles"]["identity_first"])
+        self.assertTrue(catalog["principles"]["emotion_never_implies_recast"])
+        self.assertEqual(tuple(catalog["age_stages"]), AGE_STAGES)
+        self.assertTrue(any(item["kind"] == "age-lineage" for item in catalog["probes"]))
+        self.assertTrue(any(item["kind"] == "performance" for item in catalog["probes"]))
+
+    def test_campaign_plan_can_scan_provider_french_voices_without_invented_traits(self):
+        plan = build_campaign(
+            voice_config=VOICE_CONFIG,
+            provider=FakeProvider(),
+            scope="provider",
+            stage="fingerprint",
+        )
+        self.assertEqual(plan["candidate_count"], 1)
+        self.assertEqual(plan["probe_count"], 3)
+        self.assertEqual(plan["job_count"], 3)
+        self.assertEqual(plan["jobs"][0]["candidate"]["voice"], "fr-FR-OneNeural")
+        self.assertNotIn("traits", plan["jobs"][0]["candidate"])
+
+    def test_render_campaign_is_best_effort_and_persists_manifest(self):
+        with tempfile.TemporaryDirectory() as temp_value:
+            root = Path(temp_value)
+            result = render_campaign(
+                root,
+                voice_config=VOICE_CONFIG,
+                provider=FakeProvider(),
+                scope="presets",
+                stage="age",
+            )
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["rendered_count"], len(VOICE_CONFIG["presets"]))
+            self.assertTrue((root / "campaign.json").exists())
+            self.assertEqual(
+                len(list((root / "clips").glob("*.mp3"))),
+                len(VOICE_CONFIG["presets"]),
+            )
+
+    def test_character_target_changes_do_not_recast_identity(self):
+        program = {
+            "segments": [
+                {
+                    "character_id": "captain",
+                    "target": {"gender": "male", "age": "adult", "energy": 2},
+                    "text": "Calme.",
+                },
+                {
+                    "character_id": "captain",
+                    "target": {"gender": "male", "age": "adult", "energy": 5, "tags": ["urgent"]},
+                    "text": "Urgence.",
+                    "rate": "+15%",
+                },
+            ]
+        }
+        resolved = resolve_segments(program, VOICE_CONFIG)
+        self.assertEqual(resolved[0]["voice"], resolved[1]["voice"])
+        self.assertEqual(resolved[1]["rate"], "+15%")
+        self.assertEqual(resolved[0]["casting_identity"], "fr-FR-ActorNeural")
+
+    def test_same_provider_voice_may_change_preset_for_performance(self):
+        program = {
+            "segments": [
+                {"character_id": "captain", "preset": "actor-calm", "text": "Calme."},
+                {"character_id": "captain", "preset": "actor-intense", "text": "Courez !"},
+            ]
+        }
+        resolved = resolve_segments(program, VOICE_CONFIG)
+        self.assertEqual(resolved[0]["voice"], "fr-FR-ActorNeural")
+        self.assertEqual(resolved[1]["voice"], "fr-FR-ActorNeural")
+        self.assertEqual(resolved[0]["resolved_preset"], "actor-calm")
+        self.assertEqual(resolved[1]["resolved_preset"], "actor-intense")
+
+    def test_different_provider_voice_for_same_character_is_rejected(self):
+        program = {
+            "segments": [
+                {"character_id": "captain", "preset": "actor-calm", "text": "Calme."},
+                {"character_id": "captain", "preset": "other-actor", "text": "Autre voix."},
+            ]
+        }
+        with self.assertRaisesRegex(ValueError, "cannot silently change provider voice"):
+            resolve_segments(program, VOICE_CONFIG)
 
 
-def test_campaign_plan_can_scan_provider_french_voices_without_invented_traits():
-    plan = build_campaign(
-        voice_config=VOICE_CONFIG,
-        provider=FakeProvider(),
-        scope="provider",
-        stage="fingerprint",
-    )
-    assert plan["candidate_count"] == 1
-    assert plan["probe_count"] == 3
-    assert plan["job_count"] == 3
-    assert plan["jobs"][0]["candidate"]["voice"] == "fr-FR-OneNeural"
-    assert "traits" not in plan["jobs"][0]["candidate"]
-
-
-def test_render_campaign_is_best_effort_and_persists_manifest(tmp_path):
-    result = render_campaign(
-        tmp_path,
-        voice_config=VOICE_CONFIG,
-        provider=FakeProvider(),
-        scope="presets",
-        stage="age",
-    )
-    assert result["status"] == "success"
-    assert result["rendered_count"] == len(VOICE_CONFIG["presets"])
-    assert (tmp_path / "campaign.json").exists()
-    assert len(list((tmp_path / "clips").glob("*.mp3"))) == len(VOICE_CONFIG["presets"])
-
-
-def test_character_target_changes_do_not_recast_identity():
-    program = {
-        "segments": [
-            {
-                "character_id": "captain",
-                "target": {"gender": "male", "age": "adult", "energy": 2},
-                "text": "Calme.",
-            },
-            {
-                "character_id": "captain",
-                "target": {"gender": "male", "age": "adult", "energy": 5, "tags": ["urgent"]},
-                "text": "Urgence.",
-                "rate": "+15%",
-            },
-        ]
-    }
-    resolved = resolve_segments(program, VOICE_CONFIG)
-    assert resolved[0]["voice"] == resolved[1]["voice"]
-    assert resolved[1]["rate"] == "+15%"
-    assert resolved[0]["casting_identity"] == "fr-FR-ActorNeural"
-
-
-def test_same_provider_voice_may_change_preset_for_performance():
-    program = {
-        "segments": [
-            {"character_id": "captain", "preset": "actor-calm", "text": "Calme."},
-            {"character_id": "captain", "preset": "actor-intense", "text": "Courez !"},
-        ]
-    }
-    resolved = resolve_segments(program, VOICE_CONFIG)
-    assert resolved[0]["voice"] == resolved[1]["voice"] == "fr-FR-ActorNeural"
-    assert resolved[0]["resolved_preset"] == "actor-calm"
-    assert resolved[1]["resolved_preset"] == "actor-intense"
-
-
-def test_different_provider_voice_for_same_character_is_rejected():
-    program = {
-        "segments": [
-            {"character_id": "captain", "preset": "actor-calm", "text": "Calme."},
-            {"character_id": "captain", "preset": "other-actor", "text": "Autre voix."},
-        ]
-    }
-    with pytest.raises(ValueError, match="cannot silently change provider voice"):
-        resolve_segments(program, VOICE_CONFIG)
+if __name__ == "__main__":
+    unittest.main()
