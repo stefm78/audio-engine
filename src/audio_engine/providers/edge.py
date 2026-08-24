@@ -10,6 +10,17 @@ def _locale_from_voice(voice):
     return match.group(1) if match else None
 
 
+def _speech_locale(communicate):
+    """Resolve the SSML language independently from the provider voice identity.
+
+    Normal voices keep their provider locale. Multilingual laboratory calls may
+    attach `_audio_engine_language_locale` to request French while deliberately
+    retaining a voice whose native provider locale is different.
+    """
+    explicit = getattr(communicate, "_audio_engine_language_locale", None)
+    return explicit or _locale_from_voice(getattr(communicate, "voice", None))
+
+
 def patch_ssml_locale():
     global _PATCHED
     if _PATCHED:
@@ -20,7 +31,7 @@ def patch_ssml_locale():
         if original:
             def localized(communicate, escaped_text):
                 ssml = original(communicate, escaped_text)
-                locale = _locale_from_voice(getattr(communicate, "voice", None))
+                locale = _speech_locale(communicate)
                 if locale:
                     ssml = re.sub(
                         r"xml:lang=(['\"])en-US\1",
@@ -72,6 +83,9 @@ class EdgeProvider:
                     pitch=segment.get("pitch", "+0Hz"),
                     volume=segment.get("volume", "+0%"),
                 )
+                language_locale = segment.get("language_locale")
+                if language_locale:
+                    communicator._audio_engine_language_locale = language_locale
                 await communicator.save(str(path))
                 return
             except Exception as exc:
