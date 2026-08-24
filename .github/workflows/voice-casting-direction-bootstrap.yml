@@ -1,0 +1,140 @@
+name: Voice Casting Direction Bootstrap
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/voice-casting-direction-bootstrap.yml
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  direction-probes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install engine
+        run: python -m pip install -e .
+
+      - name: Render fixed-identity direction treatments
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from audio_engine.providers.edge import EdgeProvider
+
+          voices = [
+              "fr-FR-VivienneMultilingualNeural",
+              "pt-BR-ThalitaMultilingualNeural",
+              "en-AU-WilliamMultilingualNeural",
+              "fr-CH-FabriceNeural",
+          ]
+
+          probes = {
+              "panic": "Courez ! Ils arrivent ! Fermez la porte, vite !",
+              "mystery": "Depuis trois nuits, la même lumière apparaît derrière cette fenêtre condamnée.",
+              "polite-threat": "Je vous conseille très sincèrement de reconsidérer votre réponse.",
+              "wonder": "Regardez... On distingue toute la vallée, jusqu'aux montagnes derrière la brume.",
+          }
+
+          treatments = {
+              "panic": [
+                  ("baseline", "+0%", "+0Hz", "+0%"),
+                  ("urgent", "+18%", "+6Hz", "+4%"),
+                  ("intense", "+28%", "+12Hz", "+6%"),
+                  ("strained", "+8%", "+18Hz", "+5%"),
+              ],
+              "mystery": [
+                  ("baseline", "+0%", "+0Hz", "+0%"),
+                  ("intimate", "-10%", "-4Hz", "-2%"),
+                  ("dark", "-18%", "-10Hz", "-3%"),
+                  ("suspended", "-6%", "+2Hz", "-4%"),
+              ],
+              "polite-threat": [
+                  ("baseline", "+0%", "+0Hz", "+0%"),
+                  ("controlled", "-8%", "-6Hz", "+2%"),
+                  ("cold", "-15%", "-12Hz", "+1%"),
+                  ("firm", "-3%", "-4Hz", "+5%"),
+              ],
+              "wonder": [
+                  ("baseline", "+0%", "+0Hz", "+0%"),
+                  ("open", "-5%", "+8Hz", "+2%"),
+                  ("bright", "+4%", "+15Hz", "+3%"),
+                  ("breathless", "+10%", "+10Hz", "+1%"),
+              ],
+          }
+
+          out = Path("direction-output")
+          clips = out / "clips"
+          clips.mkdir(parents=True, exist_ok=True)
+          provider = EdgeProvider()
+          manifest = {
+              "version": 1,
+              "kind": "edge-direction-treatment",
+              "principles": {
+                  "identity_fixed": True,
+                  "text_fixed_within_probe": True,
+                  "only_rate_pitch_volume_vary": True,
+                  "no_native_emotion_claim": True,
+              },
+              "voices": voices,
+              "cases": [],
+          }
+
+          for voice in voices:
+              for probe_id, text in probes.items():
+                  case = {"voice": voice, "probe": probe_id, "text": text, "treatments": []}
+                  for name, rate, pitch, volume in treatments[probe_id]:
+                      filename = f"{voice}--{probe_id}--{name}.mp3"
+                      segment = {
+                          "text": text,
+                          "voice": voice,
+                          "language_locale": "fr-FR",
+                          "rate": rate,
+                          "pitch": pitch,
+                          "volume": volume,
+                      }
+                      provider.synthesize(segment, clips / filename)
+                      case["treatments"].append({
+                          "id": name,
+                          "rate": rate,
+                          "pitch": pitch,
+                          "volume": volume,
+                          "file": f"clips/{filename}",
+                      })
+                  manifest["cases"].append(case)
+
+          (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(json.dumps({"status": "success", "case_count": len(manifest["cases"]), "clip_count": sum(len(c["treatments"]) for c in manifest["cases"])}, indent=2))
+          PY
+
+      - name: Upload direction evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-edge-direction-treatments
+          path: direction-output/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish run locator
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Voice casting direction treatments $RUN_ID" \
+            --body "One-shot Edge direction-treatment experiment completed.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- artifact: voice-casting-edge-direction-treatments\n- design: 4 voices × 4 hard intentions × 4 rate/pitch/volume treatments\n\nThis issue is a machine locator and may be closed after evidence retrieval."
