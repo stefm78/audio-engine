@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "date": "2026-08-24",
+  "kind": "voice-casting-chatterbox-v3-killer-human-evaluation",
+  "schema": "voice-casting-chatterbox-killer-v1",
+  "evaluator_count": 1,
+  "source_run": {
+    "workflow_run_id": 32722164952,
+    "model": "Chatterbox Multilingual V3",
+    "reference_voice": "fr-FR-VivienneMultilingualNeural",
+    "reference_source": "synthetic Edge voice",
+    "language": "fr"
+  },
+  "results": [
+    {
+      "intention": "panic",
+      "text": "Vite ! Ils arrivent ! Fermez la porte !",
+      "selected": "chatterbox-dramatic",
+      "provider": "chatterbox",
+      "exaggeration": 0.8,
+      "cfg_weight": 0.3,
+      "edge_baseline_selected": false
+    },
+    {
+      "intention": "mystery",
+      "text": "Depuis trois nuits, la même lumière apparaît derrière cette fenêtre condamnée.",
+      "selected": "chatterbox-dramatic",
+      "provider": "chatterbox",
+      "exaggeration": 0.8,
+      "cfg_weight": 0.3,
+      "edge_baseline_selected": false
+    }
+  ],
+  "summary": {
+    "chatterbox_wins": 2,
+    "edge_wins": 0,
+    "trial_count": 2,
+    "winning_bundle": {
+      "exaggeration": 0.8,
+      "cfg_weight": 0.3,
+      "temperature": 0.8
+    },
+    "gate": "promising",
+    "next": "expand to two voices and four hard intentions, and add explicit cross-provider identity-continuity ABX"
+  },
+  "limitations": [
+    "One evaluator and two trials are directional evidence, not a universal quality ranking.",
+    "The killer question combined acting, naturalness, and French quality; identity continuity was not independently tested.",
+    "No production provider promotion is authorized by this evidence alone."
+  ],
+  "promotion": {
+    "automatic": false,
+    "production_provider_changed": false
+  }
+}
