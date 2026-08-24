@@ -74,7 +74,7 @@ PROBES = (
         "stage": "expressive",
         "kind": "performance",
         "intention": "panic",
-        "text": "Courez ! Ils arrivent ! Fermez la porte, vite !",
+        "text": "Vite ! Ils arrivent ! Fermez la porte !",
     },
     {
         "id": "emotion-anger-contained",
