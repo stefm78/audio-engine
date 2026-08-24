@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "date": "2026-08-24",
+  "kind": "voice-casting-evidence-erratum",
+  "finding": "The segment-initial word 'Courez' was reported as systematically pronounced with an English accent in the panic probe.",
+  "provider_path": "edge",
+  "affected_probe": {
+    "id": "emotion-panic",
+    "invalid_text": "Courez ! Ils arrivent ! Fermez la porte, vite !",
+    "replacement_text": "Vite ! Ils arrivent ! Fermez la porte !"
+  },
+  "affected_evidence": [
+    {
+      "file": "docs/evidence/voice-casting-human-eval-2026-08-24.json",
+      "section": "identity_abx.by_emotion.panic",
+      "trial_count": 23,
+      "status": "linguistically_contaminated",
+      "use": "Do not use as clean identity-stability evidence until rerun with the corrected French panic probe."
+    },
+    {
+      "file": "docs/evidence/voice-casting-acting-eval-2026-08-24.json",
+      "section": "acting.by_intention.panic",
+      "comparison_count": 7,
+      "status": "linguistically_contaminated",
+      "use": "Exclude from acting-fit conclusions until rerun with the corrected French panic probe."
+    },
+    {
+      "source": "edge direction-treatment experiment",
+      "case_count": 4,
+      "status": "invalidated",
+      "use": "Original panic direction cases must not be scored; replacement clips were generated with the corrected text."
+    }
+  ],
+  "still_valid": {
+    "identity_abx_tenderness": {
+      "correct": 23,
+      "total": 23,
+      "accuracy": 1.0
+    },
+    "acting_comparisons_excluding_panic": {
+      "comparison_count": 49,
+      "reject_both_count": 31,
+      "reject_both_rate": 0.6326530612,
+      "note": "The broader expressive-ceiling conclusion remains supported even after removing all panic comparisons."
+    }
+  },
+  "policy": {
+    "pronunciation_defect_invalidates_artistic_score": true,
+    "language_gate_precedes_acting_score": true,
+    "do_not_promote_contaminated_evidence": true
+  }
+}
