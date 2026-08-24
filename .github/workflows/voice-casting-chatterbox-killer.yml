@@ -21,6 +21,8 @@ jobs:
       TOKENIZERS_PARALLELISM: "false"
       OMP_NUM_THREADS: "2"
       MKL_NUM_THREADS: "2"
+      CHATTERBOX_REV: 3f35dfc8fbe63e5b29793289dc68f1875bb317a5
+
     steps:
       - uses: actions/checkout@v6
 
@@ -34,7 +36,7 @@ jobs:
           ISSUE_URL=$(gh issue create \
             --repo "${{ github.repository }}" \
             --title "Voice Casting Chatterbox V3 killer running $RUN_ID" \
-            --body "Open/local Chatterbox Multilingual V3 killer test started.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- status: running\n- reference identity: synthetic Edge Vivienne, French\n- cases: panic + mystery\n- design: Edge baseline vs Chatterbox neutral/dramatic/strong\n\nThis locator is created before heavy model installation so failures remain diagnosable. Lab evidence only; no production promotion.")
+            --body "Open/local Chatterbox Multilingual V3 killer test started.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- status: running\n- upstream revision: $CHATTERBOX_REV\n- reference identity: synthetic Edge Vivienne, French\n- cases: panic + mystery\n- design: Edge baseline vs Chatterbox neutral/dramatic/strong\n\nThis locator is created before heavy model installation so failures remain diagnosable. Lab evidence only; no production promotion.")
           echo "issue_url=$ISSUE_URL" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-python@v6
@@ -46,7 +48,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .hf-cache
-          key: chatterbox-multilingual-v3-20260824
+          key: chatterbox-multilingual-v3-${{ env.CHATTERBOX_REV }}
 
       - name: Install core engine
         run: python -m pip install --disable-pip-version-check -e .
@@ -54,11 +56,29 @@ jobs:
       - name: Verify isolated experiment contract
         run: python -m unittest tests.test_voice_lab_chatterbox_killer -v
 
-      - name: Install optional Chatterbox lab environment
+      - name: Install pinned upstream Chatterbox V3 source
         run: |
-          python -m pip install --disable-pip-version-check chatterbox-tts==0.1.7
+          python -m pip install --disable-pip-version-check \
+            "git+https://github.com/resemble-ai/chatterbox.git@${CHATTERBOX_REV}"
           python -m pip check
           df -h .
+
+      - name: Verify V3 API before model initialization
+        run: |
+          python - <<'PY'
+          import inspect
+          from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+
+          params = inspect.signature(ChatterboxMultilingualTTS.from_pretrained).parameters
+          if "t3_model" not in params:
+              raise SystemExit(
+                  "Pinned Chatterbox source does not expose from_pretrained(..., t3_model=...)."
+              )
+          languages = ChatterboxMultilingualTTS.get_supported_languages()
+          if "fr" not in languages:
+              raise SystemExit("Pinned Chatterbox source does not advertise French support.")
+          print("Chatterbox V3 API verified; French supported.")
+          PY
 
       - name: Render 2-case CPU killer test
         run: |
@@ -95,6 +115,26 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          gh issue edit "$ISSUE_URL" \
+          ISSUE_NUMBER="${ISSUE_URL##*/}"
+          gh issue edit "$ISSUE_NUMBER" \
+            --repo "${{ github.repository }}" \
             --title "Voice Casting Chatterbox V3 killer completed $RUN_ID" \
-            --body "Open/local Chatterbox Multilingual V3 killer test completed.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- status: completed\n- artifact: voice-casting-chatterbox-v3-killer\n- reference identity: synthetic Edge Vivienne, French\n- cases: panic + mystery\n- design: Edge baseline vs Chatterbox neutral/dramatic/strong\n- 8 comparison clips / 2 blind decisions\n\nLab evidence only. No production dependency or provider promotion."
+            --body "Open/local Chatterbox Multilingual V3 killer test completed.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- status: completed\n- artifact: voice-casting-chatterbox-v3-killer\n- upstream revision: $CHATTERBOX_REV\n- reference identity: synthetic Edge Vivienne, French\n- cases: panic + mystery\n- design: Edge baseline vs Chatterbox neutral/dramatic/strong\n- 8 comparison clips / 2 blind decisions\n\nLab evidence only. No production dependency or provider promotion."
+
+      - name: Mark locator failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_URL: ${{ steps.locator.outputs.issue_url }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$ISSUE_URL" ]; then
+            echo "No locator issue was created; nothing to update."
+            exit 0
+          fi
+          ISSUE_NUMBER="${ISSUE_URL##*/}"
+          gh issue edit "$ISSUE_NUMBER" \
+            --repo "${{ github.repository }}" \
+            --title "Voice Casting Chatterbox V3 killer failed $RUN_ID" \
+            --body "Open/local Chatterbox Multilingual V3 killer test failed.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- status: failed\n- upstream revision: $CHATTERBOX_REV\n\nInspect the workflow logs for the exact failed step. Lab evidence only; no production dependency or provider promotion."
