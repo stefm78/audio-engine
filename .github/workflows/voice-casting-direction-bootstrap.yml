@@ -138,3 +138,5 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "Voice casting direction treatments $RUN_ID" \
             --body "One-shot Edge direction-treatment experiment completed.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- artifact: voice-casting-edge-direction-treatments\n- design: 4 voices × 4 hard intentions × 4 rate/pitch/volume treatments\n\nThis issue is a machine locator and may be closed after evidence retrieval."
+
+# bootstrap trigger: 2026-08-24T10:20Z
