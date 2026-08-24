@@ -1,0 +1,59 @@
+name: Voice Casting Multilingual Bootstrap
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/voice-casting-multilingual-bootstrap.yml
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  fingerprint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install engine
+        run: python -m pip install -e .
+
+      - name: Render expanded French fingerprint campaign
+        run: |
+          set -euo pipefail
+          audio-engine voice-lab render \
+            --scope provider \
+            --candidate-set fr-plus-multilingual \
+            --stage fingerprint \
+            --out voice-lab-output | tee voice-lab-result.json
+
+      - name: Upload campaign evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-fr-plus-multilingual-fingerprint
+          path: |
+            voice-lab-output/
+            voice-lab-result.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publish run locator
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Voice casting multilingual fingerprint $RUN_ID" \
+            --body "One-shot expanded French + Multilingual voice fingerprint campaign completed.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- artifact: voice-casting-fr-plus-multilingual-fingerprint\n\nThis issue is a machine locator and may be closed after evidence retrieval."
