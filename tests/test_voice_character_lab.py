@@ -12,6 +12,10 @@ from audio_engine.voice_character_lab import (
 )
 
 
+def _wav_bytes(payload=b"approved-french-anchor"):
+    return b"RIFF" + (len(payload) + 4).to_bytes(4, "little") + b"WAVE" + payload
+
+
 class _FakeProvider:
     identity_mode = "x_vector_only"
 
@@ -42,7 +46,7 @@ class _UndeclaredModeProvider:
 class CharacterLabTests(unittest.TestCase):
     def _pack(self, root):
         source = root / "source.wav"
-        source.write_bytes(b"approved-french-anchor")
+        source.write_bytes(_wav_bytes())
         pack = root / "pack"
         result = freeze_character_identity(
             "claire",
@@ -62,16 +66,33 @@ class CharacterLabTests(unittest.TestCase):
             self.assertEqual(result["anchor_sha256"], expected)
             self.assertEqual(data["anchor"]["sha256"], expected)
             self.assertFalse(data["anchor"]["regeneration"])
+            self.assertEqual(data["language"], "French")
             self.assertTrue(data["claims"]["stable_character"])
             self.assertFalse(data["claims"]["age_lineage"])
             self.assertFalse(data["claims"]["production_promoted"])
+
+    def test_freeze_requires_real_wave_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bad = root / "bad.wav"
+            bad.write_bytes(b"not-a-wave")
+            with self.assertRaisesRegex(CharacterLabError, "RIFF/WAVE"):
+                freeze_character_identity("claire", bad, root / "pack")
+
+    def test_freeze_is_french_only_until_separately_qualified(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.wav"
+            source.write_bytes(_wav_bytes())
+            with self.assertRaisesRegex(CharacterLabError, "French only"):
+                freeze_character_identity("claire", source, root / "pack", language="English")
 
     def test_freeze_refuses_silent_replacement(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _, pack, _ = self._pack(root)
             other = root / "other.wav"
-            other.write_bytes(b"different")
+            other.write_bytes(_wav_bytes(b"different"))
             with self.assertRaisesRegex(CharacterLabError, "silent replacement"):
                 freeze_character_identity("claire", other, pack)
 
@@ -79,7 +100,7 @@ class CharacterLabTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _, pack, _ = self._pack(root)
-            (pack / "anchor.wav").write_bytes(b"tampered")
+            (pack / "anchor.wav").write_bytes(_wav_bytes(b"tampered"))
             with self.assertRaisesRegex(CharacterLabError, "hash mismatch"):
                 load_character_identity(pack / "character.json")
 
@@ -88,7 +109,7 @@ class CharacterLabTests(unittest.TestCase):
             root = Path(tmp)
             _, pack, _ = self._pack(root)
             outside = root / "outside.wav"
-            outside.write_bytes(b"outside")
+            outside.write_bytes(_wav_bytes(b"outside"))
             spec = pack / "character.json"
             data = json.loads(spec.read_text(encoding="utf-8"))
             data["anchor"]["file"] = "../outside.wav"
@@ -105,7 +126,18 @@ class CharacterLabTests(unittest.TestCase):
             data = json.loads(spec.read_text(encoding="utf-8"))
             data["claims"]["age_lineage"] = True
             spec.write_text(json.dumps(data), encoding="utf-8")
-            with self.assertRaisesRegex(CharacterLabError, "age-lineage"):
+            with self.assertRaisesRegex(CharacterLabError, "age_lineage"):
+                load_character_identity(spec)
+
+    def test_contract_requires_explicit_non_production_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, pack, _ = self._pack(root)
+            spec = pack / "character.json"
+            data = json.loads(spec.read_text(encoding="utf-8"))
+            del data["claims"]["production_promoted"]
+            spec.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(CharacterLabError, "production_promoted"):
                 load_character_identity(spec)
 
     def test_render_requires_explicit_xvector_mode(self):
@@ -118,6 +150,46 @@ class CharacterLabTests(unittest.TestCase):
                     [{"id": "one", "text": "Une ligne."}],
                     root / "out",
                     provider=_UndeclaredModeProvider(),
+                )
+
+    def test_render_rejects_language_switch_before_prompt_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, pack, _ = self._pack(root)
+            provider = _FakeProvider()
+            with self.assertRaisesRegex(CharacterLabError, "changes language"):
+                render_character_lines(
+                    pack / "character.json",
+                    [{"id": "one", "text": "Hello.", "language": "English"}],
+                    root / "out",
+                    provider=provider,
+                )
+            self.assertEqual(provider.prompt_calls, 0)
+
+    def test_render_rejects_duplicate_line_ids_before_prompt_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, pack, _ = self._pack(root)
+            provider = _FakeProvider()
+            with self.assertRaisesRegex(CharacterLabError, "duplicate line id"):
+                render_character_lines(
+                    pack / "character.json",
+                    [{"id": "same", "text": "Un."}, {"id": "same", "text": "Deux."}],
+                    root / "out",
+                    provider=provider,
+                )
+            self.assertEqual(provider.prompt_calls, 0)
+
+    def test_render_rejects_output_inside_character_pack(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, pack, _ = self._pack(root)
+            with self.assertRaisesRegex(CharacterLabError, "outside the immutable character pack"):
+                render_character_lines(
+                    pack / "character.json",
+                    [{"id": "one", "text": "Une ligne."}],
+                    pack / "render",
+                    provider=_FakeProvider(),
                 )
 
     def test_render_builds_identity_once_and_is_deterministic(self):
@@ -163,18 +235,21 @@ class CharacterLabTests(unittest.TestCase):
             self.assertEqual(provider.prompt_calls, 1)
             self.assertEqual(len(provider.calls), 3)
             self.assertEqual(result["provider"], "qwen3-xvector-lab")
+            self.assertFalse((root / "out" / "clips" / "002--two.wav").exists())
 
-    def test_invalid_line_is_contract_error_not_silent_skip(self):
+    def test_invalid_line_is_contract_error_before_prompt_build(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _, pack, _ = self._pack(root)
+            provider = _FakeProvider()
             with self.assertRaisesRegex(CharacterLabError, "empty text"):
                 render_character_lines(
                     pack / "character.json",
                     [{"id": "bad", "text": ""}],
                     root / "out",
-                    provider=_FakeProvider(),
+                    provider=provider,
                 )
+            self.assertEqual(provider.prompt_calls, 0)
 
 
 if __name__ == "__main__":
