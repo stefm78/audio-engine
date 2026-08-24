@@ -8,7 +8,7 @@ on:
       - .github/workflows/voice-casting-bootstrap.yml
 
 jobs:
-  age:
+  long_form:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -22,16 +22,16 @@ jobs:
       - name: Install engine
         run: python -m pip install -e .
 
-      - name: Render French provider age-lineage campaign
+      - name: Render French provider long-form campaign
         run: |
           set -euo pipefail
-          audio-engine voice-lab render --scope provider --stage age --out voice-lab-output | tee voice-lab-result.json
+          audio-engine voice-lab render --scope provider --stage long-form --out voice-lab-output | tee voice-lab-result.json
 
       - name: Upload campaign evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: voice-casting-provider-age
+          name: voice-casting-provider-long-form
           path: |
             voice-lab-output/
             voice-lab-result.json
