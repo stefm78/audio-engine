@@ -1,0 +1,100 @@
+name: Voice Casting French Forced Bootstrap
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/voice-casting-frforced-bootstrap.yml
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  campaign:
+    strategy:
+      fail-fast: false
+      matrix:
+        stage:
+          - fingerprint
+          - expressive
+          - age
+          - long-form
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install engine
+        run: python -m pip install -e .
+
+      - name: Render non-French multilingual voices in explicit fr-FR
+        env:
+          STAGE: ${{ matrix.stage }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' | tee "voice-lab-${STAGE}-result.json"
+          import json
+          import os
+          from audio_engine.providers.edge import EdgeProvider
+          from audio_engine.voice_lab import render_campaign
+
+          class FrenchMultilingualProvider(EdgeProvider):
+              def list_voices(self, locale_prefix=None):
+                  voices = super().list_voices(locale_prefix=None)
+                  return [
+                      item for item in voices
+                      if not str(item.get("locale") or "").startswith("fr-")
+                      and "multilingual" in str(item.get("voice") or "").lower()
+                  ]
+
+              def synthesize(self, segment, path):
+                  segment = dict(segment)
+                  segment["language_locale"] = "fr-FR"
+                  return super().synthesize(segment, path)
+
+          stage = os.environ["STAGE"]
+          result = render_campaign(
+              f"voice-lab-{stage}",
+              provider=FrenchMultilingualProvider(),
+              scope="provider",
+              candidate_set="fr-plus-multilingual",
+              stage=stage,
+          )
+          print(json.dumps(result, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Upload campaign evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-multilingual-frforced-${{ matrix.stage }}
+          path: |
+            voice-lab-${{ matrix.stage }}/
+            voice-lab-${{ matrix.stage }}-result.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  report:
+    if: always()
+    needs:
+      - campaign
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULT: ${{ needs.campaign.result }}
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Voice casting French-forced multilingual campaign $RUN_ID" \
+            --body "One-shot non-French MultilingualNeural campaign with explicit fr-FR speech locale completed.\n\n- run_id: $RUN_ID\n- matrix_result: $RESULT\n- run: $RUN_URL\n- artifacts: voice-casting-multilingual-frforced-{fingerprint,expressive,age,long-form}\n\nThis issue is a machine locator and may be closed after evidence retrieval."
