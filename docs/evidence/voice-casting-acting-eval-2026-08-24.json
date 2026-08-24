@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "evaluator_count": 1,
+  "source_schema": "voice-casting-acting-evaluation-v1",
+  "source_exported_at": "2026-08-24T10:07:51.546Z",
+  "acting_overall": {
+    "comparison_count": 56,
+    "reject_both": 37,
+    "reject_both_fraction": 0.661,
+    "accepted_fraction": 0.339,
+    "note": "High reject-both rate indicates a provider/direction ceiling, not merely a voice-ranking problem."
+  },
+  "dimensions": {
+    "tenderness": {"comparisons": 7, "accepted_fraction": 0.714, "winners": ["fr-FR-EloiseNeural", "pt-BR-ThalitaMultilingualNeural", "fr-FR-HenriNeural"]},
+    "panic": {"comparisons": 7, "accepted_fraction": 0.143, "winners": ["fr-CH-FabriceNeural"]},
+    "contained_anger": {"comparisons": 7, "accepted_fraction": 0.429, "winners": ["en-US-AvaMultilingualNeural", "fr-CH-FabriceNeural"]},
+    "mystery": {"comparisons": 7, "accepted_fraction": 0.143, "winners": ["pt-BR-ThalitaMultilingualNeural"]},
+    "joy": {"comparisons": 7, "accepted_fraction": 0.429, "winners": ["fr-FR-VivienneMultilingualNeural", "it-IT-GiuseppeMultilingualNeural"]},
+    "polite_threat": {"comparisons": 7, "accepted_fraction": 0.286, "winners": []},
+    "fatigue_determined": {"comparisons": 7, "accepted_fraction": 0.429, "winners": ["fr-FR-VivienneMultilingualNeural", "fr-FR-EloiseNeural", "it-IT-GiuseppeMultilingualNeural"]},
+    "wonder": {"comparisons": 7, "accepted_fraction": 0.143, "winners": ["fr-CH-FabriceNeural"]}
+  },
+  "long_form": {
+    "comparison_count": 7,
+    "accepted_fraction": 0.714,
+    "winners": [
+      "fr-FR-VivienneMultilingualNeural",
+      "fr-CH-ArianeNeural",
+      "fr-BE-CharlineNeural",
+      "en-AU-WilliamMultilingualNeural",
+      "fr-FR-RemyMultilingualNeural"
+    ]
+  },
+  "interpretation": {
+    "identity_is_not_the_problem": "The previous ABX campaign produced 46/46 correct identity matches in panic and tenderness.",
+    "current_edge_strength": "Neutral and long-form narration are substantially stronger than explicit acting probes.",
+    "current_edge_weakness": "Panic, mystery and wonder each had only 1 accepted winner among 7 comparisons; polite threat produced no winner.",
+    "next_test": "Before adding another production provider, test whether rate/pitch/volume direction presets materially improve hard emotions on a small representative voice set. If not, benchmark a provider with native expressive controls."
+  }
+}
