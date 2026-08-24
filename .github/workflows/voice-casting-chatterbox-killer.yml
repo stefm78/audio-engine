@@ -24,6 +24,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Publish run locator immediately
+        id: locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          ISSUE_URL=$(gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Voice Casting Chatterbox V3 killer running $RUN_ID" \
+            --body "Open/local Chatterbox Multilingual V3 killer test started.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- status: running\n- reference identity: synthetic Edge Vivienne, French\n- cases: panic + mystery\n- design: Edge baseline vs Chatterbox neutral/dramatic/strong\n\nThis locator is created before heavy model installation so failures remain diagnosable. Lab evidence only; no production promotion.")
+          echo "issue_url=$ISSUE_URL" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -74,13 +87,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish run locator
+      - name: Mark locator completed
+        if: success()
         env:
           GH_TOKEN: ${{ github.token }}
+          ISSUE_URL: ${{ steps.locator.outputs.issue_url }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          gh issue create \
-            --repo "${{ github.repository }}" \
-            --title "Voice Casting Chatterbox V3 killer $RUN_ID" \
-            --body "Open/local Chatterbox Multilingual V3 killer test completed.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- artifact: voice-casting-chatterbox-v3-killer\n- reference identity: synthetic Edge Vivienne, French\n- cases: panic + mystery\n- design: Edge baseline vs Chatterbox neutral/dramatic/strong\n- 8 comparison clips / 2 blind decisions\n\nLab evidence only. No production dependency or provider promotion."
+          gh issue edit "$ISSUE_URL" \
+            --title "Voice Casting Chatterbox V3 killer completed $RUN_ID" \
+            --body "Open/local Chatterbox Multilingual V3 killer test completed.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- status: completed\n- artifact: voice-casting-chatterbox-v3-killer\n- reference identity: synthetic Edge Vivienne, French\n- cases: panic + mystery\n- design: Edge baseline vs Chatterbox neutral/dramatic/strong\n- 8 comparison clips / 2 blind decisions\n\nLab evidence only. No production dependency or provider promotion."
