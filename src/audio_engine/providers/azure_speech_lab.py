@@ -1,7 +1,7 @@
 """Azure Speech provider used only by the Voice Casting Lab.
 
 This module deliberately stays outside the production render path until blind
-listening evidence justifies promotion.  It uses the Azure Speech REST endpoint
+listening evidence justifies promotion. It uses the Azure Speech REST endpoint
 directly to keep dependencies minimal.
 """
 
@@ -66,7 +66,7 @@ class AzureSpeechLabProvider:
             headers={
                 "Ocp-Apim-Subscription-Key": self.key,
                 "Content-Type": "application/ssml+xml",
-                "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+                "X-Microsoft-OutputFormat": "audio-24khz-160kbitrate-mono-mp3",
                 "User-Agent": "recit-audio-engine-voice-lab",
             },
         )
