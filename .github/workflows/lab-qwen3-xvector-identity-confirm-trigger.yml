@@ -1,0 +1,24 @@
+name: LAB Trigger Qwen3 XVector Identity Confirm
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/triggers/qwen3-xvector-identity-confirm.txt
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch lab confirmation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run lab-qwen3-xvector-identity-confirm.yml \
+            --repo "${{ github.repository }}" \
+            --ref main
