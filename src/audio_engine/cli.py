@@ -17,7 +17,14 @@ from .sound.catalog import SOUND_TYPES, public_catalog as public_sound_catalog, 
 from .sound.library import hydrate_sound_library
 from .sound.selection import select_candidates
 from .timing import timing_report
-from .voice_lab import build_campaign, probe_catalog, render_campaign
+from .voice_lab import (
+    PAIRWISE_DIMENSIONS,
+    PROVIDER_CANDIDATE_SETS,
+    build_campaign,
+    probe_catalog,
+    render_campaign,
+    write_pairwise_bundle,
+)
 from .voices import load_voice_config, public_catalog, recommend_presets
 
 
@@ -46,6 +53,12 @@ def _add_voice_lab_args(parser, include_out=False):
         "--stage",
         choices=("fingerprint", "expressive", "age", "long-form", "all"),
         default="fingerprint",
+    )
+    parser.add_argument(
+        "--candidate-set",
+        choices=PROVIDER_CANDIDATE_SETS,
+        default="fr",
+        help="Provider discovery set; ignored when --scope presets",
     )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--voices", default=None)
@@ -107,13 +120,27 @@ def build_parser():
     recommend.add_argument("--limit", type=int, default=3)
     recommend.add_argument("--voices", default=None)
 
-    voice_lab = sub.add_parser("voice-lab", help="Plan and render reproducible voice casting campaigns")
+    voice_lab = sub.add_parser("voice-lab", help="Plan, render and evaluate reproducible voice casting campaigns")
     voice_lab_sub = voice_lab.add_subparsers(dest="voice_lab_command", required=True)
     voice_lab_sub.add_parser("catalog", help="Publish the voice-lab probe catalog")
     voice_lab_plan = voice_lab_sub.add_parser("plan", help="Build a campaign plan without synthesizing audio")
     _add_voice_lab_args(voice_lab_plan)
     voice_lab_render = voice_lab_sub.add_parser("render", help="Render a best-effort voice campaign")
     _add_voice_lab_args(voice_lab_render, include_out=True)
+    voice_lab_pairwise = voice_lab_sub.add_parser(
+        "pairwise",
+        help="Build a static listening bundle from one rendered campaign",
+    )
+    voice_lab_pairwise.add_argument("campaign", help="Path to campaign.json")
+    voice_lab_pairwise.add_argument("--probe", default="identity-neutral")
+    voice_lab_pairwise.add_argument(
+        "--dimension",
+        choices=tuple(sorted(PAIRWISE_DIMENSIONS)),
+        default="french_pronunciation",
+    )
+    voice_lab_pairwise.add_argument("--rounds", type=int, default=4)
+    voice_lab_pairwise.add_argument("--cross-gender", action="store_true")
+    voice_lab_pairwise.add_argument("--out", default="voice-pairwise")
 
     sounds = sub.add_parser("sounds", help="Publish the validated production sound meta-index")
     sounds.add_argument("--catalog", default=None)
@@ -205,6 +232,15 @@ def main(argv=None):
         elif args.command == "voice-lab":
             if args.voice_lab_command == "catalog":
                 result = probe_catalog()
+            elif args.voice_lab_command == "pairwise":
+                result = write_pairwise_bundle(
+                    args.campaign,
+                    args.out,
+                    probe_id=args.probe,
+                    dimension=args.dimension,
+                    rounds=args.rounds,
+                    same_gender=not args.cross_gender,
+                )
             else:
                 config, _ = load_voice_config(args.voices)
                 if args.voice_lab_command == "plan":
@@ -213,6 +249,7 @@ def main(argv=None):
                         scope=args.scope,
                         stage=args.stage,
                         limit=args.limit,
+                        candidate_set=args.candidate_set,
                     )
                 else:
                     result = render_campaign(
@@ -221,6 +258,7 @@ def main(argv=None):
                         scope=args.scope,
                         stage=args.stage,
                         limit=args.limit,
+                        candidate_set=args.candidate_set,
                     )
         elif args.command == "sounds":
             if args.id:

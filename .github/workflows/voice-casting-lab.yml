@@ -11,6 +11,14 @@ on:
         options:
           - provider
           - presets
+      candidate_set:
+        description: Provider discovery set
+        required: true
+        default: fr
+        type: choice
+        options:
+          - fr
+          - fr-plus-multilingual
       stage:
         description: Campaign stage
         required: true
@@ -47,7 +55,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          args=(voice-lab render --scope "${{ inputs.scope }}" --stage "${{ inputs.stage }}" --out voice-lab-output)
+          args=(
+            voice-lab render
+            --scope "${{ inputs.scope }}"
+            --stage "${{ inputs.stage }}"
+            --candidate-set "${{ inputs.candidate_set }}"
+            --out voice-lab-output
+          )
           if [[ -n "${{ inputs.limit }}" ]]; then
             args+=(--limit "${{ inputs.limit }}")
           fi
@@ -57,7 +71,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: voice-casting-${{ inputs.scope }}-${{ inputs.stage }}
+          name: voice-casting-${{ inputs.scope }}-${{ inputs.candidate_set }}-${{ inputs.stage }}
           path: |
             voice-lab-output/
             voice-lab-result.json

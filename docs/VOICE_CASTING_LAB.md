@@ -76,6 +76,16 @@ Purpose:
 - detect monotony;
 - measure pronunciation stability and long-form naturalness.
 
+## Candidate discovery
+
+Two provider discovery sets are supported.
+
+`fr` is the conservative baseline: only voices whose provider locale starts with `fr-`.
+
+`fr-plus-multilingual` expands the laboratory search space with every provider voice whose name contains `Multilingual`, even when its native provider locale is not French. These extra voices are **candidates only**. The engine does not assume that a multilingual model speaks French well merely because the provider labels it multilingual; French pronunciation remains an eliminatory listening gate.
+
+This lets the lab search a much broader actor palette without weakening production quality policy.
+
 ## Evaluation dimensions
 
 Campaign evidence may contain these dimensions:
@@ -96,7 +106,7 @@ Human comparison should prefer pairwise or ABX judgments over arbitrary absolute
 - ABX identity: after hearing the neutral reference, does the emotional performance still sound like the same character?
 - ABX lineage: is it plausible that the older voice is the same character decades later?
 
-Automatic speaker embeddings may later be used as laboratory evidence, but they must not become a required runtime dependency without demonstrated product value.
+Automatic speaker embeddings or acoustic features may be used as laboratory pre-screen evidence, but they must not become a required runtime dependency without demonstrated product value. Objective pre-screening is never promoted as an artistic score.
 
 ## Commands
 
@@ -112,19 +122,45 @@ Build a plan over the already validated preset palette without synthesizing audi
 audio-engine voice-lab plan --scope presets --stage fingerprint
 ```
 
-Discover the French voices exposed by the current provider and build the same fingerprint plan:
+Discover the French voices exposed by the current provider:
 
 ```bash
-audio-engine voice-lab plan --scope provider --stage fingerprint
+audio-engine voice-lab plan --scope provider --stage fingerprint --candidate-set fr
+```
+
+Expand discovery to French-locale plus multilingual provider voices:
+
+```bash
+audio-engine voice-lab plan --scope provider --stage fingerprint --candidate-set fr-plus-multilingual
 ```
 
 Render a best-effort campaign:
 
 ```bash
-audio-engine voice-lab render --scope provider --stage fingerprint --out voice-lab-output
+audio-engine voice-lab render --scope provider --stage fingerprint --candidate-set fr-plus-multilingual --out voice-lab-output
 ```
 
 The output contains `campaign.json` plus generated clips. Failures are recorded per job and do not erase successful clips.
+
+Generate a static pairwise listening bundle from one rendered campaign:
+
+```bash
+audio-engine voice-lab pairwise voice-lab-output/campaign.json \
+  --probe identity-neutral \
+  --dimension french_pronunciation \
+  --rounds 4 \
+  --out voice-pairwise
+```
+
+The bundle contains:
+
+- the minimal set of audio clips used by the comparisons;
+- `pairwise-plan.json` with the deterministic comparison schedule;
+- `index.html`, a dependency-free local player that exports `pairwise-results.json`.
+
+By default comparisons are stratified by perceived provider gender when metadata exists, limiting an obvious source of comparison bias. `--cross-gender` disables this stratification when a global comparison is intentionally desired.
+
+The planner does not contain a hidden winner and never converts provider metadata or acoustic pre-screening into an artistic decision.
 
 ## Provider truthfulness
 
