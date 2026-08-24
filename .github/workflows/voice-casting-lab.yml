@@ -1,0 +1,65 @@
+name: Voice Casting Lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Candidate source
+        required: true
+        default: provider
+        type: choice
+        options:
+          - provider
+          - presets
+      stage:
+        description: Campaign stage
+        required: true
+        default: fingerprint
+        type: choice
+        options:
+          - fingerprint
+          - expressive
+          - age
+          - long-form
+          - all
+      limit:
+        description: Optional maximum number of synthesis jobs
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  campaign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install engine
+        run: python -m pip install -e .
+
+      - name: Render campaign
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(voice-lab render --scope "${{ inputs.scope }}" --stage "${{ inputs.stage }}" --out voice-lab-output)
+          if [[ -n "${{ inputs.limit }}" ]]; then
+            args+=(--limit "${{ inputs.limit }}")
+          fi
+          audio-engine "${args[@]}" | tee voice-lab-result.json
+
+      - name: Upload campaign evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-${{ inputs.scope }}-${{ inputs.stage }}
+          path: |
+            voice-lab-output/
+            voice-lab-result.json
+          if-no-files-found: warn
+          retention-days: 14
