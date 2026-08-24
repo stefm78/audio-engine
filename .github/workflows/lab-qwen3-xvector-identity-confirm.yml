@@ -45,7 +45,7 @@ jobs:
         run: |
           ISSUE_URL=$(gh issue create --repo "${{ github.repository }}" \
             --title "Qwen3 x-vector identity confirmation running $RUN_ID" \
-            --body "Single narrow confirmation after borderline 3/4 identity.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- experiment_ref: $EXPERIMENT_REF\n- base model: $MODEL_ID @ $MODEL_REV\n- anchors: byte-for-byte from run $SOURCE_RUN_ID artifact $SOURCE_ARTIFACT\n- mode: x_vector_only\n- new probe: Non ! Ne restez pas là ! Sortez, maintenant !\n- output: 2 generated clips + 2 frozen references\n- human boundary: exactly 2 ABX identity decisions + French validity\n- pass: 2/2 identity and no French defect\n- no tuning, no Edge control, no production promotion."
+            --body "Single narrow confirmation after borderline 3/4 identity.\n\n- run_id: $RUN_ID\n- run: $RUN_URL\n- experiment_ref: $EXPERIMENT_REF\n- base model: $MODEL_ID @ $MODEL_REV\n- anchors: byte-for-byte from run $SOURCE_RUN_ID artifact $SOURCE_ARTIFACT\n- mode: x_vector_only\n- new probe: Non ! Ne restez pas là ! Sortez, maintenant !\n- output: 2 generated clips + 2 frozen references\n- human boundary: exactly 2 ABX identity decisions + French validity\n- pass: 2/2 identity and no French defect\n- no tuning, no Edge control, no production promotion.")
           echo "issue_url=$ISSUE_URL" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-python@v6
