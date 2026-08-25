@@ -164,11 +164,11 @@ jobs:
 
           ref_emb = {role: embed(path) for role, path in validated['references'].items()}
           matching = {
-              role: knn_vc.get_matching_set([path], vad_trigger_level=7)
+              role: knn_vc.get_matching_set([str(path)], vad_trigger_level=7)
               for role, path in validated['references'].items()
           }
           queries = {
-              case['id']: knn_vc.get_features(validated['sources'][case['id']])
+              case['id']: knn_vc.get_features(str(validated['sources'][case['id']]))
               for case in CASES
           }
 
