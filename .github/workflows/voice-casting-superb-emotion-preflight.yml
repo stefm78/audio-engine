@@ -1,0 +1,355 @@
+name: Voice Casting SUPERB Emotion Preflight
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-superb-emotion-preflight.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  MATRIX_RUN_ID: "32850471176"
+  MATRIX_ARTIFACT: facodec-four-clip-matrix
+  MODEL_REPO: superb/wav2vec2-base-superb-er
+  MODEL_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Download only immutable expressive sources
+        run: |
+          mkdir -p source evidence model
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          cat > source-hashes.txt <<'EOF'
+          ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f  source/clips/claire--panic.wav
+          d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84  source/clips/claire--sadness-contained.wav
+          EOF
+          sha256sum -c source-hashes.txt
+          test ! -d matrix
+          echo "FACodec outputs intentionally unavailable during instrument preflight"
+
+      - name: Install minimal SUPERB runtime
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
+          python -m pip install --disable-pip-version-check \
+            transformers==4.40.1 \
+            safetensors==0.4.5 \
+            huggingface_hub==0.36.0 \
+            soundfile==0.12.1 \
+            scipy==1.14.1 \
+            numpy==1.26.4
+          python -m pip check
+
+      - name: Download pinned Apache-2.0 SUPERB ER model
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+
+          root = Path(snapshot_download(
+              repo_id=os.environ["MODEL_REPO"],
+              revision=os.environ["MODEL_REV"],
+              allow_patterns=[
+                  "config.json",
+                  "preprocessor_config.json",
+                  "pytorch_model.bin",
+                  "model.safetensors",
+                  "README.md",
+              ],
+              local_dir="model",
+          ))
+          config_path = root / "config.json"
+          if not config_path.is_file():
+              raise SystemExit("SUPERB config missing")
+          weights = [p for p in [root / "model.safetensors", root / "pytorch_model.bin"] if p.is_file()]
+          if len(weights) != 1:
+              raise SystemExit(f"expected exactly one weight file, got {[p.name for p in weights]}")
+          cfg = json.loads(config_path.read_text(encoding="utf-8"))
+          id2label = {str(k): str(v).lower() for k, v in cfg.get("id2label", {}).items()}
+          expected = {"0": "neu", "1": "hap", "2": "ang", "3": "sad"}
+          if id2label != expected:
+              raise SystemExit(f"unexpected labels: {id2label}")
+          w = weights[0]
+          report = {
+              "repo": os.environ["MODEL_REPO"],
+              "revision": os.environ["MODEL_REV"],
+              "weight_file": w.name,
+              "weight_bytes": w.stat().st_size,
+              "weight_sha256": hashlib.sha256(w.read_bytes()).hexdigest(),
+              "labels": id2label,
+              "license_from_model_card": "apache-2.0",
+              "training_domain": "IEMOCAP English emotion recognition",
+              "role": "cross-lingual source-discrimination preflight only",
+          }
+          Path("evidence/model-provenance.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2), flush=True)
+          PY
+
+      - name: Preflight instrument on sources before FACodec access
+        id: source_gate
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          import numpy as np
+          import soundfile as sf
+          import torch
+          from scipy.signal import resample_poly
+          from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
+
+          torch.set_num_threads(2)
+          extractor = AutoFeatureExtractor.from_pretrained("model", local_files_only=True)
+          model = AutoModelForAudioClassification.from_pretrained("model", local_files_only=True)
+          model.eval()
+          labels = [str(model.config.id2label[i]).lower() for i in range(model.config.num_labels)]
+
+          def load16(path):
+              audio, sr = sf.read(path, always_2d=False, dtype="float32")
+              audio = np.asarray(audio, dtype=np.float32)
+              if audio.ndim == 2:
+                  audio = audio.mean(axis=1)
+              if sr != 16000:
+                  g = int(np.gcd(sr, 16000))
+                  audio = resample_poly(audio, 16000 // g, sr // g).astype(np.float32)
+              return audio
+
+          def profile(path):
+              audio = load16(path)
+              inputs = extractor(audio, sampling_rate=16000, return_tensors="pt", padding=False)
+              with torch.inference_mode():
+                  logits = model(**inputs).logits[0]
+              p = torch.softmax(logits, dim=-1).cpu().numpy().astype(np.float64)
+              return p
+
+          paths = {
+              "panic": "source/clips/claire--panic.wav",
+              "sadness-contained": "source/clips/claire--sadness-contained.wav",
+          }
+          profiles = {k: profile(v) for k, v in paths.items()}
+          top = {k: labels[int(np.argmax(v))] for k, v in profiles.items()}
+          distinct = top["panic"] != top["sadness-contained"]
+          cosine = float(np.dot(profiles["panic"], profiles["sadness-contained"]) / (
+              np.linalg.norm(profiles["panic"]) * np.linalg.norm(profiles["sadness-contained"])
+          ))
+          report = {
+              "status": "instrument-pass" if distinct else "instrument-reject",
+              "profiles": {
+                  emotion: {labels[i]: float(p[i]) for i in range(len(labels))}
+                  for emotion, p in profiles.items()
+              },
+              "top_labels": top,
+              "source_profile_cosine": cosine,
+              "gate": {
+                  "pass": distinct,
+                  "rule": "expressive panic and contained-sadness sources must have distinct argmax emotion labels",
+                  "absolute_threshold": False,
+                  "semantic_label_expectation": "diagnostic-only because model training speech is English",
+              },
+              "facodec_outputs_observed": False,
+              "claim": "instrument validity preflight only; not human emotion proof",
+          }
+          Path("evidence/source-preflight.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2), flush=True)
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:
+              f.write(f"eligible={'true' if distinct else 'false'}\n")
+          PY
+
+      - name: Download FACodec matrix only after source instrument PASS
+        if: steps.source_gate.outputs.eligible == 'true'
+        run: |
+          mkdir -p matrix
+          gh run download "$MATRIX_RUN_ID" --repo "${{ github.repository }}" -n "$MATRIX_ARTIFACT" -D matrix
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          final = json.loads(Path("matrix/final.json").read_text(encoding="utf-8"))
+          identity = json.loads(Path("matrix/identity-matrix.json").read_text(encoding="utf-8"))
+          assert final.get("status") == "machine-reject"
+          assert identity["identity_gate"]["all_cells_rank_target_first"] is True
+          expected = {
+              "panic--claire",
+              "panic--lucie",
+              "sadness-contained--claire",
+              "sadness-contained--lucie",
+          }
+          present = {p.stem for p in Path("matrix/clips").glob("*.wav")}
+          if present != expected:
+              raise SystemExit(f"unexpected FACodec WAV set: {sorted(present)}")
+          print("FACodec matrix admitted only after independent source instrument PASS")
+          PY
+
+      - name: Apply source-relative SUPERB emotion diagnostic
+        id: output_gate
+        if: steps.source_gate.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          import numpy as np
+          import soundfile as sf
+          import torch
+          from scipy.signal import resample_poly
+          from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
+
+          torch.set_num_threads(2)
+          extractor = AutoFeatureExtractor.from_pretrained("model", local_files_only=True)
+          model = AutoModelForAudioClassification.from_pretrained("model", local_files_only=True)
+          model.eval()
+          labels = [str(model.config.id2label[i]).lower() for i in range(model.config.num_labels)]
+
+          def load16(path):
+              audio, sr = sf.read(path, always_2d=False, dtype="float32")
+              audio = np.asarray(audio, dtype=np.float32)
+              if audio.ndim == 2:
+                  audio = audio.mean(axis=1)
+              if sr != 16000:
+                  g = int(np.gcd(sr, 16000))
+                  audio = resample_poly(audio, 16000 // g, sr // g).astype(np.float32)
+              return audio
+
+          def profile(path):
+              audio = load16(path)
+              inputs = extractor(audio, sampling_rate=16000, return_tensors="pt", padding=False)
+              with torch.inference_mode():
+                  logits = model(**inputs).logits[0]
+              p = torch.softmax(logits, dim=-1).cpu().numpy().astype(np.float64)
+              n = np.linalg.norm(p)
+              return p, p / n
+
+          source_paths = {
+              "panic": "source/clips/claire--panic.wav",
+              "sadness-contained": "source/clips/claire--sadness-contained.wav",
+          }
+          source_raw, source_norm = {}, {}
+          for emotion, path in source_paths.items():
+              raw, norm = profile(path)
+              source_raw[emotion], source_norm[emotion] = raw, norm
+
+          output_paths = {
+              "panic--claire": "matrix/clips/panic--claire.wav",
+              "panic--lucie": "matrix/clips/panic--lucie.wav",
+              "sadness-contained--claire": "matrix/clips/sadness-contained--claire.wav",
+              "sadness-contained--lucie": "matrix/clips/sadness-contained--lucie.wav",
+          }
+
+          def cosine(a, b):
+              return float(np.dot(a, b))
+
+          rows = {}
+          all_pass = True
+          for cell, path in output_paths.items():
+              intended = "sadness-contained" if cell.startswith("sadness-contained") else "panic"
+              other = "panic" if intended == "sadness-contained" else "sadness-contained"
+              raw, norm = profile(path)
+              sim_intended = cosine(norm, source_norm[intended])
+              sim_other = cosine(norm, source_norm[other])
+              margin = sim_intended - sim_other
+              passed = margin > 0.0
+              all_pass = all_pass and passed
+              rows[cell] = {
+                  "intended_source": intended,
+                  "profile": {labels[i]: float(raw[i]) for i in range(len(labels))},
+                  "top_label": labels[int(np.argmax(raw))],
+                  "similarity_to_intended_source": sim_intended,
+                  "similarity_to_other_source": sim_other,
+                  "relative_margin": margin,
+                  "ranks_intended_source_first": passed,
+              }
+
+          report = {
+              "status": "pass" if all_pass else "reject",
+              "source_profiles": {
+                  emotion: {labels[i]: float(source_raw[emotion][i]) for i in range(len(labels))}
+                  for emotion in source_raw
+              },
+              "outputs": rows,
+              "gate": {
+                  "pass": all_pass,
+                  "rule": "all four FACodec output profiles must be closer by cosine to their corresponding expressive source than to the other source emotion",
+                  "absolute_threshold": False,
+              },
+              "new_audio_generated": False,
+              "claim": "cross-lingual source-relative machine emotion diagnostic; not human acting proof",
+          }
+          Path("evidence/facodec-source-relative.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2), flush=True)
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:
+              f.write(f"eligible={'true' if all_pass else 'false'}\n")
+          PY
+
+      - name: Record staged conclusion
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          src = Path("evidence/source-preflight.json")
+          out = Path("evidence/facodec-source-relative.json")
+          if not src.is_file():
+              status = "infrastructure-incomplete"
+              decision = "SUPERB source preflight produced no evidence."
+          else:
+              source = json.loads(src.read_text(encoding="utf-8"))
+              if source.get("status") != "instrument-pass":
+                  status = "instrument-reject"
+                  decision = "SUPERB does not distinguish the immutable source emotions; reject the instrument without reading FACodec outputs."
+              elif not out.is_file():
+                  status = "infrastructure-incomplete"
+                  decision = "SUPERB source preflight passed but FACodec output diagnostic produced no evidence."
+              else:
+                  result = json.loads(out.read_text(encoding="utf-8"))
+                  if result.get("status") == "pass":
+                      status = "emotion-diagnostic-pass"
+                      decision = "SUPERB distinguishes the source emotions and all four FACodec outputs remain source-relative emotion-consistent. Proceed to pre-registered third speaker-verifier arbitration; FACodec remains unqualified meanwhile."
+                  else:
+                      status = "facodec-emotion-reject"
+                      decision = "A source-valid SUPERB instrument rejects FACodec source-relative emotion preservation. Retire FACodec for this killer with no tuning."
+          final = {
+              "status": status,
+              "decision": decision,
+              "new_audio_generated": False,
+              "facodec_parameters_tuned": False,
+              "human_proof": False,
+              "production_qualified": False,
+              "pages_published": False,
+          }
+          Path("evidence/final.json").write_text(json.dumps(final, indent=2), encoding="utf-8")
+          print(json.dumps(final, indent=2), flush=True)
+          PY
+
+      - name: Upload source-first emotion evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: superb-source-first-emotion-diagnostic
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
