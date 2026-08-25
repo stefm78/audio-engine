@@ -107,6 +107,61 @@ jobs:
           print(json.dumps(report, indent=2), flush=True)
           PY
 
+      - name: Prove legacy weight-norm checkpoint loads exactly
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import torch
+          from transformers import AutoModelForAudioClassification
+
+          weight_path = Path("model/pytorch_model.bin")
+          if not weight_path.is_file():
+              raise SystemExit("compatibility proof currently requires pinned pytorch_model.bin")
+          checkpoint = torch.load(weight_path, map_location="cpu", weights_only=True)
+          if isinstance(checkpoint, dict) and "state_dict" in checkpoint and isinstance(checkpoint["state_dict"], dict):
+              checkpoint = checkpoint["state_dict"]
+          g_key = "wav2vec2.encoder.pos_conv_embed.conv.weight_g"
+          v_key = "wav2vec2.encoder.pos_conv_embed.conv.weight_v"
+          if g_key not in checkpoint or v_key not in checkpoint:
+              raise SystemExit("legacy weight-norm keys missing from pinned checkpoint")
+
+          torch.manual_seed(0)
+          model = AutoModelForAudioClassification.from_pretrained("model", local_files_only=True)
+          conv = model.wav2vec2.encoder.pos_conv_embed.conv
+          if hasattr(conv, "parametrizations") and hasattr(conv.parametrizations, "weight"):
+              actual_g = conv.parametrizations.weight.original0.detach().cpu()
+              actual_v = conv.parametrizations.weight.original1.detach().cpu()
+              representation = "parametrizations.weight.original0/original1"
+          elif hasattr(conv, "weight_g") and hasattr(conv, "weight_v"):
+              actual_g = conv.weight_g.detach().cpu()
+              actual_v = conv.weight_v.detach().cpu()
+              representation = "weight_g/weight_v"
+          else:
+              raise SystemExit("loaded Wav2Vec2 convolution exposes no recognized weight-norm parameters")
+
+          expected_g = checkpoint[g_key].detach().cpu()
+          expected_v = checkpoint[v_key].detach().cpu()
+          g_equal = torch.equal(actual_g, expected_g)
+          v_equal = torch.equal(actual_v, expected_v)
+          report = {
+              "checkpoint_keys": [g_key, v_key],
+              "runtime_representation": representation,
+              "weight_g_exact_equal": g_equal,
+              "weight_v_exact_equal": v_equal,
+              "checkpoint_g_shape": list(expected_g.shape),
+              "runtime_g_shape": list(actual_g.shape),
+              "checkpoint_v_shape": list(expected_v.shape),
+              "runtime_v_shape": list(actual_v.shape),
+              "pass": bool(g_equal and v_equal),
+              "claim": "direct tensor equality proof; warnings alone are not accepted or rejected",
+          }
+          Path("evidence/runtime-compatibility.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2), flush=True)
+          if not report["pass"]:
+              raise SystemExit("SUPERB checkpoint weight-norm tensors were not loaded exactly")
+          PY
+
       - name: Preflight instrument on sources before FACodec access
         id: source_gate
         run: |
@@ -121,7 +176,11 @@ jobs:
           from scipy.signal import resample_poly
           from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
 
+          compat = json.loads(Path("evidence/runtime-compatibility.json").read_text(encoding="utf-8"))
+          if compat.get("pass") is not True:
+              raise SystemExit("runtime compatibility proof missing")
           torch.set_num_threads(2)
+          torch.manual_seed(0)
           extractor = AutoFeatureExtractor.from_pretrained("model", local_files_only=True)
           model = AutoModelForAudioClassification.from_pretrained("model", local_files_only=True)
           model.eval()
@@ -218,7 +277,11 @@ jobs:
           from scipy.signal import resample_poly
           from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
 
+          compat = json.loads(Path("evidence/runtime-compatibility.json").read_text(encoding="utf-8"))
+          if compat.get("pass") is not True:
+              raise SystemExit("runtime compatibility proof missing")
           torch.set_num_threads(2)
+          torch.manual_seed(0)
           extractor = AutoFeatureExtractor.from_pretrained("model", local_files_only=True)
           model = AutoModelForAudioClassification.from_pretrained("model", local_files_only=True)
           model.eval()
@@ -311,9 +374,13 @@ jobs:
           import json
           from pathlib import Path
 
+          compat_path = Path("evidence/runtime-compatibility.json")
           src = Path("evidence/source-preflight.json")
           out = Path("evidence/facodec-source-relative.json")
-          if not src.is_file():
+          if not compat_path.is_file() or json.loads(compat_path.read_text(encoding="utf-8")).get("pass") is not True:
+              status = "runtime-incompatible"
+              decision = "SUPERB checkpoint did not prove exact weight-norm loading; reject this runtime and draw no emotion conclusion."
+          elif not src.is_file():
               status = "infrastructure-incomplete"
               decision = "SUPERB source preflight produced no evidence."
           else:
@@ -331,7 +398,7 @@ jobs:
                       decision = "SUPERB distinguishes the source emotions and all four FACodec outputs remain source-relative emotion-consistent. Proceed to pre-registered third speaker-verifier arbitration; FACodec remains unqualified meanwhile."
                   else:
                       status = "facodec-emotion-reject"
-                      decision = "A source-valid SUPERB instrument rejects FACodec source-relative emotion preservation. Retire FACodec for this killer with no tuning."
+                      decision = "A source-valid, exact-checkpoint SUPERB instrument rejects FACodec source-relative emotion preservation. Retire FACodec for this killer with no tuning."
           final = {
               "status": status,
               "decision": decision,
