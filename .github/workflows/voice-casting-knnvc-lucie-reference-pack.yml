@@ -1,0 +1,302 @@
+name: Voice Casting kNN-VC Lucie Reference Pack Killer
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-knnvc-lucie-reference-pack.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  BASELINE_RUN_ID: "32846237805"
+  BASELINE_ARTIFACT: voice-casting-knnvc-identity-lock
+  KNNVC_REV: c616845c4e309e24d5927f15adbdf277a3d65358
+  KNNVC_RELEASE: v0.1
+  WAVLM_SHA256: 6fb4b3c3e6aa567f0a997b30855859cb81528ee8078802af439f7b2da0bf100f
+  HIFIGAN_SHA256: f924c7632c6eaf99004386d62293e124419e33582573552a6ae976eb88ed2dd5
+  ECAPA_REV: eac27266f68caa806381260bd44ace38b136c76a
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL: small
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Zero-cost protocol gate
+        run: |
+          python - <<'PY'
+          # One architectural repair only: richer Lucie reference coverage.
+          # No new TTS, no VC parameter tuning, one new conversion maximum.
+          pool = ['reference-lucie.wav', 'clips/lucie--panic.wav', 'clips/lucie--wonder.wav']
+          assert len(pool) == 3
+          assert 'sadness-contained' not in ' '.join(pool)
+          assert 4 == 4  # kNN paper/default top-k remains unchanged.
+          print('protocol: 2 candidate refs -> independent ECAPA gate -> max 1 VC -> ECAPA + Whisper Small')
+          PY
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+      - name: Download immutable source and baseline evidence
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          gh run download "$BASELINE_RUN_ID" --repo "${{ github.repository }}" -n "$BASELINE_ARTIFACT" -D baseline
+          cat > hashes.txt <<'EOF'
+          3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe  source/reference-claire.wav
+          9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822  source/reference-lucie.wav
+          d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84  source/clips/claire--sadness-contained.wav
+          8168d32c7a1ee81485396ff426f1fa6ad306a54765d60351e10dbe7231da3a09  source/clips/lucie--panic.wav
+          f18ee8d13204d1a1c0ccc6e8621edf107fff8236946a174aaa6d95e7b7ef1788  source/clips/lucie--wonder.wav
+          c1eb5cd6ab3e99c960022ff6dd35f36b37a3a7133ac7efc150aa5e61e2393260  baseline/clips/sadness-contained--lucie.wav
+          EOF
+          sha256sum -c hashes.txt
+      - name: Install independent identity verifier
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchaudio==2.5.1
+          python -m pip install --disable-pip-version-check numpy==1.26.4 speechbrain==1.0.3 huggingface_hub==0.36.0 soundfile==0.12.1
+          python -m pip check
+          mkdir -p verifier/ecapa result
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(
+              repo_id='speechbrain/spkrec-ecapa-voxceleb',
+              revision=os.environ['ECAPA_REV'],
+              local_dir='verifier/ecapa',
+          ))
+          PY
+      - id: pool
+        name: Gate existing Lucie candidate references before any VC download
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import torch, torchaudio
+          from speechbrain.inference.speaker import EncoderClassifier
+
+          torch.set_num_threads(2)
+          model = EncoderClassifier.from_hparams(
+              source=str(Path('verifier/ecapa').resolve()),
+              savedir=str(Path('verifier/runtime').resolve()),
+              run_opts={'device':'cpu'},
+          )
+          def emb(path):
+              wav, sr = torchaudio.load(path)
+              wav = wav.mean(0, keepdim=True)
+              if sr != 16000:
+                  wav = torchaudio.functional.resample(wav, sr, 16000)
+              with torch.inference_mode():
+                  e = model.encode_batch(wav).squeeze().cpu()
+              return torch.nn.functional.normalize(e, dim=0)
+          def sim(a,b): return float(torch.dot(a,b))
+
+          claire = emb('source/reference-claire.wav')
+          lucie = emb('source/reference-lucie.wav')
+          candidates = {
+              'lucie-panic': 'source/clips/lucie--panic.wav',
+              'lucie-wonder': 'source/clips/lucie--wonder.wav',
+          }
+          rows = {}
+          eligible = True
+          for name, path in candidates.items():
+              e = emb(path)
+              sc, sl = sim(e, claire), sim(e, lucie)
+              row = {'sim_claire': sc, 'sim_lucie': sl, 'lucie_margin': sl-sc, 'ranks_lucie_first': sl > sc}
+              rows[name] = row
+              eligible &= row['ranks_lucie_first']
+              print(name, json.dumps(row), flush=True)
+          report = {
+              'schema':'knnvc-lucie-reference-pool-gate-v1',
+              'pool_seconds':20.56,
+              'pool':['reference-lucie.wav','lucie--panic.wav','lucie--wonder.wav'],
+              'candidate_scores':rows,
+              'rule':'each added pre-existing clip must rank Lucie above Claire by independent ECAPA; no absolute threshold',
+              'eligible':eligible,
+          }
+          Path('result/pool-gate.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:
+              f.write(f"eligible={'true' if eligible else 'false'}\n")
+          PY
+      - name: Checkout pinned kNN-VC source
+        if: steps.pool.outputs.eligible == 'true'
+        run: |
+          git clone --filter=blob:none https://github.com/bshall/knn-vc.git knnvc-upstream
+          cd knnvc-upstream
+          git checkout "$KNNVC_REV"
+          test "$(git rev-parse HEAD)" = "$KNNVC_REV"
+      - name: Download only the already-qualified kNN-VC inference weights
+        if: steps.pool.outputs.eligible == 'true'
+        run: |
+          CACHE="$HOME/.cache/torch/hub/checkpoints"
+          mkdir -p "$CACHE"
+          curl -L --fail --retry 3 "https://github.com/bshall/knn-vc/releases/download/$KNNVC_RELEASE/WavLM-Large.pt" -o "$CACHE/WavLM-Large.pt"
+          curl -L --fail --retry 3 "https://github.com/bshall/knn-vc/releases/download/$KNNVC_RELEASE/prematch_g_02500000.pt" -o "$CACHE/prematch_g_02500000.pt"
+          echo "$WAVLM_SHA256  $CACHE/WavLM-Large.pt" | sha256sum -c -
+          echo "$HIFIGAN_SHA256  $CACHE/prematch_g_02500000.pt" | sha256sum -c -
+      - id: convert
+        name: Convert only Lucie contained sadness and protect identity priority
+        if: steps.pool.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import json, os, time
+          from pathlib import Path
+          import torch, torchaudio
+          from speechbrain.inference.speaker import EncoderClassifier
+
+          torch.set_num_threads(2)
+          repo = Path('knnvc-upstream').resolve()
+          vc = torch.hub.load(str(repo), 'knn_vc', source='local', prematched=True, pretrained=True, device='cpu')
+          pool_paths = [
+              'source/reference-lucie.wav',
+              'source/clips/lucie--panic.wav',
+              'source/clips/lucie--wonder.wav',
+          ]
+          matching = vc.get_matching_set([str(p) for p in pool_paths], vad_trigger_level=7)
+          query = vc.get_features('source/clips/claire--sadness-contained.wav')
+          started = time.monotonic()
+          with torch.inference_mode():
+              audio = vc.match(query, matching, topk=4, device='cpu')
+          out = Path('result/sadness-contained--lucie-rich-pool.wav')
+          torchaudio.save(out, audio.unsqueeze(0), 16000)
+          elapsed = round(time.monotonic()-started, 3)
+
+          verifier = EncoderClassifier.from_hparams(
+              source=str(Path('verifier/ecapa').resolve()),
+              savedir=str(Path('verifier/runtime2').resolve()),
+              run_opts={'device':'cpu'},
+          )
+          def emb(path):
+              wav, sr = torchaudio.load(path)
+              wav = wav.mean(0, keepdim=True)
+              if sr != 16000: wav = torchaudio.functional.resample(wav, sr, 16000)
+              with torch.inference_mode(): e = verifier.encode_batch(wav).squeeze().cpu()
+              return torch.nn.functional.normalize(e, dim=0)
+          def sim(a,b): return float(torch.dot(a,b))
+          claire, lucie = emb('source/reference-claire.wav'), emb('source/reference-lucie.wav')
+          baseline, new = emb('baseline/clips/sadness-contained--lucie.wav'), emb(out)
+          bsc, bsl = sim(baseline, claire), sim(baseline, lucie)
+          nsc, nsl = sim(new, claire), sim(new, lucie)
+          baseline_margin, new_margin = bsl-bsc, nsl-nsc
+          identity_pass = (nsl > nsc) and (new_margin >= baseline_margin)
+          report = {
+              'schema':'knnvc-lucie-reference-pack-conversion-v1',
+              'conversion_count':1,
+              'render_seconds':elapsed,
+              'topk':4,
+              'baseline':{'sim_claire':bsc,'sim_lucie':bsl,'lucie_margin':baseline_margin},
+              'rich_pool':{'sim_claire':nsc,'sim_lucie':nsl,'lucie_margin':new_margin},
+              'identity_rule':'new ranks Lucie first and Lucie margin >= baseline margin; identity has priority',
+              'identity_pass':identity_pass,
+          }
+          Path('result/conversion.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+          print(json.dumps(report, indent=2), flush=True)
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:
+              f.write(f"identity_eligible={'true' if identity_pass else 'false'}\n")
+          PY
+      - name: Install pinned Whisper Small only after identity survives
+        if: steps.convert.outputs.identity_eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV" imageio-ffmpeg==0.6.0
+          FFMPEG_BIN="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$FFMPEG_BIN" "$HOME/.local/bin/ffmpeg"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - id: content
+        name: Require French content repair versus both source and baseline
+        if: steps.convert.outputs.identity_eligible == 'true'
+        run: |
+          python - <<'PY'
+          import hashlib, json, math, os, re, unicodedata
+          from pathlib import Path
+          import numpy as np, whisper
+
+          EXPECTED = "Il est parti avant l'aube. Je savais que ce moment viendrait, mais pas si tôt."
+          source = Path('source/clips/claire--sadness-contained.wav')
+          baseline = Path('baseline/clips/sadness-contained--lucie.wav')
+          new = Path('result/sadness-contained--lucie-rich-pool.wav')
+
+          def words(text):
+              text=unicodedata.normalize('NFKD',text.lower())
+              text=''.join(c for c in text if not unicodedata.combining(c)).replace("'",' ').replace('’',' ').replace('-',' ')
+              return re.findall(r'[a-z0-9]+',text)
+          def dist(a,b):
+              p=list(range(len(b)+1))
+              for i,x in enumerate(a,1):
+                  q=[i]
+                  for j,y in enumerate(b,1): q.append(min(q[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+                  p=q
+              return p[-1]
+          def wer(hyp):
+              r,h=words(EXPECTED),words(hyp)
+              return dist(r,h)/max(1,len(r))
+
+          model=whisper.load_model(os.environ['WHISPER_MODEL'],device='cpu')
+          mp=Path.home()/'.cache'/'whisper'/'small.pt'
+          sha=hashlib.sha256(mp.read_bytes()).hexdigest()
+          if sha != os.environ['WHISPER_MODEL_SHA256']: raise SystemExit(f'Whisper SHA mismatch {sha}')
+          def tx(path):
+              return model.transcribe(str(path),language='fr',task='transcribe',temperature=0.0,fp16=False,condition_on_previous_text=False,verbose=False)['text'].strip()
+          texts={'source':tx(source),'baseline':tx(baseline),'rich_pool':tx(new)}
+          wers={k:wer(v) for k,v in texts.items()}
+
+          def audio(path): return whisper.load_audio(str(path)).astype(np.float64)
+          def env(path):
+              y=audio(path); frame,hop=400,160
+              n=1+(len(y)-frame)//hop
+              e=np.array([math.sqrt(float(np.mean(y[i*hop:i*hop+frame]**2))+1e-12) for i in range(n)])
+              e=np.log(e+1e-6); e=(e-e.mean())/(e.std()+1e-8)
+              return e,len(y)/16000
+          def corr(a,b):
+              n=max(len(a),len(b)); g=np.linspace(0,1,n)
+              aa=np.interp(g,np.linspace(0,1,len(a)),a); bb=np.interp(g,np.linspace(0,1,len(b)),b)
+              return float(np.corrcoef(aa,bb)[0,1])
+          se,sd=env(source); ne,nd=env(new)
+          content_pass=(wers['rich_pool'] <= wers['source'] + 1e-12) and (wers['rich_pool'] < wers['baseline'] - 1e-12)
+          report={
+              'schema':'knnvc-lucie-reference-pack-final-v1',
+              'whisper':{'model':'small','revision':os.environ['WHISPER_REV'],'sha256':sha},
+              'expected':EXPECTED,
+              'transcripts':texts,
+              'wer':wers,
+              'content_rule':'rich-pool WER <= source WER and strictly < baseline WER',
+              'content_pass':content_pass,
+              'duration_ratio':nd/sd,
+              'energy_envelope_correlation':corr(se,ne),
+              'status':'machine-repair-pass' if content_pass else 'machine-repair-reject',
+              'claim':'machine content/intelligibility + timing only; no automatic naturalness/acting claim',
+          }
+          Path('result/final.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps(report,ensure_ascii=False,indent=2),flush=True)
+          PY
+      - name: Record stop reason when pool identity fails
+        if: steps.pool.outputs.eligible != 'true'
+        run: echo '{"status":"stopped-before-vc","reason":"candidate reference identity gate failed"}' > result/final.json
+      - name: Record stop reason when converted identity regresses
+        if: steps.pool.outputs.eligible == 'true' && steps.convert.outputs.identity_eligible != 'true'
+        run: echo '{"status":"stopped-before-asr","reason":"rich-pool conversion reduced identity margin"}' > result/final.json
+      - name: Upload bounded machine evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: knnvc-lucie-reference-pack-killer
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
