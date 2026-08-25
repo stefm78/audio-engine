@@ -1,5 +1,5 @@
 {
-  "enabled": false,
-  "run_id": null,
-  "artifact": null
+  "enabled": true,
+  "run_id": 32813525803,
+  "artifact": "voice-casting-qwen3-style-transplant-killer-recovery"
 }
