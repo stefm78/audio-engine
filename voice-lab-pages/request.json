@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "run_id": 32824408543,
-  "artifact": "voice-casting-qwen3-contrast-emotion-radio-only",
-  "requested_at": "2026-08-25T09:58:00+02:00"
+  "run_id": 32828081443,
+  "artifact": "voice-casting-qwen3-dsp-identity-signature",
+  "requested_at": "2026-08-25T10:44:00+02:00"
 }
