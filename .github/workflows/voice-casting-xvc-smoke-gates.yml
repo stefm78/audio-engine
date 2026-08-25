@@ -1,0 +1,239 @@
+name: Voice Casting XVC Smoke Gates
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-xvc-smoke-gates.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  XVC_RENDER_RUN_ID: "32878559797"
+  XVC_RENDER_ARTIFACT: xvc-french-content-smoke
+  XVC_OUTPUT_SHA256: d6c5b2c8708bbd0497874447723a01742dcbe50dfae9042bd4ceefe58338d5af
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  SUPERB_REPO: superb/wav2vec2-base-superb-er
+  SUPERB_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL: small
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  gates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Recover and verify immutable source plus X-VC output
+        run: |
+          mkdir -p source rendered evidence
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          gh run download "$XVC_RENDER_RUN_ID" --repo "${{ github.repository }}" -n "$XVC_RENDER_ARTIFACT" -D rendered
+          cat > hashes.txt <<'EOF'
+          ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f  source/clips/claire--panic.wav
+          d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84  source/clips/claire--sadness-contained.wav
+          3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe  source/reference-claire.wav
+          9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822  source/reference-lucie.wav
+          d6c5b2c8708bbd0497874447723a01742dcbe50dfae9042bd4ceefe58338d5af  rendered/clips/reference-lucie_claire--panic_offline.wav
+          EOF
+          sha256sum -c hashes.txt
+          cp rendered/clips/reference-lucie_claire--panic_offline.wav evidence/xvc-smoke.wav
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          Path('evidence/protocol.json').write_text(json.dumps({
+            'render_run': 32878559797,
+            'output_sha256': 'd6c5b2c8708bbd0497874447723a01742dcbe50dfae9042bd4ceefe58338d5af',
+            'rerendered': False,
+            'parameter_tuning': False,
+            'gate_order': ['technical','french','identity','emotion'],
+            'production_license_blocked': True
+          },indent=2),encoding='utf-8')
+          PY
+
+      - name: Install base gate runtime
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchaudio==2.5.1
+          python -m pip install --disable-pip-version-check numpy==1.26.4 soundfile==0.12.1 huggingface_hub==0.36.0
+
+      - name: Technical integrity gate
+        id: technical
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf
+          y,sr=sf.read('evidence/xvc-smoke.wav',dtype='float32');s,ssr=sf.read('source/clips/claire--panic.wav',dtype='float32')
+          if y.ndim==2:y=y.mean(1)
+          if s.ndim==2:s=s.mean(1)
+          dur=len(y)/sr;sdur=len(s)/ssr;ratio=dur/max(sdur,1e-9);rms=float(np.sqrt(np.mean(y*y))) if len(y) else 0.0
+          ok=sr==16000 and bool(np.isfinite(y).all()) and rms>1e-5 and 0.5<=ratio<=1.5
+          r={'status':'pass' if ok else 'reject','sample_rate':sr,'duration':dur,'source_duration':sdur,'duration_ratio':ratio,'rms':rms,'finite':bool(np.isfinite(y).all())}
+          Path('evidence/technical.json').write_text(json.dumps(r,indent=2),encoding='utf-8');print(json.dumps(r,indent=2))
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install Whisper only after technical PASS
+        if: steps.technical.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV" imageio-ffmpeg==0.6.0
+          FFMPEG_BIN="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"
+          mkdir -p "$HOME/.local/bin"; ln -sf "$FFMPEG_BIN" "$HOME/.local/bin/ffmpeg"; echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: French lexical content no-worse-than-source gate
+        id: french
+        if: steps.technical.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,re,unicodedata
+          from pathlib import Path
+          import whisper
+          expected="Vite ! Ils arrivent ! Fermez la porte !"
+          def norm(t):
+            t=unicodedata.normalize('NFKC',t).lower().replace('’',"'");t=re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+",' ',t);return ' '.join(t.split())
+          def dist(a,b):
+            p=list(range(len(b)+1))
+            for i,x in enumerate(a,1):
+              c=[i]
+              for j,y in enumerate(b,1):c.append(min(c[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+              p=c
+            return p[-1]
+          def wer(r,h):
+            a,b=norm(r).split(),norm(h).split();return dist(a,b)/max(1,len(a))
+          m=whisper.load_model(os.environ['WHISPER_MODEL'],device='cpu')
+          cp=Path.home()/'.cache'/'whisper'/f"{os.environ['WHISPER_MODEL']}.pt";sha=hashlib.sha256(cp.read_bytes()).hexdigest()
+          if sha!=os.environ['WHISPER_MODEL_SHA256']:raise SystemExit(f'Whisper SHA mismatch {sha}')
+          def tr(p):return str(m.transcribe(p,language='fr',task='transcribe',fp16=False,temperature=0,condition_on_previous_text=False).get('text','')).strip()
+          st=tr('source/clips/claire--panic.wav');ot=tr('evidence/xvc-smoke.wav');sw,ow=wer(expected,st),wer(expected,ot);ok=ow<=sw+1e-12
+          r={'status':'pass' if ok else 'reject','expected':expected,'source_transcript':st,'source_wer':sw,'output_transcript':ot,'output_wer':ow,'rule':'output WER <= immutable expressive-source WER','absolute_threshold':False}
+          Path('evidence/french.json').write_text(json.dumps(r,ensure_ascii=False,indent=2),encoding='utf-8');print(json.dumps(r,ensure_ascii=False,indent=2))
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install independent WeSpeaker verifier after French PASS
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check onnxruntime==1.20.1
+          git init WeSpeaker; git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git
+          git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV"; git -C WeSpeaker checkout --detach FETCH_HEAD
+          test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"; test -f WeSpeaker/LICENSE; grep -qi "Apache License" WeSpeaker/LICENSE
+          mkdir -p weights/wespeaker
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(repo_id=os.environ['WESPEAKER_MODEL_REPO'],revision=os.environ['WESPEAKER_MODEL_REV'],allow_patterns=['voxceleb_resnet34.onnx'],local_dir='weights/wespeaker'))
+          p=root/'voxceleb_resnet34.onnx';got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest());expected=(26534127,'9fea6516d7ad6bf0a76c7689f5a49b65d330fad6dde96c91bb4435ffbfe056a1')
+          if got!=expected:raise SystemExit(f'WeSpeaker mismatch {got}')
+          PY
+
+      - name: One-cell independent target identity gate
+        id: identity
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import importlib.util,json,os
+          from pathlib import Path
+          import numpy as np,onnxruntime as ort
+          spec=importlib.util.spec_from_file_location('ws','WeSpeaker/wespeaker/bin/infer_onnx.py');mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
+          s=ort.InferenceSession('weights/wespeaker/voxceleb_resnet34.onnx',providers=['CPUExecutionProvider'])
+          def emb(p):
+            f=mod.compute_fbank(p).unsqueeze(0).numpy();e=np.asarray(s.run(['embs'],{'feats':f})[0]).reshape(-1).astype(np.float64);return e/np.linalg.norm(e)
+          o=emb('evidence/xvc-smoke.wav');lucie=emb('source/reference-lucie.wav');claire=emb('source/reference-claire.wav');a,b=float(o@lucie),float(o@claire);margin=a-b;ok=margin>0
+          r={'status':'pass' if ok else 'reject','sim_intended_lucie':a,'sim_source_identity_claire':b,'margin':margin,'rule':'output closer to Lucie than Claire','absolute_threshold':False}
+          Path('evidence/identity.json').write_text(json.dumps(r,indent=2),encoding='utf-8');print(json.dumps(r,indent=2))
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install source-valid SUPERB emotion verifier after identity PASS
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check transformers==4.40.1 scipy==1.14.1
+          mkdir -p weights/superb
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(repo_id=os.environ['SUPERB_REPO'],revision=os.environ['SUPERB_REV'],allow_patterns=['config.json','preprocessor_config.json','pytorch_model.bin'],local_dir='weights/superb'))
+          p=root/'pytorch_model.bin';got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest());expected=(378361105,'dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b')
+          if got!=expected:raise SystemExit(f'SUPERB mismatch {got}')
+          PY
+
+      - name: One-cell source-relative emotion gate
+        id: emotion
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from transformers import AutoFeatureExtractor,AutoModelForAudioClassification
+          ex=AutoFeatureExtractor.from_pretrained('weights/superb',local_files_only=True);m=AutoModelForAudioClassification.from_pretrained('weights/superb',local_files_only=True).eval();labels=[str(m.config.id2label[i]).lower() for i in range(m.config.num_labels)]
+          def prof(p):
+            y,sr=sf.read(p,dtype='float32');y=np.asarray(y,dtype=np.float32);y=y.mean(1) if y.ndim==2 else y;x=ex(y,sampling_rate=sr,return_tensors='pt')
+            with torch.inference_mode():q=torch.softmax(m(**x).logits[0],-1).numpy().astype(np.float64)
+            return q,q/np.linalg.norm(q)
+          pr,pn=prof('source/clips/claire--panic.wav');sr,sn=prof('source/clips/claire--sadness-contained.wav');valid=labels[int(pr.argmax())]!=labels[int(sr.argmax())]
+          raw,n=prof('evidence/xvc-smoke.wav');a,b=float(n@pn),float(n@sn);margin=a-b;ok=valid and margin>0
+          r={'status':'pass' if ok else 'reject','source_preflight_distinguishable':valid,'panic_source_top':labels[int(pr.argmax())],'sadness_source_top':labels[int(sr.argmax())],'output_top':labels[int(raw.argmax())],'similarity_to_panic_source':a,'similarity_to_sadness_source':b,'margin':margin}
+          Path('evidence/emotion.json').write_text(json.dumps(r,indent=2),encoding='utf-8');print(json.dumps(r,indent=2))
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Record Steve and Linus verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          def rd(n):
+            p=Path(f'evidence/{n}.json');return json.loads(p.read_text()) if p.is_file() else None
+          t,f,i,e=rd('technical'),rd('french'),rd('identity'),rd('emotion')
+          if t is None or t.get('status')!='pass':status='technical-reject'
+          elif f is None or f.get('status')!='pass':status='french-reject'
+          elif i is None or i.get('status')!='pass':status='identity-reject'
+          elif e is None or e.get('status')!='pass':status='emotion-reject'
+          else:status='one-cell-machine-pass'
+          r={'status':status,'matrix_authorized':status=='one-cell-machine-pass','human_gate_authorized':False,'production_qualified':False,'production_license_blocked':True,'pages_published':False,'parameter_tuning':False,'rerendered':False}
+          Path('evidence/final.json').write_text(json.dumps(r,indent=2),encoding='utf-8');print(json.dumps(r,indent=2))
+          PY
+
+      - name: Upload gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xvc-smoke-gates
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface semantic verdict in job status
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          r=json.loads(Path('evidence/final.json').read_text());print('SEMANTIC_STATUS='+r['status'])
+          if r['status']!='one-cell-machine-pass':raise SystemExit(1)
+          PY
