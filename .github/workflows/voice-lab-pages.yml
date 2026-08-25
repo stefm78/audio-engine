@@ -1,0 +1,117 @@
+name: Voice Lab Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - voice-lab-pages/request.json
+      - .github/workflows/voice-lab-pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: voice-lab-pages
+  cancel-in-progress: true
+
+jobs:
+  request:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.request.outputs.enabled }}
+      run_id: ${{ steps.request.outputs.run_id }}
+      artifact: ${{ steps.request.outputs.artifact }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: request
+        name: Validate publication request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f voice-lab-pages/request.json
+          ENABLED="$(jq -r '.enabled // false' voice-lab-pages/request.json)"
+          echo "enabled=$ENABLED" >> "$GITHUB_OUTPUT"
+          if [ "$ENABLED" != "true" ]; then
+            echo "Voice Lab Pages publication is disabled."
+            echo "run_id=" >> "$GITHUB_OUTPUT"
+            echo "artifact=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          RUN_ID="$(jq -r '.run_id' voice-lab-pages/request.json)"
+          ARTIFACT="$(jq -r '.artifact' voice-lab-pages/request.json)"
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$ARTIFACT" =~ ^voice-casting-[a-zA-Z0-9._-]+$ ]]
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: request
+    if: needs.request.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify source run and download exact artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ needs.request.outputs.run_id }}
+          ARTIFACT: ${{ needs.request.outputs.artifact }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+          RUN_JSON="$(gh api "repos/$REPO/actions/runs/$RUN_ID")"
+          test "$(jq -r '.repository.full_name' <<<"$RUN_JSON")" = "$REPO"
+          test "$(jq -r '.conclusion' <<<"$RUN_JSON")" = "success"
+          HEAD_SHA="$(jq -r '.head_sha' <<<"$RUN_JSON")"
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          mkdir -p _download
+          gh run download "$RUN_ID" --repo "$REPO" -n "$ARTIFACT" -D _download
+          test -f _download/index.html
+          printf '%s\n' "$RUN_JSON" > _download/source-run.json
+
+      - name: Build minimal public listening site
+        env:
+          RUN_ID: ${{ needs.request.outputs.run_id }}
+          ARTIFACT: ${{ needs.request.outputs.artifact }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _site/lab/current
+          cp -R _download/. _site/lab/current/
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('_site/lab/current/index.html')
+          text = p.read_text(encoding='utf-8')
+          marker = '<meta name="robots" content="noindex,nofollow">'
+          if marker not in text:
+              text = text.replace('</head>', marker + '</head>', 1)
+          p.write_text(text, encoding='utf-8')
+          PY
+          cat > _site/index.html <<'HTML'
+          <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Voice Casting Lab</title><style>body{font-family:system-ui,sans-serif;max-width:720px;margin:12vh auto;padding:0 24px;line-height:1.5}a{display:inline-block;padding:14px 18px;border:1px solid #222;border-radius:10px;color:inherit;text-decoration:none;font-weight:650}</style></head><body><h1>Voice Casting Lab</h1><p>Le test humain courant est prêt.</p><a href="lab/current/">Ouvrir le test</a></body></html>
+          HTML
+          cat > _site/lab/current/publication.json <<EOF
+          {"schema":"voice-lab-pages-publication-v1","run_id":"$RUN_ID","artifact":"$ARTIFACT"}
+          EOF
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
