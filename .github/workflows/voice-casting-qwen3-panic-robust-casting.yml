@@ -1,0 +1,364 @@
+name: Voice Casting Qwen3 Panic Robust Casting
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - src/audio_engine/voice_lab_qwen3_panic_robust_casting.py
+      - tests/test_voice_lab_qwen3_panic_robust_casting.py
+      - .github/workflows/voice-casting-qwen3-panic-robust-casting.yml
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+env:
+  QWEN_REV: 022e286b98fbec7e1e916cb940cdf532cd9f488e
+  MODEL_ID: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+  MODEL_REV: 5ecdb67327fd37bb2e042aab12ff7391903235d3
+  SOURCE_RUN_ID: "32818950167"
+  FAILING_RUN_ID: "32823632721"
+  FAILING_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  ISSUE_NUMBER: "96"
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install and test offline gates
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m unittest tests.test_voice_lab_qwen3_panic_robust_casting -v
+      - name: Mark experiment running
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue edit "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
+            --title "Panic-robust casting running $GITHUB_RUN_ID" \
+            --body "Efficiency-focused panic identity experiment.\n\n- run_id: $GITHUB_RUN_ID\n- reuse all 4 neutral anchors from $SOURCE_RUN_ID\n- reuse exact failing panic clips for claire-a + lucie-b from $FAILING_RUN_ID\n- generate only missing canonical panic clips claire-b + lucie-a\n- automatic gate before any confirmation\n- if selected: 2 new confirmation clips only, then 2-screen radio-only human gate\n\nNo tuning of the failed pair. Production Edge unchanged."
+
+  render_missing_panic:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        candidate_id: [claire-b, lucie-a]
+    env:
+      CANDIDATE_ID: ${{ matrix.candidate_id }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Checkout pinned Qwen3 source
+        run: |
+          git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
+          cd qwen3-upstream
+          git checkout "$QWEN_REV"
+          test "$(git rev-parse HEAD)" = "$QWEN_REV"
+      - name: Install isolated CPU inference stack
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          python -m pip install --disable-pip-version-check -e ./qwen3-upstream
+          python -m pip check
+      - name: Download pinned VoiceDesign model
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REV'], local_dir='qwen3-vd-model'))
+          PY
+          test -f qwen3-vd-model/model.safetensors
+      - name: Render only missing canonical panic clip
+        run: |
+          python - <<'PY'
+          import json, os, random, time
+          from pathlib import Path
+          import numpy as np
+          import soundfile as sf
+          import torch
+          from qwen_tts import Qwen3TTSModel
+          from transformers.utils import logging as transformers_logging
+          from audio_engine.voice_lab_qwen3_panic_robust_casting import PANIC, candidate_spec, expressive_instruction
+
+          candidate_id = os.environ['CANDIDATE_ID']
+          spec = candidate_spec(candidate_id)
+          seed = int(spec['seed'])
+          random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+          model = Qwen3TTSModel.from_pretrained('qwen3-vd-model', device_map='cpu', dtype=torch.bfloat16, attn_implementation='eager')
+          transformers_logging.disable_progress_bar()
+          root = Path('candidate-output'); root.mkdir()
+          out = root / f'{candidate_id}.wav'
+          started = time.monotonic()
+          print(f'START {candidate_id} canonical panic', flush=True)
+          wavs, sr = model.generate_voice_design(
+              text=PANIC['text'],
+              instruct=expressive_instruction(candidate_id, PANIC['id']),
+              language='French',
+              non_streaming_mode=True,
+              do_sample=True,
+              max_new_tokens=384,
+          )
+          sf.write(out, wavs[0], sr)
+          elapsed = round(time.monotonic() - started, 2)
+          print(f'SUCCESS {candidate_id} canonical panic {elapsed}s', flush=True)
+          (root / 'candidate-result.json').write_text(json.dumps({
+              'candidate_id': candidate_id,
+              'role': spec['role'],
+              'seed': seed,
+              'file': out.name,
+              'render_seconds': elapsed,
+          }, ensure_ascii=False, indent=2), encoding='utf-8')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-panic-robust-canonical-${{ matrix.candidate_id }}
+          path: candidate-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  select_pair:
+    needs: render_missing_panic
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      selected: ${{ steps.decision.outputs.selected }}
+      claire_id: ${{ steps.decision.outputs.claire_id }}
+      lucie_id: ${{ steps.decision.outputs.lucie_id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Reuse all exact neutral anchors
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n qwen3-contrast-anchors-claire -D neutral-anchors/claire
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n qwen3-contrast-anchors-lucie -D neutral-anchors/lucie
+      - name: Reuse exact human-failed panic baseline
+        run: gh run download "$FAILING_RUN_ID" --repo "${{ github.repository }}" -n "$FAILING_ARTIFACT" -D failing-bundle
+      - name: Download only the two new panic clips
+        uses: actions/download-artifact@v4
+        with:
+          pattern: qwen3-panic-robust-canonical-*
+          path: new-panic
+          merge-multiple: false
+      - name: Select panic-robust pair or stop early
+        id: decision
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from audio_engine.voice_lab_qwen3_panic_robust_casting import select_pair
+          result = select_pair('neutral-anchors', 'new-panic', 'failing-bundle', 'selection')
+          print(json.dumps({
+              'status': result['status'],
+              'baseline_panic_score': result['baseline_panic_score'],
+              'required_panic_score': result['required_panic_score'],
+              'selected': result.get('selected'),
+          }, ensure_ascii=False, indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as out:
+              out.write(f"selected={'true' if result['status']=='selected' else 'false'}\n")
+              if result['status'] == 'selected':
+                  out.write(f"claire_id={result['selected']['claire_id']}\n")
+                  out.write(f"lucie_id={result['selected']['lucie_id']}\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-panic-robust-selection
+          path: selection/
+          if-no-files-found: error
+          retention-days: 14
+
+  render_confirmation:
+    needs: select_pair
+    if: needs.select_pair.outputs.selected == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        role: [claire, lucie]
+    env:
+      ROLE: ${{ matrix.role }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Download selected pair
+        uses: actions/download-artifact@v4
+        with:
+          name: qwen3-panic-robust-selection
+          path: selection
+      - name: Checkout pinned Qwen3 source
+        run: |
+          git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
+          cd qwen3-upstream
+          git checkout "$QWEN_REV"
+          test "$(git rev-parse HEAD)" = "$QWEN_REV"
+      - name: Install isolated CPU inference stack
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          python -m pip install --disable-pip-version-check -e ./qwen3-upstream
+          python -m pip check
+      - name: Download pinned VoiceDesign model
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REV'], local_dir='qwen3-vd-model'))
+          PY
+          test -f qwen3-vd-model/model.safetensors
+      - name: Render one independent high-arousal confirmation
+        run: |
+          python - <<'PY'
+          import json, os, random, time
+          from pathlib import Path
+          import numpy as np
+          import soundfile as sf
+          import torch
+          from qwen_tts import Qwen3TTSModel
+          from transformers.utils import logging as transformers_logging
+          from audio_engine.voice_lab_qwen3_panic_robust_casting import CONFIRM, expressive_instruction, selected_candidate
+
+          role = os.environ['ROLE']
+          spec = selected_candidate('selection', role)
+          candidate_id = spec['candidate_id']
+          seed = int(spec['seed'])
+          random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+          model = Qwen3TTSModel.from_pretrained('qwen3-vd-model', device_map='cpu', dtype=torch.bfloat16, attn_implementation='eager')
+          transformers_logging.disable_progress_bar()
+          root = Path('confirmation-output'); root.mkdir()
+          out = root / f'{role}--panic-confirm.wav'
+          started = time.monotonic()
+          print(f'START {role} {candidate_id} confirmation', flush=True)
+          wavs, sr = model.generate_voice_design(
+              text=CONFIRM['text'],
+              instruct=expressive_instruction(candidate_id, CONFIRM['id']),
+              language='French',
+              non_streaming_mode=True,
+              do_sample=True,
+              max_new_tokens=384,
+          )
+          sf.write(out, wavs[0], sr)
+          elapsed = round(time.monotonic() - started, 2)
+          print(f'SUCCESS {role} {candidate_id} confirmation {elapsed}s', flush=True)
+          (root / 'confirmation-result.json').write_text(json.dumps({
+              'role': role,
+              'candidate_id': candidate_id,
+              'seed': seed,
+              'file': out.name,
+              'render_seconds': elapsed,
+          }, ensure_ascii=False, indent=2), encoding='utf-8')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-panic-robust-confirm-${{ matrix.role }}
+          path: confirmation-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  bundle:
+    needs: [select_pair, render_confirmation]
+    if: needs.select_pair.outputs.selected == 'true' && needs.render_confirmation.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Download selected pair
+        uses: actions/download-artifact@v4
+        with:
+          name: qwen3-panic-robust-selection
+          path: selection
+      - name: Download confirmation clips
+        uses: actions/download-artifact@v4
+        with:
+          pattern: qwen3-panic-robust-confirm-*
+          path: confirmations
+          merge-multiple: false
+      - name: Assemble two-screen radio-only gate
+        run: |
+          python - <<'PY'
+          import json
+          from audio_engine.voice_lab_qwen3_panic_robust_casting import assemble_bundle
+          result = assemble_bundle('selection', 'confirmations', 'bundle')
+          print(json.dumps({
+              'status': result['status'],
+              'selected': result['selected'],
+              'trial_count': result['trial_count'],
+          }, ensure_ascii=False, indent=2))
+          if result['status'] != 'success' or result['trial_count'] != 2:
+              raise SystemExit(1)
+          html = open('bundle/index.html', encoding='utf-8').read().lower()
+          if '<select' in html:
+              raise SystemExit('dropdown detected in radio-only gate')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-qwen3-panic-robust-casting
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 14
+
+  finalize:
+    if: always()
+    needs: [preflight, render_missing_panic, select_pair, render_confirmation, bundle]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SELECT_RESULT: ${{ needs.select_pair.result }}
+      SELECTED: ${{ needs.select_pair.outputs.selected }}
+      CLAIRE_ID: ${{ needs.select_pair.outputs.claire_id }}
+      LUCIE_ID: ${{ needs.select_pair.outputs.lucie_id }}
+      BUNDLE_RESULT: ${{ needs.bundle.result }}
+    steps:
+      - name: Update experiment locator
+        run: |
+          if [ "$SELECT_RESULT" != "success" ]; then
+            TITLE="Panic-robust casting technical failure $GITHUB_RUN_ID"
+            BODY="Technical failure before selection. No artistic verdict. Production Edge unchanged."
+          elif [ "$SELECTED" != "true" ]; then
+            TITLE="Panic-robust casting auto-rejected $GITHUB_RUN_ID"
+            BODY="The two new canonical panic clips completed, but no alternate pair beat the predeclared panic separation gate while retaining neutral eligibility. No human listening requested. Production Edge unchanged."
+          elif [ "$BUNDLE_RESULT" = "success" ]; then
+            TITLE="Panic-robust casting human gate ready $GITHUB_RUN_ID"
+            BODY="Automatic panic-robust selection passed.\n\n- selected pair: $CLAIRE_ID + $LUCIE_ID\n- final artifact: voice-casting-qwen3-panic-robust-casting\n- 2 screens: canonical panic + independent high-arousal confirmation\n- UI: radio-only\n- human PASS requires identity 2/2, French both-good 2/2, acting 4/4 yes\n\nLab only. Production Edge unchanged."
+          else
+            TITLE="Panic-robust casting confirmation failure $GITHUB_RUN_ID"
+            BODY="A pair passed the automatic separation gate, but confirmation/bundle failed technically. No artistic verdict. Production Edge unchanged."
+          fi
+          gh issue edit "$ISSUE_NUMBER" --repo "${{ github.repository }}" --title "$TITLE" --body "$BODY"
