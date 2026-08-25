@@ -1,0 +1,447 @@
+name: Voice Casting FACodec French Emotion Diagnostics
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-facodec-french-emotion-diagnostics.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  MATRIX_RUN_ID: "32850471176"
+  MATRIX_ARTIFACT: facodec-four-clip-matrix
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  ARBITRATION_RUN_ID: "32858073238"
+  ARBITRATION_ARTIFACT: facodec-wespeaker-arbitration
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL: small
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  EMOTION_MODEL_REPO: Lajavaness/wav2vec2-lg-xlsr-fr-speech-emotion-recognition
+  EMOTION_MODEL_REV: b9d5dd3ee98ea581274444efb5139782915601ea
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Verify immutable FACodec and arbitration evidence
+        run: |
+          mkdir -p matrix source arbitration evidence
+          gh run download "$MATRIX_RUN_ID" --repo "${{ github.repository }}" -n "$MATRIX_ARTIFACT" -D matrix
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          gh run download "$ARBITRATION_RUN_ID" --repo "${{ github.repository }}" -n "$ARBITRATION_ARTIFACT" -D arbitration
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          matrix_final = json.loads(Path("matrix/final.json").read_text(encoding="utf-8"))
+          ecapa = json.loads(Path("matrix/identity-matrix.json").read_text(encoding="utf-8"))
+          arbitration = json.loads(Path("arbitration/final.json").read_text(encoding="utf-8"))
+          ws = json.loads(Path("arbitration/wespeaker-arbitration.json").read_text(encoding="utf-8"))
+
+          assert matrix_final.get("status") == "machine-reject"
+          assert ecapa["identity_gate"]["all_cells_rank_target_first"] is True
+          assert ecapa["topology"]["pass"] is False
+          assert abs(float(ecapa["topology"]["margin"]) - (-0.034467846155166626)) < 1e-12
+          assert arbitration.get("status") == "verifier-disagreement"
+          assert ws.get("all_cells_rank_target_first") is True
+          assert ws["topology"]["pass"] is True
+          assert abs(float(ws["topology"]["margin"]) - 0.10659599352158755) < 1e-12
+          assert ws.get("new_audio_generated") is False
+
+          expected_cells = {
+              "panic--claire",
+              "panic--lucie",
+              "sadness-contained--claire",
+              "sadness-contained--lucie",
+          }
+          present = {p.stem for p in Path("matrix/clips").glob("*.wav")}
+          if present != expected_cells:
+              raise SystemExit(f"FACodec matrix WAV set mismatch: {sorted(present)}")
+          print("immutable FACodec evidence + ECAPA/WeSpeaker disagreement verified")
+          PY
+          cat > source-hashes.txt <<'EOF'
+          ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f  source/clips/claire--panic.wav
+          d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84  source/clips/claire--sadness-contained.wav
+          EOF
+          sha256sum -c source-hashes.txt
+
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+
+      - name: Install pinned Whisper Small diagnostic runtime
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchaudio==2.5.1
+          python -m pip install --disable-pip-version-check \
+            "git+https://github.com/openai/whisper.git@$WHISPER_REV" \
+            imageio-ffmpeg==0.6.0 \
+            soundfile==0.12.1
+          python -m pip check
+          FFMPEG_BIN="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$FFMPEG_BIN" "$HOME/.local/bin/ffmpeg"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          PATH="$HOME/.local/bin:$PATH" ffmpeg -version | head -1
+
+      - name: Apply pre-registered French/content WER rule
+        id: french
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import unicodedata
+          from pathlib import Path
+
+          import whisper
+
+          expected = {
+              "panic": "Vite ! Ils arrivent ! Fermez la porte !",
+              "sadness-contained": "Il est parti avant l'aube. Je savais que ce moment viendrait, mais pas si tôt.",
+          }
+          source_paths = {
+              "panic": "source/clips/claire--panic.wav",
+              "sadness-contained": "source/clips/claire--sadness-contained.wav",
+          }
+          output_paths = {
+              "panic--claire": "matrix/clips/panic--claire.wav",
+              "panic--lucie": "matrix/clips/panic--lucie.wav",
+              "sadness-contained--claire": "matrix/clips/sadness-contained--claire.wav",
+              "sadness-contained--lucie": "matrix/clips/sadness-contained--lucie.wav",
+          }
+
+          def normalize(text):
+              text = unicodedata.normalize("NFKC", text).lower().replace("’", "'")
+              text = re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+", " ", text)
+              return " ".join(text.split())
+
+          def edit_distance(a, b):
+              prev = list(range(len(b) + 1))
+              for i, x in enumerate(a, 1):
+                  cur = [i]
+                  for j, y in enumerate(b, 1):
+                      cur.append(min(cur[-1] + 1, prev[j] + 1, prev[j-1] + (x != y)))
+                  prev = cur
+              return prev[-1]
+
+          def wer(ref, hyp):
+              r = normalize(ref).split()
+              h = normalize(hyp).split()
+              return edit_distance(r, h) / max(1, len(r))
+
+          model = whisper.load_model(os.environ["WHISPER_MODEL"], device="cpu")
+          model_path = Path.home() / ".cache" / "whisper" / f"{os.environ['WHISPER_MODEL']}.pt"
+          model_sha = hashlib.sha256(model_path.read_bytes()).hexdigest()
+          if model_sha != os.environ["WHISPER_MODEL_SHA256"]:
+              raise SystemExit(f"Whisper model SHA mismatch: {model_sha}")
+
+          def transcribe(path):
+              result = model.transcribe(
+                  path,
+                  language="fr",
+                  task="transcribe",
+                  fp16=False,
+                  temperature=0,
+                  condition_on_previous_text=False,
+              )
+              return str(result.get("text", "")).strip()
+
+          sources = {}
+          for emotion, path in source_paths.items():
+              text = transcribe(path)
+              sources[emotion] = {
+                  "path": path,
+                  "expected": expected[emotion],
+                  "transcript": text,
+                  "wer": wer(expected[emotion], text),
+              }
+
+          outputs = {}
+          passed = True
+          for cell, path in output_paths.items():
+              emotion = "sadness-contained" if cell.startswith("sadness-contained") else "panic"
+              text = transcribe(path)
+              value = wer(expected[emotion], text)
+              baseline = float(sources[emotion]["wer"])
+              cell_pass = value <= baseline + 1e-12
+              passed = passed and cell_pass
+              outputs[cell] = {
+                  "path": path,
+                  "transcript": text,
+                  "wer": value,
+                  "source_wer": baseline,
+                  "no_worse_than_source": cell_pass,
+              }
+
+          report = {
+              "status": "pass" if passed else "reject",
+              "model": os.environ["WHISPER_MODEL"],
+              "model_sha256": model_sha,
+              "whisper_revision": os.environ["WHISPER_REV"],
+              "sources": sources,
+              "outputs": outputs,
+              "rule": "for every FACodec output, WER(expected, output) <= WER(expected, corresponding expressive source)",
+              "rule_pre_registered_in_run": 32850471176,
+              "absolute_wer_threshold": False,
+              "claim": "machine French/content diagnostic; not human naturalness proof",
+          }
+          Path("evidence/french-content.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:
+              f.write(f"eligible={'true' if passed else 'false'}\n")
+          PY
+
+      - name: Install French emotion diagnostic only after French PASS
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check \
+            transformers==4.40.1 \
+            safetensors==0.4.5 \
+            huggingface_hub==0.36.0 \
+            scipy==1.14.1
+          python -m pip check
+
+      - name: Download pinned La Javaness French emotion model
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          mkdir -p emotion-model
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+
+          patterns = [
+              "config.json",
+              "preprocessor_config.json",
+              "model.safetensors",
+              "README.md",
+          ]
+          root = Path(snapshot_download(
+              repo_id=os.environ["EMOTION_MODEL_REPO"],
+              revision=os.environ["EMOTION_MODEL_REV"],
+              allow_patterns=patterns,
+              local_dir="emotion-model",
+          ))
+          model = root / "model.safetensors"
+          config = root / "config.json"
+          if not model.is_file() or not config.is_file():
+              raise SystemExit("pinned French emotion model snapshot incomplete")
+          cfg = json.loads(config.read_text(encoding="utf-8"))
+          labels = {str(k): str(v) for k, v in cfg.get("id2label", {}).items()}
+          expected_labels = {"0": "Pleased", "1": "Relaxed", "2": "Neutral", "3": "Sad", "4": "Tension"}
+          if labels != expected_labels:
+              raise SystemExit(f"unexpected emotion labels: {labels}")
+          report = {
+              "repo": os.environ["EMOTION_MODEL_REPO"],
+              "revision": os.environ["EMOTION_MODEL_REV"],
+              "model_bytes": model.stat().st_size,
+              "model_sha256": hashlib.sha256(model.read_bytes()).hexdigest(),
+              "labels": labels,
+              "license_from_model_card": "apache-2.0",
+              "role": "source-relative French emotion diagnostic only; not production dependency or human emotion proof",
+          }
+          Path("evidence/emotion-model-provenance.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2), flush=True)
+          PY
+
+      - name: Apply threshold-free source-relative emotion topology
+        id: emotion
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          import numpy as np
+          import soundfile as sf
+          import torch
+          from scipy.signal import resample_poly
+          from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2ForSequenceClassification
+
+          torch.set_num_threads(2)
+          root = "emotion-model"
+          extractor = Wav2Vec2FeatureExtractor.from_pretrained(root, local_files_only=True)
+          model = Wav2Vec2ForSequenceClassification.from_pretrained(root, local_files_only=True)
+          model.eval()
+          labels = [model.config.id2label[i] for i in range(model.config.num_labels)]
+
+          def load16(path):
+              audio, sr = sf.read(path, always_2d=False, dtype="float32")
+              audio = np.asarray(audio, dtype=np.float32)
+              if audio.ndim == 2:
+                  audio = audio.mean(axis=1)
+              if sr != 16000:
+                  g = int(np.gcd(sr, 16000))
+                  audio = resample_poly(audio, 16000 // g, sr // g).astype(np.float32)
+              return audio
+
+          def posterior(path):
+              audio = load16(path)
+              inputs = extractor(audio, sampling_rate=16000, return_tensors="pt", padding=False)
+              with torch.inference_mode():
+                  logits = model(**inputs).logits[0]
+              # Model card describes a five-class multilabel classifier; use sigmoid as a
+              # continuous affect-profile vector, then L2-normalize only for cosine geometry.
+              p = torch.sigmoid(logits).cpu().numpy().astype(np.float64)
+              norm = np.linalg.norm(p)
+              if not np.isfinite(norm) or norm <= 0:
+                  raise SystemExit(f"invalid emotion profile for {path}")
+              return p, p / norm
+
+          def cosine(a, b):
+              return float(np.dot(a, b))
+
+          source_paths = {
+              "panic": "source/clips/claire--panic.wav",
+              "sadness-contained": "source/clips/claire--sadness-contained.wav",
+          }
+          output_paths = {
+              "panic--claire": "matrix/clips/panic--claire.wav",
+              "panic--lucie": "matrix/clips/panic--lucie.wav",
+              "sadness-contained--claire": "matrix/clips/sadness-contained--claire.wav",
+              "sadness-contained--lucie": "matrix/clips/sadness-contained--lucie.wav",
+          }
+
+          source_raw = {}
+          source_norm = {}
+          for emotion, path in source_paths.items():
+              raw, norm = posterior(path)
+              source_raw[emotion] = raw
+              source_norm[emotion] = norm
+
+          rows = {}
+          output_norm = {}
+          passed = True
+          for cell, path in output_paths.items():
+              intended = "sadness-contained" if cell.startswith("sadness-contained") else "panic"
+              other = "panic" if intended == "sadness-contained" else "sadness-contained"
+              raw, norm = posterior(path)
+              output_norm[cell] = norm
+              intended_sim = cosine(norm, source_norm[intended])
+              other_sim = cosine(norm, source_norm[other])
+              margin = intended_sim - other_sim
+              cell_pass = margin > 0.0
+              passed = passed and cell_pass
+              rows[cell] = {
+                  "intended_source_emotion": intended,
+                  "profile": {labels[i]: float(raw[i]) for i in range(len(labels))},
+                  "similarity_to_intended_source": intended_sim,
+                  "similarity_to_other_source": other_sim,
+                  "relative_margin": margin,
+                  "ranks_intended_source_first": cell_pass,
+              }
+
+          same_emotion = {
+              "panic": cosine(output_norm["panic--claire"], output_norm["panic--lucie"]),
+              "sadness-contained": cosine(output_norm["sadness-contained--claire"], output_norm["sadness-contained--lucie"]),
+          }
+          cross_emotion_same_target = {
+              "claire": cosine(output_norm["panic--claire"], output_norm["sadness-contained--claire"]),
+              "lucie": cosine(output_norm["panic--lucie"], output_norm["sadness-contained--lucie"]),
+          }
+          topology_margin = min(same_emotion.values()) - max(cross_emotion_same_target.values())
+          topology_pass = topology_margin > 0.0
+          # Source-relative ranking is the gate. Output-output topology is diagnostic because
+          # the classifier is a small proof-of-concept and both emotions may occupy nearby VA space.
+          report = {
+              "status": "pass" if passed else "reject",
+              "source_profiles": {
+                  emotion: {labels[i]: float(source_raw[emotion][i]) for i in range(len(labels))}
+                  for emotion in source_raw
+              },
+              "source_profile_cosine": cosine(source_norm["panic"], source_norm["sadness-contained"]),
+              "outputs": rows,
+              "gate": {
+                  "pass": passed,
+                  "rule": "each converted output emotion profile must be closer to its corresponding expressive-source profile than to the other expressive-source profile",
+                  "absolute_threshold": False,
+              },
+              "output_output_topology_diagnostic": {
+                  "same_emotion_cross_target": same_emotion,
+                  "cross_emotion_same_target": cross_emotion_same_target,
+                  "margin": topology_margin,
+                  "pass": topology_pass,
+                  "gating": False,
+              },
+              "claim": "source-relative affect-profile diagnostic only; La Javaness model card describes a small proof-of-concept, so this is not acting/emotion proof",
+          }
+          Path("evidence/emotion-relative.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:
+              f.write(f"eligible={'true' if passed else 'false'}\n")
+          PY
+
+      - name: Record staged diagnostic verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          french_path = Path("evidence/french-content.json")
+          emotion_path = Path("evidence/emotion-relative.json")
+          if not french_path.is_file():
+              status = "infrastructure-incomplete"
+              decision = "French/content diagnostic did not produce evidence; no scientific conclusion."
+          else:
+              french = json.loads(french_path.read_text(encoding="utf-8"))
+              if french.get("status") != "pass":
+                  status = "french-content-reject"
+                  decision = "FACodec fails the pre-registered French/content rule; retire this architecture for the killer with no tuning."
+              elif not emotion_path.is_file():
+                  status = "infrastructure-incomplete"
+                  decision = "French/content passed but emotion diagnostic did not produce evidence; no emotion conclusion."
+              else:
+                  emotion = json.loads(emotion_path.read_text(encoding="utf-8"))
+                  if emotion.get("status") == "pass":
+                      status = "machine-diagnostics-pass"
+                      decision = "French/content and source-relative emotion diagnostics pass. FACodec remains unqualified because ECAPA and WeSpeaker disagree on global identity topology; continue independent identity arbitration before any human gate."
+                  else:
+                      status = "emotion-relative-reject"
+                      decision = "FACodec fails source-relative emotion preservation diagnostic; retire this architecture for the killer with no tuning."
+
+          final = {
+              "status": status,
+              "decision": decision,
+              "new_audio_generated": False,
+              "facodec_parameters_tuned": False,
+              "human_proof": False,
+              "production_qualified": False,
+              "pages_published": False,
+          }
+          Path("evidence/final.json").write_text(json.dumps(final, indent=2), encoding="utf-8")
+          print(json.dumps(final, indent=2), flush=True)
+          PY
+
+      - name: Upload staged FACodec diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: facodec-french-emotion-diagnostics
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
