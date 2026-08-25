@@ -79,7 +79,9 @@ class FreeVCIdentityLockTests(unittest.TestCase):
             _write_player(Path(tmp), trials)
             html = (Path(tmp) / "index.html").read_text(encoding="utf-8").lower()
         self.assertNotIn("<select", html)
-        self.assertGreaterEqual(html.count('type="radio"'), 8)
+        self.assertIn('type="radio"', html)
+        for group in ("identity", "actinga", "actingb", "french"):
+            self.assertIn(f"radio('{group}'", html)
         self.assertIn("2 écrans", html)
 
 
