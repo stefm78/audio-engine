@@ -1,0 +1,279 @@
+name: Voice Casting kNN-VC Identity Lock Killer
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - src/audio_engine/voice_lab_knnvc_identity_lock.py
+      - tests/test_voice_lab_knnvc_identity_lock.py
+      - .github/workflows/voice-casting-knnvc-identity-lock.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  KNNVC_REV: c616845c4e309e24d5927f15adbdf277a3d65358
+  KNNVC_RELEASE: v0.1
+  WAVLM_SHA256: 6fb4b3c3e6aa567f0a997b30855859cb81528ee8078802af439f7b2da0bf100f
+  ECAPA_REV: eac27266f68caa806381260bd44ace38b136c76a
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Run zero-cost architecture gates
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m unittest tests.test_voice_lab_knnvc_identity_lock -v
+
+  convert:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      eligible: ${{ steps.convert.outputs.eligible }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Download and verify exact existing expressive evidence
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source-bundle
+          python - <<'PY'
+          from audio_engine.voice_lab_knnvc_identity_lock import validate_source_bundle
+          validated = validate_source_bundle('source-bundle')
+          print('references:', sorted(validated['references']))
+          print('sources:', sorted(validated['sources']))
+          PY
+      - name: Checkout pinned kNN-VC source
+        run: |
+          git clone --filter=blob:none https://github.com/bshall/knn-vc.git knnvc-upstream
+          cd knnvc-upstream
+          git checkout "$KNNVC_REV"
+          test "$(git rev-parse HEAD)" = "$KNNVC_REV"
+      - name: Install minimal CPU inference and independent verifier stack
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchaudio==2.5.1
+          python -m pip install --disable-pip-version-check numpy==1.26.4 speechbrain==1.0.3 huggingface_hub==0.36.0 soundfile==0.12.1
+          python -m pip check
+      - name: Download official kNN-VC release weights and pinned ECAPA verifier
+        run: |
+          CACHE="$HOME/.cache/torch/hub/checkpoints"
+          mkdir -p "$CACHE" verifier
+          curl -L --fail --retry 3 "https://github.com/bshall/knn-vc/releases/download/$KNNVC_RELEASE/WavLM-Large.pt" -o "$CACHE/WavLM-Large.pt"
+          curl -L --fail --retry 3 "https://github.com/bshall/knn-vc/releases/download/$KNNVC_RELEASE/prematch_g_02500000.pt" -o "$CACHE/prematch_g_02500000.pt"
+          echo "$WAVLM_SHA256  $CACHE/WavLM-Large.pt" | sha256sum -c -
+          sha256sum "$CACHE/prematch_g_02500000.pt" | tee hifigan.sha256
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          path = snapshot_download(
+              repo_id='speechbrain/spkrec-ecapa-voxceleb',
+              revision=os.environ['ECAPA_REV'],
+              local_dir='verifier/ecapa',
+          )
+          print('ECAPA snapshot:', path)
+          PY
+      - id: convert
+        name: Independent smoke first, then at most four conversions
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import sys
+          import time
+          from pathlib import Path
+
+          import torch
+          import torchaudio
+          from speechbrain.inference.speaker import EncoderClassifier
+
+          from audio_engine.voice_lab_knnvc_identity_lock import (
+              CASES,
+              TARGETS,
+              assemble_bundle,
+              experiment_spec,
+              smoke_gate,
+              validate_source_bundle,
+          )
+
+          torch.set_num_threads(2)
+          source_root = Path('source-bundle')
+          validated = validate_source_bundle(source_root)
+          conversion_root = Path('conversion')
+          clips_root = conversion_root / 'clips'
+          clips_root.mkdir(parents=True, exist_ok=True)
+          bundle_root = Path('bundle')
+          bundle_root.mkdir(parents=True, exist_ok=True)
+
+          cache = Path.home() / '.cache/torch/hub/checkpoints'
+          asset_hashes = {}
+          for name in ('WavLM-Large.pt', 'prematch_g_02500000.pt'):
+              digest = hashlib.sha256((cache / name).read_bytes()).hexdigest()
+              asset_hashes[name] = digest
+          print('RELEASE_ASSET_SHA256', json.dumps(asset_hashes, sort_keys=True), flush=True)
+
+          repo = Path('knnvc-upstream').resolve()
+          print('Loading pinned kNN-VC on CPU', flush=True)
+          knn_vc = torch.hub.load(str(repo), 'knn_vc', source='local', prematched=True, pretrained=True, device='cpu')
+
+          print('Loading independent ECAPA verifier', flush=True)
+          verifier = EncoderClassifier.from_hparams(
+              source=str(Path('verifier/ecapa').resolve()),
+              savedir=str(Path('verifier/runtime').resolve()),
+              run_opts={'device': 'cpu'},
+          )
+
+          def load_16k(path):
+              wav, sr = torchaudio.load(path)
+              wav = wav.mean(dim=0, keepdim=True)
+              if sr != 16000:
+                  wav = torchaudio.functional.resample(wav, sr, 16000)
+              return wav
+
+          def embed(path):
+              wav = load_16k(path)
+              with torch.inference_mode():
+                  emb = verifier.encode_batch(wav).squeeze().cpu()
+              return torch.nn.functional.normalize(emb, dim=0)
+
+          def cosine(a, b):
+              return float(torch.dot(a, b))
+
+          ref_emb = {role: embed(path) for role, path in validated['references'].items()}
+          matching = {
+              role: knn_vc.get_matching_set([path], vad_trigger_level=7)
+              for role, path in validated['references'].items()
+          }
+          queries = {
+              case['id']: knn_vc.get_features(validated['sources'][case['id']])
+              for case in CASES
+          }
+
+          outputs = {}
+          embeddings = {}
+          render_seconds = {}
+
+          def convert(case_id, target):
+              started = time.monotonic()
+              with torch.inference_mode():
+                  audio = knn_vc.match(queries[case_id], matching[target], topk=4, device='cpu')
+              out = clips_root / f'{case_id}--{target}.wav'
+              torchaudio.save(out, audio.unsqueeze(0), 16000)
+              elapsed = round(time.monotonic() - started, 2)
+              out_emb = embed(out)
+              print(f'SUCCESS {case_id}:{target} {elapsed}s', flush=True)
+              return out, elapsed, out_emb
+
+          # Linus gate: one cross-speaker conversion only.
+          smoke_path, elapsed, smoke_emb = convert('panic', 'lucie')
+          outputs['panic:lucie'] = str(smoke_path.relative_to(conversion_root))
+          embeddings['panic:lucie'] = smoke_emb
+          render_seconds['panic:lucie'] = elapsed
+          smoke = smoke_gate(
+              cosine(smoke_emb, ref_emb['claire']),
+              cosine(smoke_emb, ref_emb['lucie']),
+          )
+          print('SMOKE', json.dumps(smoke, indent=2), flush=True)
+
+          if not smoke['eligible']:
+              manifest = {
+                  **experiment_spec(),
+                  'status': 'auto-rejected-smoke',
+                  'release_asset_sha256': asset_hashes,
+                  'smoke': smoke,
+                  'conversion_count': 1,
+                  'render_seconds': render_seconds,
+              }
+              (bundle_root / 'manifest.json').write_text(
+                  json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8'
+              )
+              with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as out:
+                  out.write('eligible=false\n')
+              raise SystemExit(0)
+
+          # Only three remaining conversions are justified after the smoke pass.
+          for case in CASES:
+              for target in TARGETS:
+                  output_id = f"{case['id']}:{target}"
+                  if output_id in outputs:
+                      continue
+                  path, elapsed, emb = convert(case['id'], target)
+                  outputs[output_id] = str(path.relative_to(conversion_root))
+                  embeddings[output_id] = emb
+                  render_seconds[output_id] = elapsed
+
+          reference_scores = {
+              output_id: {role: cosine(embedding, ref_emb[role]) for role in TARGETS}
+              for output_id, embedding in embeddings.items()
+          }
+          pair_scores = {
+              'same_claire': cosine(embeddings['panic:claire'], embeddings['sadness-contained:claire']),
+              'same_lucie': cosine(embeddings['panic:lucie'], embeddings['sadness-contained:lucie']),
+              'cross_panic': cosine(embeddings['panic:claire'], embeddings['panic:lucie']),
+              'cross_sadness-contained': cosine(embeddings['sadness-contained:claire'], embeddings['sadness-contained:lucie']),
+          }
+          result = {
+              'schema': 'knnvc-identity-lock-conversions-v1',
+              'status': 'success',
+              'conversion_count': len(outputs),
+              'outputs': outputs,
+              'render_seconds': render_seconds,
+              'release_asset_sha256': asset_hashes,
+              'smoke': smoke,
+              'reference_scores': reference_scores,
+              'pair_scores': pair_scores,
+          }
+          (conversion_root / 'conversion-result.json').write_text(
+              json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8'
+          )
+          manifest = assemble_bundle(source_root, conversion_root, bundle_root)
+          print(json.dumps({
+              'status': manifest['status'],
+              'release_asset_sha256': asset_hashes,
+              'smoke': manifest['smoke'],
+              'prefilter': manifest['prefilter'],
+              'conversion_count': len(outputs),
+              'render_seconds': render_seconds,
+          }, ensure_ascii=False, indent=2), flush=True)
+          with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as out:
+              out.write(f"eligible={'true' if manifest['status'] == 'human-gate-ready' else 'false'}\n")
+          PY
+      - name: Upload two-screen radio-only human gate
+        if: steps.convert.outputs.eligible == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-knnvc-identity-lock
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload diagnostic only on automatic reject
+        if: steps.convert.outputs.eligible != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: knnvc-identity-lock-auto-reject
+          path: bundle/manifest.json
+          if-no-files-found: error
+          retention-days: 14
