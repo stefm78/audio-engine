@@ -1,0 +1,334 @@
+name: Voice Casting FACodec WORLD Four Cell Matrix V2
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-facodec-world-four-cell-matrix-v2.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SMOKE_EVIDENCE_RUN_ID: "32892920820"
+  SMOKE_EVIDENCE_ARTIFACT: facodec-world-emotion-evidence
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  FACODEC_RUN_ID: "32850471176"
+  FACODEC_ARTIFACT: facodec-four-clip-matrix
+  WORLD_SOURCE_COMMIT: 8a2a8759c11687834aeb0c9d176fbe042d49874d
+  WORLD_SOURCE_BLOB: 4c619ef30b662ae31cc3cc17bfb27eab3ac58d7f
+  PYWORLD_VERSION: "0.3.5"
+  PYWORLD_SDIST_SHA256: 1b93e53cddb67a0e4faa34d6cf919ac6c662feb1c8c0ed901d71b595ab396aa3
+  SMOKE_WORLD_SHA256: f847a9d9a5a396865fd15d443563ae8c277ff8257548599fd98dc20506fc6ccb
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL: small
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  WESPEAKER_MODEL_SHA256: 9fea6516d7ad6bf0a76c7689f5a49b65d330fad6dde96c91bb4435ffbfe056a1
+  SUPERB_REPO: superb/wav2vec2-base-superb-er
+  SUPERB_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  SUPERB_MODEL_SHA256: dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  matrix-v2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Admit unchanged scientific protocol and immutable inputs
+        id: admit
+        run: |
+          mkdir -p smoke source facodec evidence outputs
+          gh run download "$SMOKE_EVIDENCE_RUN_ID" --repo "${{ github.repository }}" -n "$SMOKE_EVIDENCE_ARTIFACT" -D smoke
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          gh run download "$FACODEC_RUN_ID" --repo "${{ github.repository }}" -n "$FACODEC_ARTIFACT" -D facodec
+          cat > immutable-hashes.txt <<'EOF'
+          ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f  source/clips/claire--panic.wav
+          d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84  source/clips/claire--sadness-contained.wav
+          3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe  source/reference-claire.wav
+          9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822  source/reference-lucie.wav
+          353d369b7eac607cf9c504190d5b445879e154a96e8fad1f30a827e379c11f08  facodec/clips/panic--claire.wav
+          6ea0839a49867ffcf679f74a4add16e6784485a29e95ef594454c73cf43d69bb  facodec/clips/panic--lucie.wav
+          ccbc369fd1f7b20307deb882145adffaf7d8f55812aeb2a169c0477b45a77f73  facodec/clips/sadness-contained--claire.wav
+          c4ea2ae5c1ccbba55f2248548a13a2c331b52374c9adaa1eb2b5c993c2c569fb  facodec/clips/sadness-contained--lucie.wav
+          EOF
+          sha256sum -c immutable-hashes.txt
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          final=json.loads(Path('smoke/final.json').read_text())
+          emotion=json.loads(Path('smoke/emotion.json').read_text())
+          admission=json.loads(Path('smoke/admission.json').read_text())
+          assert final['status']=='one-cell-machine-pass' and final['matrix_authorized'] is True
+          assert emotion['status']=='pass' and emotion['world_restored']['panic_margin']>0
+          assert admission['world_restored_ranks_lucie_first'] is True and admission['french_pass'] is True
+          Path('evidence/protocol.json').write_text(json.dumps({
+            'status':'authorized-v2-loader-only','scientific_protocol_changed':False,
+            'v1_run':32893454408,'v1_failure':'Python dynamic-loader dataclass registration before any audio render',
+            'cells':['panic--claire','panic--lucie','sadness-contained--claire','sadness-contained--lucie'],
+            'gate_order':['exact smoke reproduction','technical 4/4','French 4/4 no-worse-than-source','WeSpeaker target identity 4/4 + topology','SUPERB source-relative emotion 4/4'],
+            'tuning':False,'human_gate_authorized_initially':False,'production_qualified':False,'pages_published':False
+          },indent=2))
+          PY
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+
+      - name: Recover exact frozen WORLD implementation
+        if: steps.admit.outputs.eligible == 'true'
+        run: |
+          git fetch --depth=1 origin "$WORLD_SOURCE_COMMIT"
+          git show "$WORLD_SOURCE_COMMIT:src/audio_engine/voice_lab_facodec_world_prosody_restore.py" > world_restore.py
+          test "$(git hash-object world_restore.py)" = "$WORLD_SOURCE_BLOB"
+          python -m py_compile world_restore.py
+
+      - name: Install exact WORLD runtime
+        id: world_runtime
+        run: |
+          python -m pip install --disable-pip-version-check numpy==1.26.4 scipy==1.14.1 soundfile==0.12.1 cython==3.0.11 setuptools wheel
+          mkdir -p deps
+          python - <<'PY'
+          import hashlib,json,os,urllib.request
+          from pathlib import Path
+          version=os.environ['PYWORLD_VERSION']; expected=os.environ['PYWORLD_SDIST_SHA256']
+          with urllib.request.urlopen(f'https://pypi.org/pypi/pyworld/{version}/json') as r:data=json.load(r)
+          items=[u for u in data['urls'] if u.get('packagetype')=='sdist' and u.get('filename')==f'pyworld-{version}.tar.gz']
+          assert len(items)==1 and items[0]['digests']['sha256']==expected
+          out=Path('deps')/items[0]['filename'];urllib.request.urlretrieve(items[0]['url'],out)
+          assert hashlib.sha256(out.read_bytes()).hexdigest()==expected
+          PY
+          python -m pip install --disable-pip-version-check --no-build-isolation --no-deps "deps/pyworld-$PYWORLD_VERSION.tar.gz"
+          python -c "import importlib.metadata; assert importlib.metadata.version('pyworld')=='0.3.5'"
+
+      - name: Render exact four-cell matrix and reproduce smoke
+        id: render
+        if: steps.world_runtime.outcome == 'success'
+        run: |
+          python - <<'PY'
+          import dataclasses,hashlib,importlib.util,json,sys
+          from pathlib import Path
+          spec=importlib.util.spec_from_file_location('world_restore','world_restore.py')
+          module=importlib.util.module_from_spec(spec)
+          sys.modules[spec.name]=module
+          spec.loader.exec_module(module)
+          cells={
+            'panic--claire':('source/clips/claire--panic.wav','facodec/clips/panic--claire.wav'),
+            'panic--lucie':('source/clips/claire--panic.wav','facodec/clips/panic--lucie.wav'),
+            'sadness-contained--claire':('source/clips/claire--sadness-contained.wav','facodec/clips/sadness-contained--claire.wav'),
+            'sadness-contained--lucie':('source/clips/claire--sadness-contained.wav','facodec/clips/sadness-contained--lucie.wav')}
+          rows={}
+          for cell,(source,target) in cells.items():
+            out=Path('outputs')/f'{cell}-world.wav';d=module.restore_with_world(source,target,out)
+            rows[cell]={**dataclasses.asdict(d),'output_sha256':hashlib.sha256(out.read_bytes()).hexdigest()}
+          Path('evidence/render.json').write_text(json.dumps({'status':'pass','rows':rows,'parameter_tuning':False},indent=2))
+          print(json.dumps(rows,indent=2))
+          PY
+          echo "$SMOKE_WORLD_SHA256  outputs/panic--lucie-world.wav" | sha256sum -c -
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+
+      - name: Technical integrity 4/4
+        id: technical
+        if: steps.render.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf
+          cells=['panic--claire','panic--lucie','sadness-contained--claire','sadness-contained--lucie'];rows={};ok=True
+          for cell in cells:
+            y,sr=sf.read(f'outputs/{cell}-world.wav',dtype='float32',always_2d=False);b,bsr=sf.read(f'facodec/clips/{cell}.wav',dtype='float32',always_2d=False)
+            if y.ndim==2:y=y.mean(1)
+            if b.ndim==2:b=b.mean(1)
+            d=len(y)/sr;bd=len(b)/bsr;rms=float(np.sqrt(np.mean(y*y))) if len(y) else 0.0
+            p=sr==bsr==16000 and bool(np.isfinite(y).all()) and rms>1e-5 and abs(d-bd)<=0.010;ok=ok and p
+            rows[cell]={'pass':p,'sample_rate':sr,'duration':d,'base_duration':bd,'rms':rms,'finite':bool(np.isfinite(y).all())}
+          Path('evidence/technical.json').write_text(json.dumps({'status':'pass' if ok else 'reject','rows':rows},indent=2));print(json.dumps(rows,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned Whisper after technical PASS
+        id: whisper_runtime
+        if: steps.technical.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchaudio==2.5.1
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV" imageio-ffmpeg==0.6.0 soundfile==0.12.1
+          FFMPEG_BIN="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )";mkdir -p "$HOME/.local/bin";ln -sf "$FFMPEG_BIN" "$HOME/.local/bin/ffmpeg";echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: French no-worse-than-source 4/4
+        id: french
+        if: steps.whisper_runtime.outcome == 'success'
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,re,unicodedata
+          from pathlib import Path
+          import whisper
+          expected={'panic':"Vite ! Ils arrivent ! Fermez la porte !",'sadness-contained':"Il est parti avant l'aube. Je savais que ce moment viendrait, mais pas si tôt."}
+          def norm(t):
+            t=unicodedata.normalize('NFKC',t).lower().replace('’',"'");t=re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+",' ',t);return ' '.join(t.split())
+          def ed(a,b):
+            p=list(range(len(b)+1))
+            for i,x in enumerate(a,1):
+              c=[i]
+              for j,y in enumerate(b,1):c.append(min(c[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+              p=c
+            return p[-1]
+          def wer(r,h):a,b=norm(r).split(),norm(h).split();return ed(a,b)/max(1,len(a))
+          model=whisper.load_model(os.environ['WHISPER_MODEL'],device='cpu');cp=Path.home()/'.cache'/'whisper'/f"{os.environ['WHISPER_MODEL']}.pt";assert hashlib.sha256(cp.read_bytes()).hexdigest()==os.environ['WHISPER_MODEL_SHA256']
+          def tr(p):return str(model.transcribe(p,language='fr',task='transcribe',fp16=False,temperature=0,condition_on_previous_text=False).get('text','')).strip()
+          sources={}
+          for e,p in {'panic':'source/clips/claire--panic.wav','sadness-contained':'source/clips/claire--sadness-contained.wav'}.items():
+            t=tr(p);sources[e]={'transcript':t,'wer':wer(expected[e],t)}
+          rows={};ok=True
+          for cell in ['panic--claire','panic--lucie','sadness-contained--claire','sadness-contained--lucie']:
+            e='sadness-contained' if cell.startswith('sadness-contained') else 'panic';t=tr(f'outputs/{cell}-world.wav');w=wer(expected[e],t);p=w<=sources[e]['wer']+1e-12;ok=ok and p;rows[cell]={'transcript':t,'wer':w,'source_wer':sources[e]['wer'],'pass':p}
+          Path('evidence/french.json').write_text(json.dumps({'status':'pass' if ok else 'reject','sources':sources,'rows':rows,'absolute_threshold':False},ensure_ascii=False,indent=2));print(json.dumps(rows,ensure_ascii=False,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install proven WeSpeaker after French PASS
+        id: identity_runtime
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check onnxruntime==1.20.1 huggingface_hub==0.36.0 numpy==1.26.4 soundfile==0.12.1
+          git init WeSpeaker;git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git;git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV";git -C WeSpeaker checkout --detach FETCH_HEAD;test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"
+          mkdir -p wespeaker-model
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          p=Path(snapshot_download(repo_id=os.environ['WESPEAKER_MODEL_REPO'],revision=os.environ['WESPEAKER_MODEL_REV'],allow_patterns=['voxceleb_resnet34.onnx'],local_dir='wespeaker-model'))/'voxceleb_resnet34.onnx'
+          assert p.stat().st_size==26534127 and hashlib.sha256(p.read_bytes()).hexdigest()==os.environ['WESPEAKER_MODEL_SHA256']
+          PY
+
+      - name: WeSpeaker target identity plus topology
+        id: identity
+        if: steps.identity_runtime.outcome == 'success'
+        run: |
+          python - <<'PY'
+          import importlib.util,json,os
+          from pathlib import Path
+          import numpy as np,onnxruntime as ort
+          spec=importlib.util.spec_from_file_location('ws','WeSpeaker/wespeaker/bin/infer_onnx.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);s=ort.InferenceSession('wespeaker-model/voxceleb_resnet34.onnx',providers=['CPUExecutionProvider'])
+          def emb(p):f=m.compute_fbank(p).unsqueeze(0).numpy();e=np.asarray(s.run(['embs'],{'feats':f})[0]).reshape(-1).astype(np.float64);return e/np.linalg.norm(e)
+          refs={'claire':emb('source/reference-claire.wav'),'lucie':emb('source/reference-lucie.wav')};cells=['panic--claire','panic--lucie','sadness-contained--claire','sadness-contained--lucie'];es={c:emb(f'outputs/{c}-world.wav') for c in cells};rows={};individual=True
+          for c,e in es.items():
+            target='claire' if c.endswith('--claire') else 'lucie';other='lucie' if target=='claire' else 'claire';a=float(e@refs[target]);b=float(e@refs[other]);p=a>b;individual=individual and p;rows[c]={'target':target,'sim_target':a,'sim_other':b,'margin':a-b,'pass':p}
+          same={'claire':float(es['panic--claire']@es['sadness-contained--claire']),'lucie':float(es['panic--lucie']@es['sadness-contained--lucie'])};cross={'panic':float(es['panic--claire']@es['panic--lucie']),'sadness-contained':float(es['sadness-contained--claire']@es['sadness-contained--lucie'])};margin=min(same.values())-max(cross.values());topology=margin>0;ok=individual and topology
+          Path('evidence/identity.json').write_text(json.dumps({'status':'pass' if ok else 'reject','rows':rows,'all_target_first':individual,'same_target':same,'cross_target':cross,'topology_margin':margin,'topology_pass':topology,'absolute_threshold':False},indent=2));print(json.dumps({'rows':rows,'topology_margin':margin},indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install exact SUPERB after identity PASS
+        id: emotion_runtime
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check transformers==4.40.1 safetensors==0.4.5 huggingface_hub==0.36.0 scipy==1.14.1 numpy==1.26.4 soundfile==0.12.1
+          mkdir -p superb-model
+          python - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(repo_id=os.environ['SUPERB_REPO'],revision=os.environ['SUPERB_REV'],allow_patterns=['config.json','preprocessor_config.json','pytorch_model.bin','README.md'],local_dir='superb-model'));w=root/'pytorch_model.bin';c=root/'config.json';assert w.stat().st_size==378361105 and hashlib.sha256(w.read_bytes()).hexdigest()==os.environ['SUPERB_MODEL_SHA256'];assert {str(k):str(v).lower() for k,v in json.loads(c.read_text()).get('id2label',{}).items()}=={'0':'neu','1':'hap','2':'ang','3':'sad'}
+          PY
+
+      - name: Prove exact SUPERB weight-norm loading
+        id: compat
+        if: steps.emotion_runtime.outcome == 'success'
+        run: |
+          python - <<'PY'
+          import json,torch
+          from pathlib import Path
+          from transformers import AutoModelForAudioClassification
+          ck=torch.load('superb-model/pytorch_model.bin',map_location='cpu',weights_only=True);gk='wav2vec2.encoder.pos_conv_embed.conv.weight_g';vk='wav2vec2.encoder.pos_conv_embed.conv.weight_v';model=AutoModelForAudioClassification.from_pretrained('superb-model',local_files_only=True);conv=model.wav2vec2.encoder.pos_conv_embed.conv
+          if hasattr(conv,'parametrizations') and hasattr(conv.parametrizations,'weight'):ag=conv.parametrizations.weight.original0.detach().cpu();av=conv.parametrizations.weight.original1.detach().cpu()
+          else:ag=conv.weight_g.detach().cpu();av=conv.weight_v.detach().cpu()
+          ok=torch.equal(ag,ck[gk].detach().cpu()) and torch.equal(av,ck[vk].detach().cpu());Path('evidence/superb-compat.json').write_text(json.dumps({'pass':bool(ok)},indent=2));assert ok
+          PY
+
+      - name: SUPERB source-relative emotion 4/4
+        id: emotion
+        if: steps.compat.outcome == 'success'
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from scipy.signal import resample_poly
+          from transformers import AutoFeatureExtractor,AutoModelForAudioClassification
+          torch.set_num_threads(2);extractor=AutoFeatureExtractor.from_pretrained('superb-model',local_files_only=True);model=AutoModelForAudioClassification.from_pretrained('superb-model',local_files_only=True);model.eval();labels=[str(model.config.id2label[i]).lower() for i in range(model.config.num_labels)]
+          def load16(p):
+            y,sr=sf.read(p,always_2d=False,dtype='float32');y=np.asarray(y,dtype=np.float32)
+            if y.ndim==2:y=y.mean(1)
+            if sr!=16000:g=int(np.gcd(sr,16000));y=resample_poly(y,16000//g,sr//g).astype(np.float32)
+            return y
+          def prof(p):
+            x=extractor(load16(p),sampling_rate=16000,return_tensors='pt',padding=False)
+            with torch.inference_mode():l=model(**x).logits[0]
+            r=torch.softmax(l,dim=-1).cpu().numpy().astype(np.float64);return r,r/np.linalg.norm(r)
+          raw={};norm={}
+          for e,p in {'panic':'source/clips/claire--panic.wav','sadness-contained':'source/clips/claire--sadness-contained.wav'}.items():raw[e],norm[e]=prof(p)
+          top={e:labels[int(np.argmax(raw[e]))] for e in raw};source_valid=top['panic']!=top['sadness-contained'];rows={};ok=source_valid
+          for c in ['panic--claire','panic--lucie','sadness-contained--claire','sadness-contained--lucie']:
+            e='sadness-contained' if c.startswith('sadness-contained') else 'panic';o='panic' if e=='sadness-contained' else 'sadness-contained';r,n=prof(f'outputs/{c}-world.wav');a=float(n@norm[e]);b=float(n@norm[o]);p=a>b;ok=ok and p;rows[c]={'intended':e,'sim_intended':a,'sim_other':b,'margin':a-b,'pass':p,'profile':{labels[i]:float(r[i]) for i in range(len(labels))}}
+          Path('evidence/emotion.json').write_text(json.dumps({'status':'pass' if ok else 'reject','source_valid':source_valid,'source_top':top,'rows':rows,'absolute_threshold':False},indent=2));print(json.dumps(rows,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Record Steve and Linus verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          def r(n):
+            p=Path(f'evidence/{n}.json');return json.loads(p.read_text()) if p.is_file() else None
+          t,f,i,e=r('technical'),r('french'),r('identity'),r('emotion')
+          if t is None:status='infrastructure-incomplete';decision='No technical evidence.'
+          elif t['status']!='pass':status='technical-reject';decision='Technical 4/4 failed.'
+          elif f is None:status='infrastructure-incomplete';decision='No French evidence.'
+          elif f['status']!='pass':status='french-reject';decision='Steve veto: French regressed on at least one cell; retire without tuning.'
+          elif i is None:status='infrastructure-incomplete';decision='No identity evidence.'
+          elif i['status']!='pass':status='identity-reject';decision='Steve veto: target identity/topology failed; retire without tuning.'
+          elif e is None:status='infrastructure-incomplete';decision='No emotion evidence.'
+          elif e['status']!='pass':status='emotion-reject';decision='Steve veto: source-relative emotion failed on at least one cell; retire without tuning.'
+          else:status='four-cell-machine-pass';decision='All 4 cells pass technical, French, identity topology and source-relative emotion. Authorize minimal blind human gate.'
+          final={'status':status,'decision':decision,'human_gate_authorized':status=='four-cell-machine-pass','production_qualified':False,'pages_published':False,'parameter_tuning':False}
+          Path('evidence/final.json').write_text(json.dumps(final,indent=2));print(json.dumps(final,indent=2))
+          PY
+
+      - name: Upload matrix v2 evidence and WAVs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: facodec-world-four-cell-matrix-v2
+          path: |
+            evidence/
+            outputs/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface matrix verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('evidence/final.json');assert p.is_file();r=json.loads(p.read_text());print('STATUS='+r['status']);raise SystemExit(0 if r['status']=='four-cell-machine-pass' else 1)
+          PY
