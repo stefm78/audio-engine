@@ -101,9 +101,21 @@ jobs:
           python -m pip install --disable-pip-version-check -e .
           python -m pip install --disable-pip-version-check numpy==1.26.4 scipy==1.14.1 soundfile==0.12.1 cython==3.0.11
           mkdir -p deps
-          python -m pip download --disable-pip-version-check --no-deps --no-binary=:all: "pyworld==$PYWORLD_VERSION" -d deps
-          echo "$PYWORLD_SDIST_SHA256  deps/pyworld-$PYWORLD_VERSION.tar.gz" | sha256sum -c -
-          python -m pip install --disable-pip-version-check "deps/pyworld-$PYWORLD_VERSION.tar.gz"
+          python - <<'PY'
+          import hashlib, json, os, urllib.request
+          from pathlib import Path
+          version=os.environ['PYWORLD_VERSION']; expected=os.environ['PYWORLD_SDIST_SHA256']
+          with urllib.request.urlopen(f'https://pypi.org/pypi/pyworld/{version}/json') as r: meta=json.load(r)
+          rows=[x for x in meta['urls'] if x.get('packagetype')=='sdist' and x.get('filename')==f'pyworld-{version}.tar.gz']
+          if len(rows)!=1: raise SystemExit(f'unexpected PyWORLD sdist set: {len(rows)}')
+          row=rows[0]
+          if row['digests']['sha256']!=expected: raise SystemExit('PyPI metadata SHA differs from preregistered SHA')
+          out=Path('deps')/row['filename']; urllib.request.urlretrieve(row['url'],out)
+          got=hashlib.sha256(out.read_bytes()).hexdigest()
+          if got!=expected: raise SystemExit(f'PyWORLD sdist SHA mismatch: {got}')
+          print(row['filename'],got)
+          PY
+          python -m pip install --disable-pip-version-check --no-build-isolation --no-deps "deps/pyworld-$PYWORLD_VERSION.tar.gz"
           python - <<'PY'
           import importlib.metadata
           assert importlib.metadata.version('pyworld') == '0.3.5'
