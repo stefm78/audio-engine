@@ -1,0 +1,86 @@
+name: Voice Casting Qwen3 Contrast Emotion Assemble Recovery
+
+on:
+  pull_request:
+    branches: [feature/qwen3-contrast-emotion-killer]
+    paths:
+      - .github/workflows/voice-casting-qwen3-contrast-emotion-assemble-recovery.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+env:
+  SOURCE_RUN_ID: "32818950167"
+  SOURCE_ARTIFACT: qwen3-contrast-selected-pair
+  ORIGINAL_RUN_ID: "32821813355"
+  ORIGINAL_LUCIE_ARTIFACT: qwen3-contrast-emotion-lucie
+  CLAIRE_RECOVERY_RUN_ID: "32822771961"
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Download exact recovered Claire cases
+        run: |
+          mkdir -p recovered-cases
+          gh run download "$CLAIRE_RECOVERY_RUN_ID" --repo "${{ github.repository }}" -n qwen3-contrast-emotion-claire-recovery-panic -D recovered-cases/panic
+          gh run download "$CLAIRE_RECOVERY_RUN_ID" --repo "${{ github.repository }}" -n qwen3-contrast-emotion-claire-recovery-wonder -D recovered-cases/wonder
+          gh run download "$CLAIRE_RECOVERY_RUN_ID" --repo "${{ github.repository }}" -n qwen3-contrast-emotion-claire-recovery-sadness-contained -D recovered-cases/sadness-contained
+      - name: Assemble canonical Claire artifact
+        run: |
+          python - <<'PY'
+          import json, shutil
+          from pathlib import Path
+          from audio_engine.voice_lab_qwen3_contrast_emotion import CASES, SELECTED
+          out = Path('emotion-inputs/claire'); clips = out / 'clips'; clips.mkdir(parents=True)
+          rendered=[]
+          for case in CASES:
+              matches=[]
+              for meta in Path('recovered-cases').rglob('case-result.json'):
+                  data=json.loads(meta.read_text(encoding='utf-8'))
+                  if data['case_id']==case['id']:
+                      matches.append((meta,data))
+              if len(matches)!=1:
+                  raise SystemExit(f"expected one recovered {case['id']}, got {len(matches)}")
+              meta,data=matches[0]
+              if data['candidate_id']!=SELECTED['claire']:
+                  raise SystemExit('Claire candidate mismatch')
+              dst=clips / f"{case['id']}.wav"
+              shutil.copy2(meta.parent / data['file'], dst)
+              rendered.append({'id':case['id'],'file':f"clips/{case['id']}.wav",'seed':data['seed'],'render_seconds':data['render_seconds']})
+          result={'schema':'qwen3-contrast-emotion-character-v1','status':'success','role':'claire','candidate_id':SELECTED['claire'],'seed':rendered[0]['seed'],'rendered_count':len(rendered),'rendered':rendered,'technical_recovery':True}
+          (out/'character-result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+          PY
+      - name: Reuse exact original Lucie artifact
+        run: gh run download "$ORIGINAL_RUN_ID" --repo "${{ github.repository }}" -n "$ORIGINAL_LUCIE_ARTIFACT" -D emotion-inputs/lucie
+      - name: Download exact qualified references
+        run: gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D selected-pair
+      - name: Assemble blind three-screen bundle
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from audio_engine.voice_lab_qwen3_contrast_emotion import assemble_bundle
+          result=assemble_bundle(Path('emotion-inputs'),Path('selected-pair'),Path('bundle'))
+          print(json.dumps({'status':result['status'],'trial_count':result['trial_count'],'distance_diagnostics':{k:v['score'] for k,v in result['distance_diagnostics_not_a_gate'].items()}},ensure_ascii=False,indent=2))
+          if result['status']!='success' or result['trial_count']!=3:
+              raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-qwen3-contrast-emotion-killer-recovery
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 14
