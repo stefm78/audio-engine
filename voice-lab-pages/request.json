@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "run_id": 32813525803,
-  "artifact": "voice-casting-qwen3-style-transplant-killer-recovery",
-  "requested_at": "2026-08-25T08:02:00+02:00"
+  "run_id": 32817107201,
+  "artifact": "voice-casting-openvoice-v2-tone-killer",
+  "requested_at": "2026-08-25T08:34:00+02:00"
 }
