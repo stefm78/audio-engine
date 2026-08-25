@@ -87,13 +87,20 @@ jobs:
             librosa==0.10.2.post1 \
             soundfile==0.12.1 \
             einops==0.8.0 \
-            x-transformers==1.40.2 \
+            x-transformers==2.11.12 \
             tqdm==4.66.5 \
             safetensors==0.4.5 \
             huggingface_hub==0.36.0 \
             matplotlib==3.7.5 \
             packaging==24.2
           python -m pip check
+          python - <<'PY'
+          from importlib import metadata
+          version = metadata.version("x-transformers")
+          if version != "2.11.12":
+              raise SystemExit(f"unexpected x-transformers runtime: {version}")
+          print("native x-transformers runtime verified", version)
+          PY
 
       - name: Checkout pinned MeanVC and WavLM-only S3PRL path
         run: |
@@ -196,6 +203,8 @@ jobs:
               "s3prl_code_revision": os.environ["S3PRL_REV"],
               "wavlm_base": {"bytes": base.stat().st_size, "sha256": sha(base), "code_path_license": "Microsoft MIT via pinned S3PRL WavLM files"},
               "wavlm_finetune": {"repo": os.environ["WAVLM_FINETUNE_REPO"], "revision": os.environ["WAVLM_FINETUNE_REV"], "bytes": ft.stat().st_size, "sha256": sha(ft), "mirror_model_card_license": "mit"},
+              "x_transformers_runtime": "2.11.12",
+              "x_transformers_wheel_sha256": "ea37c40a37c8d5f4322c121e7bc074e1707287343203c25b468c792728724625",
               "network_mutability_removed": True,
               "production_promotion": False,
           }
