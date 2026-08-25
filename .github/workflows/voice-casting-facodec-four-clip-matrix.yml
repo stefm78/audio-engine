@@ -1,0 +1,669 @@
+name: Voice Casting FACodec Four Clip Matrix
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-facodec-four-clip-matrix.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  SMOKE_RUN_ID: "32849608490"
+  SMOKE_ARTIFACT: facodec-lucie-sadness-killer
+  SMOKE_WAV_SHA256: c4ea2ae5c1ccbba55f2248548a13a2c331b52374c9adaa1eb2b5c993c2c569fb
+  AMPHION_REV: 26f6883110181f1dbfe95c70a7c7dbaf4de5f42a
+  FACODEC_REPO: amphion/naturalspeech3_facodec
+  FACODEC_REV: 314afc3ea1455ba881a0e484ef9408b6cb996736
+  ECAPA_REV: eac27266f68caa806381260bd44ace38b136c76a
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL: small
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Zero-cost protocol gate
+        run: |
+          python - <<'PY'
+          cases = {
+              "panic--claire": "generate",
+              "panic--lucie": "generate",
+              "sadness-contained--claire": "generate",
+              "sadness-contained--lucie": "reuse-smoke",
+          }
+          assert len(cases) == 4
+          assert sum(v == "generate" for v in cases.values()) == 3
+          assert sum(v == "reuse-smoke" for v in cases.values()) == 1
+          assert cases["sadness-contained--lucie"] == "reuse-smoke"
+          print("protocol: 4-cell FACodec matrix, 3 new conversions + 1 immutable smoke reuse")
+          PY
+
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+
+      - name: Download and verify immutable source evidence
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          cat > source-hashes.txt <<'EOF'
+          3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe  source/reference-claire.wav
+          9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822  source/reference-lucie.wav
+          ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f  source/clips/claire--panic.wav
+          d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84  source/clips/claire--sadness-contained.wav
+          EOF
+          sha256sum -c source-hashes.txt
+
+      - name: Reuse exact smoke Lucie sadness output
+        run: |
+          mkdir -p smoke evidence/clips
+          gh run download "$SMOKE_RUN_ID" --repo "${{ github.repository }}" -n "$SMOKE_ARTIFACT" -D smoke
+          test -f smoke/clips/sadness-contained--lucie.wav
+          test -f smoke/final.json
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          wav = Path("smoke/clips/sadness-contained--lucie.wav")
+          sha = hashlib.sha256(wav.read_bytes()).hexdigest()
+          if sha != os.environ["SMOKE_WAV_SHA256"]:
+              raise SystemExit(f"smoke WAV SHA mismatch: {sha}")
+          final = json.loads(Path("smoke/final.json").read_text(encoding="utf-8"))
+          if final.get("status") != "machine-smoke-pass":
+              raise SystemExit(f"smoke artifact is not a machine-smoke-pass: {final}")
+          shutil.copyfile(wav, "evidence/clips/sadness-contained--lucie.wav")
+          report = {
+              "run_id": int(os.environ["SMOKE_RUN_ID"]),
+              "artifact": os.environ["SMOKE_ARTIFACT"],
+              "wav_sha256": sha,
+              "reused_cell": "sadness-contained--lucie",
+          }
+          Path("evidence/reuse.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2), flush=True)
+          PY
+
+      - name: Install minimal FACodec runtime
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchaudio==2.5.1
+          python -m pip install --disable-pip-version-check \
+            numpy==1.26.4 \
+            einops==0.8.0 \
+            huggingface_hub==0.36.0 \
+            soundfile==0.12.1 \
+            scipy==1.14.1 \
+            librosa==0.10.2.post1 \
+            pyworld==0.3.5
+          python -m pip check
+
+      - name: Checkout pinned Amphion FACodec implementation
+        run: |
+          git init Amphion
+          git -C Amphion remote add origin https://github.com/open-mmlab/Amphion.git
+          git -C Amphion fetch --depth=1 origin "$AMPHION_REV"
+          git -C Amphion checkout --detach FETCH_HEAD
+          test "$(git -C Amphion rev-parse HEAD)" = "$AMPHION_REV"
+          test -f Amphion/LICENSE
+          grep -qi "MIT License" Amphion/LICENSE
+          python -m py_compile \
+            Amphion/models/codec/ns3_codec/facodec.py \
+            Amphion/models/codec/ns3_codec/transformer.py \
+            Amphion/models/codec/ns3_codec/quantize/fvq.py \
+            Amphion/models/codec/ns3_codec/quantize/rvq.py
+
+      - name: Download and hash pinned FACodec checkpoints
+        run: |
+          mkdir -p facodec-weights
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+
+          expected = {
+              "ns3_facodec_encoder.bin": "c8fa7b8d79ccd915e6c3b19cd3c9d5f4cba3fbeb794a2e598d7e31db8efee47e",
+              "ns3_facodec_decoder.bin": "4b8f2c9a691385c1a61542585116f52263a029758dcb4a3a955ff2c190afd536",
+              "ns3_facodec_redecoder.bin": "8263c661e03a904dc2d1be65b09af2e6ff20d43e4aade83d91d5179d51b11c26",
+          }
+          root = Path(snapshot_download(
+              repo_id=os.environ["FACODEC_REPO"],
+              revision=os.environ["FACODEC_REV"],
+              allow_patterns=list(expected),
+              local_dir="facodec-weights",
+          ))
+          rows = {}
+          for name, expected_sha in expected.items():
+              path = root / name
+              sha = hashlib.sha256(path.read_bytes()).hexdigest()
+              if sha != expected_sha:
+                  raise SystemExit(f"checkpoint SHA mismatch for {name}: {sha}")
+              rows[name] = {"bytes": path.stat().st_size, "sha256": sha}
+          report = {
+              "repo": os.environ["FACODEC_REPO"],
+              "revision": os.environ["FACODEC_REV"],
+              "amphion_revision": os.environ["AMPHION_REV"],
+              "files": rows,
+          }
+          Path("evidence/checkpoints.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2), flush=True)
+          PY
+
+      - name: Generate only the three missing matrix cells
+        run: |
+          python - <<'PY'
+          import json
+          import sys
+          import time
+          from pathlib import Path
+
+          import soundfile as sf
+          import torch
+          import torchaudio
+
+          sys.path.insert(0, str(Path(".").resolve()))
+          from Amphion.models.codec.ns3_codec import FACodecDecoder, FACodecEncoder, FACodecRedecoder
+
+          torch.set_num_threads(2)
+          torch.manual_seed(0)
+
+          encoder = FACodecEncoder(ngf=32, up_ratios=[2, 4, 5, 5], out_channels=256)
+          decoder = FACodecDecoder(
+              in_channels=256,
+              upsample_initial_channel=1024,
+              ngf=32,
+              up_ratios=[5, 5, 4, 2],
+              vq_num_q_c=2,
+              vq_num_q_p=1,
+              vq_num_q_r=3,
+              vq_dim=256,
+              codebook_dim=8,
+              codebook_size_prosody=10,
+              codebook_size_content=10,
+              codebook_size_residual=10,
+              use_gr_x_timbre=True,
+              use_gr_residual_f0=True,
+              use_gr_residual_phone=True,
+          )
+          redecoder = FACodecRedecoder()
+
+          def load_state(module, path):
+              state = torch.load(path, map_location="cpu", weights_only=True)
+              module.load_state_dict(state, strict=True)
+              module.eval()
+
+          load_state(encoder, "facodec-weights/ns3_facodec_encoder.bin")
+          load_state(decoder, "facodec-weights/ns3_facodec_decoder.bin")
+          load_state(redecoder, "facodec-weights/ns3_facodec_redecoder.bin")
+
+          def load16(path):
+              wav, sr = torchaudio.load(path)
+              wav = wav.mean(0, keepdim=True)
+              if sr != 16000:
+                  wav = torchaudio.functional.resample(wav, sr, 16000)
+              return wav.unsqueeze(0)
+
+          sources = {
+              "panic": load16("source/clips/claire--panic.wav"),
+              "sadness-contained": load16("source/clips/claire--sadness-contained.wav"),
+          }
+          refs = {
+              "claire": load16("source/reference-claire.wav"),
+              "lucie": load16("source/reference-lucie.wav"),
+          }
+
+          rows = {}
+          with torch.inference_mode():
+              target_spk = {}
+              for speaker, wav in refs.items():
+                  enc = encoder(wav)
+                  _, _, _, _, target_spk[speaker] = decoder(enc, eval_vq=False, vq=True)
+
+              source_vq = {}
+              for emotion, wav in sources.items():
+                  enc = encoder(wav)
+                  _, source_vq[emotion], _, _, _ = decoder(enc, eval_vq=False, vq=True)
+
+              cases = [
+                  ("panic", "claire"),
+                  ("panic", "lucie"),
+                  ("sadness-contained", "claire"),
+              ]
+              assert len(cases) == 3
+              for emotion, speaker in cases:
+                  started = time.perf_counter()
+                  converted_emb = redecoder.vq2emb(
+                      source_vq[emotion], target_spk[speaker], use_residual=False
+                  )
+                  output = redecoder.inference(converted_emb, target_spk[speaker])
+                  elapsed = time.perf_counter() - started
+                  audio = output[0, 0].clamp(-1.0, 1.0).cpu().numpy()
+                  out_path = Path(f"evidence/clips/{emotion}--{speaker}.wav")
+                  sf.write(out_path, audio, 16000, subtype="PCM_16")
+                  rows[f"{emotion}--{speaker}"] = {
+                      "output": str(out_path),
+                      "samples": int(audio.shape[0]),
+                      "decode_seconds_excluding_shared_encode": round(elapsed, 6),
+                  }
+
+          expected = {
+              "panic--claire",
+              "panic--lucie",
+              "sadness-contained--claire",
+              "sadness-contained--lucie",
+          }
+          present = {p.stem for p in Path("evidence/clips").glob("*.wav")}
+          if present != expected:
+              raise SystemExit(f"matrix output set mismatch: {sorted(present)}")
+
+          report = {
+              "generated_count": 3,
+              "reused_count": 1,
+              "generated": rows,
+              "reused": "sadness-contained--lucie",
+              "architecture": "FACodec source VQ (prosody+content; residual excluded) + target speaker embedding",
+              "use_residual": False,
+              "human_proof": False,
+              "production_qualified": False,
+          }
+          Path("evidence/conversion-matrix.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2), flush=True)
+          PY
+
+      - name: Record threshold-free prosody diagnostics
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          import librosa
+          import numpy as np
+          import pyworld as pw
+
+          sources = {
+              "panic": "source/clips/claire--panic.wav",
+              "sadness-contained": "source/clips/claire--sadness-contained.wav",
+          }
+          outputs = {
+              "panic--claire": "evidence/clips/panic--claire.wav",
+              "panic--lucie": "evidence/clips/panic--lucie.wav",
+              "sadness-contained--claire": "evidence/clips/sadness-contained--claire.wav",
+              "sadness-contained--lucie": "evidence/clips/sadness-contained--lucie.wav",
+          }
+
+          def load(path):
+              y, _ = librosa.load(path, sr=16000, mono=True)
+              return y.astype(np.float64)
+
+          def energy(y):
+              frame, hop = 400, 160
+              if len(y) < frame:
+                  y = np.pad(y, (0, frame - len(y)))
+              n = 1 + (len(y) - frame) // hop
+              e = np.array([
+                  np.sqrt(np.mean(y[i*hop:i*hop+frame] ** 2) + 1e-12)
+                  for i in range(n)
+              ])
+              e = np.log(e + 1e-6)
+              return (e - e.mean()) / (e.std() + 1e-8)
+
+          def corr_resampled(a, b):
+              n = max(len(a), len(b))
+              grid = np.linspace(0.0, 1.0, n)
+              aa = np.interp(grid, np.linspace(0.0, 1.0, len(a)), a)
+              bb = np.interp(grid, np.linspace(0.0, 1.0, len(b)), b)
+              return float(np.corrcoef(aa, bb)[0, 1])
+
+          def norm_f0(y):
+              f0, t = pw.dio(y, 16000, frame_period=10.0)
+              f0 = pw.stonemask(y, f0, t, 16000)
+              voiced = f0 > 0
+              if int(voiced.sum()) < 5:
+                  return None
+              tt = t[voiced]
+              vv = np.log(f0[voiced])
+              if tt[-1] <= tt[0]:
+                  return None
+              tt = (tt - tt[0]) / (tt[-1] - tt[0])
+              grid = np.linspace(0.0, 1.0, 100)
+              vv = np.interp(grid, tt, vv)
+              return (vv - vv.mean()) / (vv.std() + 1e-8)
+
+          src_cache = {k: load(v) for k, v in sources.items()}
+          rows = {}
+          for cell, path in outputs.items():
+              emotion = "sadness-contained" if cell.startswith("sadness-contained") else "panic"
+              src = src_cache[emotion]
+              out = load(path)
+              fs, fo = norm_f0(src), norm_f0(out)
+              f0_corr = None if fs is None or fo is None else float(np.corrcoef(fs, fo)[0, 1])
+              rows[cell] = {
+                  "source_duration_seconds": round(len(src) / 16000.0, 6),
+                  "output_duration_seconds": round(len(out) / 16000.0, 6),
+                  "duration_ratio": round(len(out) / max(1, len(src)), 6),
+                  "energy_envelope_correlation": round(corr_resampled(energy(src), energy(out)), 6),
+                  "normalized_log_f0_contour_correlation": None if f0_corr is None else round(f0_corr, 6),
+              }
+          report = {
+              "outputs": rows,
+              "gate": False,
+              "claim": "duration/energy/F0 source-preservation diagnostics only; not automatic acting or emotion proof",
+          }
+          Path("evidence/prosody-matrix.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2), flush=True)
+          PY
+
+      - name: Install independent identity verifier
+        run: |
+          python -m pip install --disable-pip-version-check speechbrain==1.0.3 huggingface_hub==0.36.0
+          python -m pip check
+          mkdir -p verifier/ecapa
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(
+              repo_id="speechbrain/spkrec-ecapa-voxceleb",
+              revision=os.environ["ECAPA_REV"],
+              local_dir="verifier/ecapa",
+          ))
+          PY
+
+      - name: Require target identity and cross-emotion topology
+        id: identity
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          import torch
+          import torchaudio
+          from speechbrain.inference.speaker import EncoderClassifier
+
+          torch.set_num_threads(2)
+          model = EncoderClassifier.from_hparams(
+              source=str(Path("verifier/ecapa").resolve()),
+              savedir=str(Path("verifier/runtime").resolve()),
+              run_opts={"device": "cpu"},
+          )
+
+          def emb(path):
+              wav, sr = torchaudio.load(path)
+              wav = wav.mean(0, keepdim=True)
+              if sr != 16000:
+                  wav = torchaudio.functional.resample(wav, sr, 16000)
+              with torch.inference_mode():
+                  e = model.encode_batch(wav).squeeze().cpu()
+              return torch.nn.functional.normalize(e, dim=0)
+
+          def sim(a, b):
+              return float(torch.dot(a, b))
+
+          refs = {
+              "claire": emb("source/reference-claire.wav"),
+              "lucie": emb("source/reference-lucie.wav"),
+          }
+          paths = {
+              "panic--claire": "evidence/clips/panic--claire.wav",
+              "panic--lucie": "evidence/clips/panic--lucie.wav",
+              "sadness-contained--claire": "evidence/clips/sadness-contained--claire.wav",
+              "sadness-contained--lucie": "evidence/clips/sadness-contained--lucie.wav",
+          }
+          embs = {cell: emb(path) for cell, path in paths.items()}
+
+          cells = {}
+          cell_passes = []
+          for cell, e in embs.items():
+              target = "claire" if cell.endswith("--claire") else "lucie"
+              other = "lucie" if target == "claire" else "claire"
+              target_sim = sim(e, refs[target])
+              other_sim = sim(e, refs[other])
+              margin = target_sim - other_sim
+              passed = margin > 0.0
+              cell_passes.append(passed)
+              cells[cell] = {
+                  "target": target,
+                  "sim_target": target_sim,
+                  "sim_other": other_sim,
+                  "target_margin": margin,
+                  "ranks_target_first": passed,
+              }
+
+          same_claire = sim(embs["panic--claire"], embs["sadness-contained--claire"])
+          same_lucie = sim(embs["panic--lucie"], embs["sadness-contained--lucie"])
+          cross_panic = sim(embs["panic--claire"], embs["panic--lucie"])
+          cross_sadness = sim(embs["sadness-contained--claire"], embs["sadness-contained--lucie"])
+          min_same = min(same_claire, same_lucie)
+          max_cross = max(cross_panic, cross_sadness)
+          topology_margin = min_same - max_cross
+          topology_pass = topology_margin > 0.0
+          eligible = all(cell_passes) and topology_pass
+
+          report = {
+              "cells": cells,
+              "topology": {
+                  "same_target_cross_emotion": {
+                      "claire": same_claire,
+                      "lucie": same_lucie,
+                  },
+                  "cross_target_same_emotion": {
+                      "panic": cross_panic,
+                      "sadness-contained": cross_sadness,
+                  },
+                  "min_same_target": min_same,
+                  "max_cross_target": max_cross,
+                  "margin": topology_margin,
+                  "pass": topology_pass,
+                  "rule": "min(same-target cross-emotion similarity) > max(cross-target same-emotion similarity)",
+              },
+              "identity_gate": {
+                  "pass": eligible,
+                  "all_cells_rank_target_first": all(cell_passes),
+                  "absolute_threshold": False,
+                  "claim": "ECAPA machine identity/topology prefilter; not human identity proof",
+              },
+          }
+          Path("evidence/identity-matrix.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2), flush=True)
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:
+              f.write(f"eligible={'true' if eligible else 'false'}\n")
+          PY
+
+      - name: Install pinned Whisper Small only after identity matrix survives
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check \
+            "git+https://github.com/openai/whisper.git@$WHISPER_REV" \
+            imageio-ffmpeg==0.6.0
+          python -m pip check
+          FFMPEG_BIN="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$FFMPEG_BIN" "$HOME/.local/bin/ffmpeg"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          PATH="$HOME/.local/bin:$PATH" ffmpeg -version | head -1
+
+      - name: Require French content no worse than expressive sources
+        id: french
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import unicodedata
+          from pathlib import Path
+
+          import whisper
+
+          expected = {
+              "panic": "Vite ! Ils arrivent ! Fermez la porte !",
+              "sadness-contained": "Il est parti avant l'aube. Je savais que ce moment viendrait, mais pas si tôt.",
+          }
+          source_paths = {
+              "panic": "source/clips/claire--panic.wav",
+              "sadness-contained": "source/clips/claire--sadness-contained.wav",
+          }
+          output_paths = {
+              "panic--claire": "evidence/clips/panic--claire.wav",
+              "panic--lucie": "evidence/clips/panic--lucie.wav",
+              "sadness-contained--claire": "evidence/clips/sadness-contained--claire.wav",
+              "sadness-contained--lucie": "evidence/clips/sadness-contained--lucie.wav",
+          }
+
+          def words(text):
+              text = unicodedata.normalize("NFKD", text.lower())
+              text = "".join(c for c in text if not unicodedata.combining(c))
+              text = text.replace("'", " ").replace("’", " ").replace("-", " ")
+              return re.findall(r"[a-z0-9]+", text)
+
+          def edit_distance(a, b):
+              prev = list(range(len(b) + 1))
+              for i, x in enumerate(a, 1):
+                  cur = [i]
+                  for j, y in enumerate(b, 1):
+                      cur.append(min(cur[-1] + 1, prev[j] + 1, prev[j - 1] + (x != y)))
+                  prev = cur
+              return prev[-1]
+
+          def wer(hyp, ref):
+              r, h = words(ref), words(hyp)
+              return edit_distance(r, h) / max(1, len(r))
+
+          model = whisper.load_model(os.environ["WHISPER_MODEL"], device="cpu")
+          model_path = Path.home() / ".cache" / "whisper" / f"{os.environ['WHISPER_MODEL']}.pt"
+          model_sha = hashlib.sha256(model_path.read_bytes()).hexdigest()
+          if model_sha != os.environ["WHISPER_MODEL_SHA256"]:
+              raise SystemExit(f"Whisper model SHA mismatch: {model_sha}")
+
+          def transcribe(path):
+              result = model.transcribe(
+                  path,
+                  language="fr",
+                  task="transcribe",
+                  temperature=0.0,
+                  fp16=False,
+                  condition_on_previous_text=False,
+                  verbose=False,
+              )
+              return result["text"].strip()
+
+          sources = {}
+          for emotion, path in source_paths.items():
+              text = transcribe(path)
+              sources[emotion] = {
+                  "text": text,
+                  "expected": expected[emotion],
+                  "wer": round(wer(text, expected[emotion]), 6),
+              }
+
+          outputs = {}
+          output_passes = []
+          for cell, path in output_paths.items():
+              emotion = "sadness-contained" if cell.startswith("sadness-contained") else "panic"
+              text = transcribe(path)
+              out_wer = wer(text, expected[emotion])
+              src_wer = sources[emotion]["wer"]
+              passed = out_wer <= src_wer + 1e-12
+              output_passes.append(passed)
+              outputs[cell] = {
+                  "text": text,
+                  "wer": round(out_wer, 6),
+                  "source_wer": src_wer,
+                  "no_worse_than_source": passed,
+              }
+
+          eligible = all(output_passes)
+          report = {
+              "sources": sources,
+              "outputs": outputs,
+              "whisper": {
+                  "revision": os.environ["WHISPER_REV"],
+                  "model": os.environ["WHISPER_MODEL"],
+                  "model_sha256": model_sha,
+                  "language": "fr",
+              },
+              "content_gate": {
+                  "pass": eligible,
+                  "rule": "every FACodec output WER(expected) <= corresponding expressive-source WER(expected)",
+                  "absolute_threshold": False,
+                  "claim": "ASR intelligibility/content preservation only; not naturalness or acting proof",
+              },
+          }
+          Path("evidence/french-matrix.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:
+              f.write(f"eligible={'true' if eligible else 'false'}\n")
+          PY
+
+      - name: Record machine matrix PASS
+        if: steps.identity.outputs.eligible == 'true' && steps.french.outputs.eligible == 'true'
+        run: |
+          cat > evidence/final.json <<'EOF'
+          {
+            "status": "machine-matrix-pass",
+            "scope": "2 speakers x 2 emotions, four outputs; three generated and one smoke-reused",
+            "qualified": ["target identity ranking", "cross-emotion identity topology", "French/content preservation"],
+            "diagnostic_only": ["duration", "energy envelope", "normalized F0 contour"],
+            "human_proof": false,
+            "acting_emotion_proof": false,
+            "production_qualified": false
+          }
+          EOF
+
+      - name: Record identity/topology rejection
+        if: steps.identity.outputs.eligible != 'true'
+        run: |
+          cat > evidence/final.json <<'EOF'
+          {
+            "status": "machine-reject",
+            "reason": "FACodec four-cell identity or topology gate failed",
+            "next": "do not tune FACodec parameters",
+            "human_proof": false,
+            "production_qualified": false
+          }
+          EOF
+
+      - name: Record French/content rejection
+        if: steps.identity.outputs.eligible == 'true' && steps.french.outputs.eligible != 'true'
+        run: |
+          cat > evidence/final.json <<'EOF'
+          {
+            "status": "machine-reject",
+            "reason": "FACodec four-cell French/content gate failed",
+            "next": "do not tune FACodec parameters",
+            "human_proof": false,
+            "production_qualified": false
+          }
+          EOF
+
+      - name: Upload bounded FACodec matrix evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: facodec-four-clip-matrix
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
