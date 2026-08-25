@@ -1,0 +1,292 @@
+name: Voice Casting FreeVC Identity Lock Killer
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - src/audio_engine/voice_lab_freevc_identity_lock.py
+      - tests/test_voice_lab_freevc_identity_lock.py
+      - .github/workflows/voice-casting-freevc-identity-lock.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  FREEVC_REV: 60032a7b1b030831ae17a4b6959656d88df6cc9c
+  FREEVC_SPACE_REV: c56c253a44c089b1f4961e8291d76fac73a35dbf
+  FREEVC_SHA256: e2cc2d047f63b80d1d6780e37611cec11a01d597560393b1fe6118158b3bd47f
+  SPEAKER_SHA256: bc7ff82ef75becd495aab2ede3a8220da393a717f178ae9534df355a6173bbca
+  WAVLM_SHA256: 6fb4b3c3e6aa567f0a997b30855859cb81528ee8078802af439f7b2da0bf100f
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Run zero-cost architecture gates
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m unittest tests.test_voice_lab_freevc_identity_lock -v
+
+  convert:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      eligible: ${{ steps.convert.outputs.eligible }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Download and verify exact existing expressive evidence
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source-bundle
+          python - <<'PY'
+          from audio_engine.voice_lab_freevc_identity_lock import validate_source_bundle
+          validated = validate_source_bundle('source-bundle')
+          print('references:', sorted(validated['references']))
+          print('sources:', sorted(validated['sources']))
+          PY
+      - name: Checkout pinned FreeVC source
+        run: |
+          git clone --filter=blob:none https://github.com/OlaWod/FreeVC.git freevc-upstream
+          cd freevc-upstream
+          git checkout "$FREEVC_REV"
+          test "$(git rev-parse HEAD)" = "$FREEVC_REV"
+      - name: Install minimal CPU inference stack
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchvision==0.20.1
+          python -m pip install --disable-pip-version-check numpy==1.26.4 scipy==1.13.1 librosa==0.10.2.post1 tqdm==4.66.5 webrtcvad==2.0.10 huggingface_hub==0.36.0 gdown==5.2.0 soundfile==0.12.1
+          python -m pip check
+      - name: Download pinned/hashed inference weights
+        run: |
+          mkdir -p models freevc-upstream/speaker_encoder/ckpt freevc-upstream/wavlm
+          python - <<'PY'
+          import os, shutil
+          from huggingface_hub import hf_hub_download
+          revision = os.environ['FREEVC_SPACE_REV']
+          for filename, destination in [
+              ('checkpoints/freevc.pth', 'models/freevc.pth'),
+              ('speaker_encoder/ckpt/pretrained_bak_5805000.pt', 'freevc-upstream/speaker_encoder/ckpt/pretrained_bak_5805000.pt'),
+          ]:
+              src = hf_hub_download(
+                  repo_id='OlaWod/FreeVC',
+                  repo_type='space',
+                  revision=revision,
+                  filename=filename,
+              )
+              shutil.copy2(src, destination)
+          PY
+          python -m gdown "https://drive.google.com/uc?id=12-cB34qCTvByWT-QtOcZaqwwO21FLSqU" -O freevc-upstream/wavlm/WavLM-Large.pt
+          echo "$FREEVC_SHA256  models/freevc.pth" | sha256sum -c -
+          echo "$SPEAKER_SHA256  freevc-upstream/speaker_encoder/ckpt/pretrained_bak_5805000.pt" | sha256sum -c -
+          echo "$WAVLM_SHA256  freevc-upstream/wavlm/WavLM-Large.pt" | sha256sum -c -
+      - id: convert
+        name: Smoke first, then spend at most four conversions
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import time
+          from pathlib import Path
+
+          import librosa
+          import numpy as np
+          import torch
+          from scipy.io.wavfile import write
+
+          repo = Path('freevc-upstream').resolve()
+          sys.path.insert(0, str(repo))
+          import utils
+          from models import SynthesizerTrn
+          from speaker_encoder.voice_encoder import SpeakerEncoder
+          from wavlm import WavLM, WavLMConfig
+
+          from audio_engine.voice_lab_freevc_identity_lock import (
+              CASES,
+              TARGETS,
+              assemble_bundle,
+              experiment_spec,
+              smoke_gate,
+              validate_source_bundle,
+          )
+
+          torch.set_num_threads(2)
+          device = torch.device('cpu')
+          source_root = Path('source-bundle')
+          validated = validate_source_bundle(source_root)
+          conversion_root = Path('conversion')
+          clips_root = conversion_root / 'clips'
+          clips_root.mkdir(parents=True, exist_ok=True)
+          bundle_root = Path('bundle')
+          bundle_root.mkdir(parents=True, exist_ok=True)
+
+          hps = utils.get_hparams_from_file(str(repo / 'configs/freevc.json'))
+          net_g = SynthesizerTrn(
+              hps.data.filter_length // 2 + 1,
+              hps.train.segment_size // hps.data.hop_length,
+              **hps.model,
+          ).to(device)
+          net_g.eval()
+          utils.load_checkpoint('models/freevc.pth', net_g, None, True)
+
+          print('Loading WavLM-Large on CPU', flush=True)
+          wavlm_ckpt = torch.load(repo / 'wavlm/WavLM-Large.pt', map_location='cpu')
+          cmodel = WavLM(WavLMConfig(wavlm_ckpt['cfg'])).to(device)
+          cmodel.load_state_dict(wavlm_ckpt['model'])
+          cmodel.eval()
+          del wavlm_ckpt
+
+          smodel = SpeakerEncoder(
+              repo / 'speaker_encoder/ckpt/pretrained_bak_5805000.pt',
+              device='cpu',
+          )
+          sr = int(hps.data.sampling_rate)
+
+          def load_trimmed(path):
+              wav, _ = librosa.load(path, sr=sr)
+              wav, _ = librosa.effects.trim(wav, top_db=20)
+              return wav.astype(np.float32, copy=False)
+
+          refs = {role: load_trimmed(path) for role, path in validated['references'].items()}
+          ref_emb = {role: smodel.embed_utterance(wav) for role, wav in refs.items()}
+
+          def cosine(a, b):
+              a = np.asarray(a, dtype=np.float64)
+              b = np.asarray(b, dtype=np.float64)
+              return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+          def embed_file(path):
+              return smodel.embed_utterance(load_trimmed(path))
+
+          def convert(case_id, target):
+              src_path = validated['sources'][case_id]
+              source, _ = librosa.load(src_path, sr=sr)
+              source = source.astype(np.float32, copy=False)
+              target_embedding = torch.from_numpy(ref_emb[target]).unsqueeze(0).float().to(device)
+              source_tensor = torch.from_numpy(source).unsqueeze(0).float().to(device)
+              started = time.monotonic()
+              with torch.inference_mode():
+                  content = cmodel.extract_features(source_tensor)[0].transpose(1, 2)
+                  audio = net_g.infer(content, g=target_embedding)[0][0]
+              audio_np = audio.detach().cpu().float().numpy()
+              out = clips_root / f'{case_id}--{target}.wav'
+              write(out, sr, audio_np)
+              elapsed = round(time.monotonic() - started, 2)
+              print(f'SUCCESS {case_id}:{target} {elapsed}s', flush=True)
+              return out, elapsed, embed_file(out)
+
+          outputs = {}
+          embeddings = {}
+          render_seconds = {}
+
+          # Linus gate: pay for exactly one cross-speaker conversion first.
+          smoke_path, elapsed, smoke_emb = convert('panic', 'lucie')
+          outputs['panic:lucie'] = str(smoke_path.relative_to(conversion_root))
+          embeddings['panic:lucie'] = smoke_emb
+          render_seconds['panic:lucie'] = elapsed
+          smoke = smoke_gate(
+              cosine(smoke_emb, ref_emb['claire']),
+              cosine(smoke_emb, ref_emb['lucie']),
+          )
+          print('SMOKE', json.dumps(smoke, indent=2), flush=True)
+
+          if not smoke['eligible']:
+              manifest = {
+                  **experiment_spec(),
+                  'status': 'auto-rejected-smoke',
+                  'smoke': smoke,
+                  'conversion_count': 1,
+              }
+              (bundle_root / 'manifest.json').write_text(
+                  json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8'
+              )
+              with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as out:
+                  out.write('eligible=false\n')
+              raise SystemExit(0)
+
+          # Smoke passed: only three remaining conversions are now justified.
+          for case in CASES:
+              for target in TARGETS:
+                  output_id = f"{case['id']}:{target}"
+                  if output_id in outputs:
+                      continue
+                  path, elapsed, emb = convert(case['id'], target)
+                  outputs[output_id] = str(path.relative_to(conversion_root))
+                  embeddings[output_id] = emb
+                  render_seconds[output_id] = elapsed
+
+          reference_scores = {
+              output_id: {
+                  role: cosine(embedding, ref_emb[role])
+                  for role in TARGETS
+              }
+              for output_id, embedding in embeddings.items()
+          }
+          pair_scores = {
+              'same_claire': cosine(embeddings['panic:claire'], embeddings['sadness-contained:claire']),
+              'same_lucie': cosine(embeddings['panic:lucie'], embeddings['sadness-contained:lucie']),
+              'cross_panic': cosine(embeddings['panic:claire'], embeddings['panic:lucie']),
+              'cross_sadness-contained': cosine(embeddings['sadness-contained:claire'], embeddings['sadness-contained:lucie']),
+          }
+          result = {
+              'schema': 'freevc-identity-lock-conversions-v1',
+              'status': 'success',
+              'conversion_count': len(outputs),
+              'outputs': outputs,
+              'render_seconds': render_seconds,
+              'smoke': smoke,
+              'reference_scores': reference_scores,
+              'pair_scores': pair_scores,
+          }
+          (conversion_root / 'conversion-result.json').write_text(
+              json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8'
+          )
+          manifest = assemble_bundle(source_root, conversion_root, bundle_root)
+          print(json.dumps({
+              'status': manifest['status'],
+              'smoke': manifest['smoke'],
+              'prefilter': manifest['prefilter'],
+              'conversion_count': len(outputs),
+              'render_seconds': render_seconds,
+          }, ensure_ascii=False, indent=2), flush=True)
+          with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as out:
+              out.write(f"eligible={'true' if manifest['status'] == 'human-gate-ready' else 'false'}\n")
+          PY
+      - name: Upload two-screen radio-only human gate
+        if: steps.convert.outputs.eligible == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-freevc-identity-lock
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload diagnostic only on automatic reject
+        if: steps.convert.outputs.eligible != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: freevc-identity-lock-auto-reject
+          path: bundle/manifest.json
+          if-no-files-found: error
+          retention-days: 14
