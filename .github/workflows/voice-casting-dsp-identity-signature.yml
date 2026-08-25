@@ -1,0 +1,83 @@
+name: Voice Casting DSP Identity Signature
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - src/audio_engine/voice_lab_dsp_identity_signature.py
+      - tests/test_voice_lab_dsp_identity_signature.py
+      - .github/workflows/voice-casting-dsp-identity-signature.yml
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+env:
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install and run offline gates
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m unittest tests.test_voice_lab_dsp_identity_signature -v
+      - name: Download exact human-evaluated source bundle
+        run: gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source-bundle
+      - name: Apply deterministic spectral signatures and prefilter
+        id: build
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from audio_engine.voice_lab_dsp_identity_signature import build_bundle
+
+          result = build_bundle('source-bundle', 'bundle')
+          summary = {
+              'status': result['status'],
+              'prefilter': result['prefilter'],
+              'scores': {key: value['score'] for key, value in result['distance_diagnostics_not_a_gate'].items()},
+              'trial_count': result['trial_count'],
+          }
+          print(json.dumps(summary, ensure_ascii=False, indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as out:
+              out.write(f"eligible={'true' if result['status']=='success' else 'false'}\n")
+          PY
+      - name: Upload diagnostic manifest on auto-reject
+        if: steps.build.outputs.eligible != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsp-identity-signature-rejected
+          path: bundle/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload radio-only human gate
+        if: steps.build.outputs.eligible == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-qwen3-dsp-identity-signature
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish experiment locator
+        if: always()
+        run: |
+          if [ "${{ steps.build.outputs.eligible }}" = "true" ]; then
+            TITLE="DSP identity signature human gate ready $GITHUB_RUN_ID"
+            BODY="Deterministic post-TTS spectral signature prefilter PASS.\n\n- run_id: $GITHUB_RUN_ID\n- source run: $SOURCE_RUN_ID\n- source audio reused exactly; zero TTS generation\n- profile: EQ-only, max +/-3 dB, no pitch/formant/tempo manipulation\n- artifact: voice-casting-qwen3-dsp-identity-signature\n- human gate: identity 3/3, French both-good 3/3, acting 6/6\n- UI: radio-only\n\nLab only. Production Edge unchanged."
+          else
+            TITLE="DSP identity signature auto-rejected $GITHUB_RUN_ID"
+            BODY="Deterministic post-TTS spectral signature failed its cheap diagnostic prefilter. No human listening requested and no TTS generation occurred. Production Edge unchanged."
+          fi
+          gh issue create --repo "${{ github.repository }}" --title "$TITLE" --body "$BODY"
