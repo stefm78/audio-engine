@@ -1,0 +1,270 @@
+name: Voice Casting FACodec WeSpeaker Arbitration
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-facodec-wespeaker-arbitration.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  MATRIX_RUN_ID: "32850471176"
+  MATRIX_ARTIFACT: facodec-four-clip-matrix
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  arbitrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Zero-cost immutable-evidence gate
+        run: |
+          mkdir -p matrix source evidence
+          gh run download "$MATRIX_RUN_ID" --repo "${{ github.repository }}" -n "$MATRIX_ARTIFACT" -D matrix
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          final = json.loads(Path("matrix/final.json").read_text(encoding="utf-8"))
+          identity = json.loads(Path("matrix/identity-matrix.json").read_text(encoding="utf-8"))
+          if final.get("status") != "machine-reject":
+              raise SystemExit(f"unexpected FACodec matrix status: {final}")
+          gate = identity.get("identity_gate", {})
+          topo = identity.get("topology", {})
+          if gate.get("all_cells_rank_target_first") is not True:
+              raise SystemExit("FACodec evidence no longer has 4/4 individual target ranking")
+          if topo.get("pass") is not False:
+              raise SystemExit("FACodec ECAPA topology evidence is not the expected FAIL")
+          observed = float(topo.get("margin"))
+          expected = -0.034467846155166626
+          if abs(observed - expected) > 1e-12:
+              raise SystemExit(f"unexpected ECAPA topology margin: {observed}")
+
+          expected_cells = {
+              "panic--claire",
+              "panic--lucie",
+              "sadness-contained--claire",
+              "sadness-contained--lucie",
+          }
+          present = {p.stem for p in Path("matrix/clips").glob("*.wav")}
+          if present != expected_cells:
+              raise SystemExit(f"FACodec matrix WAV set mismatch: {sorted(present)}")
+          print("immutable FACodec reject evidence verified; no new conversion permitted")
+          PY
+          cat > source-hashes.txt <<'EOF'
+          3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe  source/reference-claire.wav
+          9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822  source/reference-lucie.wav
+          EOF
+          sha256sum -c source-hashes.txt
+
+      - name: Install minimal independent verifier runtime
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchaudio==2.5.1
+          python -m pip install --disable-pip-version-check \
+            numpy==1.26.4 \
+            onnxruntime==1.20.1 \
+            huggingface_hub==0.36.0
+          python -m pip check
+
+      - name: Checkout pinned WeSpeaker implementation and license
+        run: |
+          git init WeSpeaker
+          git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git
+          git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV"
+          git -C WeSpeaker checkout --detach FETCH_HEAD
+          test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"
+          test -f WeSpeaker/LICENSE
+          grep -qi "Apache License" WeSpeaker/LICENSE
+          python -m py_compile WeSpeaker/wespeaker/bin/infer_onnx.py
+
+      - name: Download immutable official WeSpeaker ONNX model
+        run: |
+          mkdir -p wespeaker-model
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+
+          root = Path(snapshot_download(
+              repo_id=os.environ["WESPEAKER_MODEL_REPO"],
+              revision=os.environ["WESPEAKER_MODEL_REV"],
+              allow_patterns=["voxceleb_resnet34.onnx"],
+              local_dir="wespeaker-model",
+          ))
+          model = root / "voxceleb_resnet34.onnx"
+          if not model.is_file():
+              raise SystemExit("pinned WeSpeaker ONNX model missing")
+          report = {
+              "repo": os.environ["WESPEAKER_MODEL_REPO"],
+              "revision": os.environ["WESPEAKER_MODEL_REV"],
+              "wespeaker_code_revision": os.environ["WESPEAKER_REV"],
+              "file": model.name,
+              "bytes": model.stat().st_size,
+              "sha256": hashlib.sha256(model.read_bytes()).hexdigest(),
+              "use": "independent machine diagnostic only; not a production dependency",
+          }
+          Path("evidence/verifier-provenance.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2), flush=True)
+          PY
+
+      - name: Apply identical threshold-free topology with WeSpeaker
+        id: wespeaker
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import json
+          import os
+          from pathlib import Path
+
+          import numpy as np
+          import onnxruntime as ort
+          import torch
+
+          spec = importlib.util.spec_from_file_location(
+              "wespeaker_infer_onnx",
+              "WeSpeaker/wespeaker/bin/infer_onnx.py",
+          )
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          compute_fbank = module.compute_fbank
+
+          so = ort.SessionOptions()
+          so.inter_op_num_threads = 1
+          so.intra_op_num_threads = 2
+          session = ort.InferenceSession(
+              "wespeaker-model/voxceleb_resnet34.onnx",
+              sess_options=so,
+              providers=["CPUExecutionProvider"],
+          )
+
+          def emb(path):
+              feats = compute_fbank(path).unsqueeze(0).numpy()
+              e = session.run(output_names=["embs"], input_feed={"feats": feats})[0]
+              e = np.asarray(e).reshape(-1).astype(np.float64)
+              norm = np.linalg.norm(e)
+              if not np.isfinite(norm) or norm <= 0:
+                  raise SystemExit(f"invalid embedding for {path}")
+              return e / norm
+
+          def sim(a, b):
+              return float(np.dot(a, b))
+
+          refs = {
+              "claire": emb("source/reference-claire.wav"),
+              "lucie": emb("source/reference-lucie.wav"),
+          }
+          paths = {
+              "panic--claire": "matrix/clips/panic--claire.wav",
+              "panic--lucie": "matrix/clips/panic--lucie.wav",
+              "sadness-contained--claire": "matrix/clips/sadness-contained--claire.wav",
+              "sadness-contained--lucie": "matrix/clips/sadness-contained--lucie.wav",
+          }
+          embs = {cell: emb(path) for cell, path in paths.items()}
+
+          cells = {}
+          cell_passes = []
+          for cell, e in embs.items():
+              target = "claire" if cell.endswith("--claire") else "lucie"
+              other = "lucie" if target == "claire" else "claire"
+              target_sim = sim(e, refs[target])
+              other_sim = sim(e, refs[other])
+              margin = target_sim - other_sim
+              passed = margin > 0.0
+              cell_passes.append(passed)
+              cells[cell] = {
+                  "target": target,
+                  "sim_target": target_sim,
+                  "sim_other": other_sim,
+                  "target_margin": margin,
+                  "ranks_target_first": passed,
+              }
+
+          same_claire = sim(embs["panic--claire"], embs["sadness-contained--claire"])
+          same_lucie = sim(embs["panic--lucie"], embs["sadness-contained--lucie"])
+          cross_panic = sim(embs["panic--claire"], embs["panic--lucie"])
+          cross_sadness = sim(embs["sadness-contained--claire"], embs["sadness-contained--lucie"])
+          min_same = min(same_claire, same_lucie)
+          max_cross = max(cross_panic, cross_sadness)
+          topology_margin = min_same - max_cross
+          topology_pass = topology_margin > 0.0
+          all_cells = all(cell_passes)
+
+          if all_cells and topology_pass:
+              status = "verifier-disagreement"
+              decision = "ECAPA topology FAIL remains; WeSpeaker independently PASSES the identical topology. FACodec merits further zero-human diagnostics, not retroactive qualification."
+          else:
+              status = "independent-reject"
+              decision = "WeSpeaker does not overturn the ECAPA topology concern. Retire FACodec for this identity/emotion killer; no tuning."
+
+          report = {
+              "status": status,
+              "cells": cells,
+              "reference_cross_similarity": sim(refs["claire"], refs["lucie"]),
+              "topology": {
+                  "same_target_cross_emotion": {
+                      "claire": same_claire,
+                      "lucie": same_lucie,
+                  },
+                  "cross_target_same_emotion": {
+                      "panic": cross_panic,
+                      "sadness-contained": cross_sadness,
+                  },
+                  "min_same_target": min_same,
+                  "max_cross_target": max_cross,
+                  "margin": topology_margin,
+                  "pass": topology_pass,
+                  "rule": "min(same-target cross-emotion similarity) > max(cross-target same-emotion similarity)",
+              },
+              "all_cells_rank_target_first": all_cells,
+              "absolute_threshold": False,
+              "new_audio_generated": False,
+              "ecapa_result_unchanged": "FAIL margin -0.034467846155166626",
+              "decision": decision,
+              "claim": "independent WeSpeaker machine arbitration; not human speaker-identity proof",
+          }
+          Path("evidence/wespeaker-arbitration.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+          Path("evidence/final.json").write_text(json.dumps({
+              "status": status,
+              "decision": decision,
+              "human_proof": False,
+              "production_qualified": False,
+          }, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2), flush=True)
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:
+              f.write(f"status={status}\n")
+          PY
+
+      - name: Record arbitration outcome
+        run: |
+          echo "WeSpeaker arbitration status: ${{ steps.wespeaker.outputs.status }}"
+          cat evidence/final.json
+
+      - name: Upload immutable arbitration evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: facodec-wespeaker-arbitration
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
