@@ -1,0 +1,186 @@
+name: Voice Casting Qwen3 Extreme Cast Claire Recovery
+
+on:
+  pull_request:
+    branches: [feature/qwen3-extreme-cast-panic]
+    paths:
+      - .github/workflows/voice-casting-qwen3-extreme-cast-claire-recovery.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+env:
+  QWEN_REV: 022e286b98fbec7e1e916cb940cdf532cd9f488e
+  MODEL_ID: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+  MODEL_REV: 5ecdb67327fd37bb2e042aab12ff7391903235d3
+  ORIGINAL_RUN_ID: "32833442147"
+  ISSUE_NUMBER: "102"
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  render_claire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        kind: [reference, panic]
+    env:
+      KIND: ${{ matrix.kind }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Checkout pinned Qwen3 source
+        run: |
+          git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
+          cd qwen3-upstream
+          git checkout "$QWEN_REV"
+          test "$(git rev-parse HEAD)" = "$QWEN_REV"
+      - name: Install isolated CPU inference stack
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          python -m pip install --disable-pip-version-check -e ./qwen3-upstream
+          python -m pip check
+      - name: Download pinned VoiceDesign model
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REV'], local_dir='qwen3-vd-model')
+          PY
+          test -f qwen3-vd-model/model.safetensors
+      - name: Render exactly one Claire clip
+        run: |
+          python - <<'PY'
+          import json, os, random, time
+          from pathlib import Path
+          import numpy as np
+          import soundfile as sf
+          import torch
+          from qwen_tts import Qwen3TTSModel
+          from transformers.utils import logging as transformers_logging
+          from audio_engine.voice_lab_qwen3_extreme_cast_panic import character_spec, reference_instruction, panic_instruction, REFERENCE_TEXT, PANIC_TEXT
+
+          kind = os.environ['KIND']
+          spec = character_spec('claire')
+          if kind == 'reference':
+              text, instruct = REFERENCE_TEXT, reference_instruction('claire')
+          elif kind == 'panic':
+              text, instruct = PANIC_TEXT, panic_instruction('claire')
+          else:
+              raise SystemExit(f'unknown kind {kind}')
+          seed = int(spec['seed'])
+          random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+          model = Qwen3TTSModel.from_pretrained('qwen3-vd-model', device_map='cpu', dtype=torch.bfloat16, attn_implementation='eager')
+          transformers_logging.disable_progress_bar()
+          root = Path('case-output'); root.mkdir(parents=True)
+          started = time.monotonic()
+          print(f'START claire {kind}', flush=True)
+          wavs, sr = model.generate_voice_design(text=text, instruct=instruct, language='French', non_streaming_mode=True, do_sample=True, max_new_tokens=512)
+          out = root / f'{kind}.wav'
+          sf.write(out, wavs[0], sr)
+          elapsed = round(time.monotonic() - started, 2)
+          (root / 'case-result.json').write_text(json.dumps({'role':'claire','kind':kind,'seed':seed,'file':out.name,'render_seconds':elapsed}, indent=2), encoding='utf-8')
+          print(f'SUCCESS claire {kind} {elapsed}s', flush=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-extreme-cast-claire-${{ matrix.kind }}-recovery
+          path: case-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  bundle:
+    needs: render_claire
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      eligible: ${{ steps.assemble.outputs.eligible }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: qwen3-extreme-cast-claire-*-recovery
+          path: recovered-claire
+      - name: Reuse exact successful Lucie artifact
+        run: gh run download "$ORIGINAL_RUN_ID" --repo "${{ github.repository }}" -n qwen3-extreme-cast-lucie -D inputs/lucie
+      - name: Assemble recovered Claire result and apply same gate
+        id: assemble
+        run: |
+          python - <<'PY'
+          import json, os, shutil
+          from pathlib import Path
+          from audio_engine.voice_lab_qwen3_extreme_cast_panic import assemble_bundle
+
+          claire = Path('inputs/claire'); claire.mkdir(parents=True)
+          rendered = {}
+          for kind in ('reference','panic'):
+              matches = list(Path('recovered-claire').rglob(f'{kind}.wav'))
+              if len(matches) != 1:
+                  raise SystemExit(f'expected one {kind}, got {len(matches)}')
+              shutil.copy2(matches[0], claire / f'{kind}.wav')
+              rendered[kind] = f'{kind}.wav'
+          (claire / 'character-result.json').write_text(json.dumps({'schema':'qwen3-extreme-cast-character-v1','status':'success','role':'claire','seed':2026082531,'rendered':rendered}, indent=2), encoding='utf-8')
+          result = assemble_bundle('inputs', 'bundle')
+          scores = {k:v['score'] for k,v in result['distance_diagnostics_not_identity_proof'].items()}
+          print(json.dumps({'status':result['status'],'scores':scores}, ensure_ascii=False, indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as out:
+              out.write(f"eligible={'true' if result['status']=='human-gate-ready' else 'false'}\n")
+          PY
+      - name: Upload human gate when eligible
+        if: steps.assemble.outputs.eligible == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-qwen3-extreme-cast-panic-recovery
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload diagnostic on auto-reject
+        if: steps.assemble.outputs.eligible != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-extreme-cast-panic-recovery-auto-reject
+          path: bundle/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+  finalize:
+    if: always()
+    needs: [render_claire, bundle]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ELIGIBLE: ${{ needs.bundle.outputs.eligible }}
+      BUNDLE_RESULT: ${{ needs.bundle.result }}
+    steps:
+      - name: Update experiment locator
+        run: |
+          if [ "$BUNDLE_RESULT" != "success" ]; then
+            gh issue edit "$ISSUE_NUMBER" --repo "${{ github.repository }}" --title "Extreme natural casting recovery failed $GITHUB_RUN_ID" --body "Technical recovery failed; no artistic verdict. Production Edge unchanged."
+          elif [ "$ELIGIBLE" = "true" ]; then
+            gh issue edit "$ISSUE_NUMBER" --repo "${{ github.repository }}" --title "Extreme natural casting panic human gate ready $GITHUB_RUN_ID" --body "Recovery completed with exact artistic parameters; Lucie reused byte-for-byte from run $ORIGINAL_RUN_ID. Automatic neutral+panic gate PASS. Artifact: voice-casting-qwen3-extreme-cast-panic-recovery. One blind radio-only screen ready. Production Edge unchanged."
+          else
+            gh issue edit "$ISSUE_NUMBER" --repo "${{ github.repository }}" --title "Extreme natural casting panic auto-rejected $GITHUB_RUN_ID" --body "Recovery completed, but the pair failed the predeclared neutral/panic automatic gate. No human listening. Production Edge unchanged."
+          fi
