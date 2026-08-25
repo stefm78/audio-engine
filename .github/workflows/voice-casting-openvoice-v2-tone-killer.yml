@@ -10,6 +10,14 @@ on:
       - src/audio_engine/voice_lab_openvoice_v2_tone_killer.py
       - tests/test_voice_lab_openvoice_v2_tone_killer.py
       - .github/workflows/voice-casting-openvoice-v2-tone-killer.yml
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - src/audio_engine/providers/openvoice_v2_tone_lab.py
+      - src/audio_engine/voice_lab_openvoice_v2_tone_killer.py
+      - tests/test_voice_lab_openvoice_v2_tone_killer.py
+      - .github/workflows/voice-casting-openvoice-v2-tone-killer.yml
 
 permissions:
   contents: read
