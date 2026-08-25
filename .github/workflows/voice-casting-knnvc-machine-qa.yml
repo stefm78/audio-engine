@@ -1,0 +1,213 @@
+name: Voice Casting kNN-VC Machine QA
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-knnvc-machine-qa.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  KNNVC_RUN_ID: "32846237805"
+  KNNVC_ARTIFACT: voice-casting-knnvc-identity-lock
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL: base
+  WHISPER_BASE_SHA256: ed3a0b6b1c0edf879ad9b11b1af5a0e6ab5db9205f891f668f8b0e6c6326e34e
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  machine-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+      - name: Download exact source and converted evidence
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          gh run download "$KNNVC_RUN_ID" --repo "${{ github.repository }}" -n "$KNNVC_ARTIFACT" -D converted
+          test -f source/clips/claire--panic.wav
+          test -f source/clips/claire--sadness-contained.wav
+          test -f converted/clips/panic--claire.wav
+          test -f converted/clips/panic--lucie.wav
+          test -f converted/clips/sadness-contained--claire.wav
+          test -f converted/clips/sadness-contained--lucie.wav
+      - name: Install pinned multilingual ASR stack
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV"
+          python -m pip check
+          ffmpeg -version | head -1
+      - name: Verify content and temporal preservation
+        run: |
+          mkdir -p machine-qa
+          python - <<'PY'
+          import hashlib
+          import json
+          import math
+          import os
+          import re
+          import unicodedata
+          from pathlib import Path
+
+          import numpy as np
+          import whisper
+
+          EXPECTED = {
+              'panic': "Vite ! Ils arrivent ! Fermez la porte !",
+              'sadness-contained': "Il est parti avant l'aube. Je savais que ce moment viendrait, mais pas si tôt.",
+          }
+          SOURCES = {
+              'panic': Path('source/clips/claire--panic.wav'),
+              'sadness-contained': Path('source/clips/claire--sadness-contained.wav'),
+          }
+          OUTPUTS = {
+              'panic:claire': Path('converted/clips/panic--claire.wav'),
+              'panic:lucie': Path('converted/clips/panic--lucie.wav'),
+              'sadness-contained:claire': Path('converted/clips/sadness-contained--claire.wav'),
+              'sadness-contained:lucie': Path('converted/clips/sadness-contained--lucie.wav'),
+          }
+
+          def words(text):
+              text = unicodedata.normalize('NFKD', text.lower())
+              text = ''.join(c for c in text if not unicodedata.combining(c))
+              text = text.replace("'", ' ').replace('’', ' ').replace('-', ' ')
+              return re.findall(r'[a-z0-9]+', text)
+
+          def edit_distance(a, b):
+              prev = list(range(len(b) + 1))
+              for i, x in enumerate(a, 1):
+                  cur = [i]
+                  for j, y in enumerate(b, 1):
+                      cur.append(min(cur[-1] + 1, prev[j] + 1, prev[j - 1] + (x != y)))
+                  prev = cur
+              return prev[-1]
+
+          def wer(hyp, ref):
+              r, h = words(ref), words(hyp)
+              return edit_distance(r, h) / max(1, len(r))
+
+          def load(path):
+              return whisper.load_audio(str(path)).astype(np.float64)
+
+          def energy_envelope(path):
+              y = load(path)
+              frame, hop = 400, 160
+              if len(y) < frame:
+                  y = np.pad(y, (0, frame - len(y)))
+              n = 1 + (len(y) - frame) // hop
+              e = np.array([
+                  math.sqrt(float(np.mean(y[i*hop:i*hop+frame] ** 2)) + 1e-12)
+                  for i in range(n)
+              ])
+              e = np.log(e + 1e-6)
+              return (e - e.mean()) / (e.std() + 1e-8), len(y) / 16000.0
+
+          def correlation(a, b):
+              n = max(len(a), len(b))
+              grid = np.linspace(0.0, 1.0, n)
+              aa = np.interp(grid, np.linspace(0.0, 1.0, len(a)), a)
+              bb = np.interp(grid, np.linspace(0.0, 1.0, len(b)), b)
+              return float(np.corrcoef(aa, bb)[0, 1])
+
+          print('Loading pinned Whisper base multilingual model', flush=True)
+          model = whisper.load_model(os.environ['WHISPER_MODEL'], device='cpu')
+          model_path = Path.home() / '.cache' / 'whisper' / 'base.pt'
+          model_sha = hashlib.sha256(model_path.read_bytes()).hexdigest()
+          if model_sha != os.environ['WHISPER_BASE_SHA256']:
+              raise SystemExit(f'Whisper base SHA256 mismatch: {model_sha}')
+
+          def transcribe(path):
+              result = model.transcribe(
+                  str(path),
+                  language='fr',
+                  task='transcribe',
+                  temperature=0.0,
+                  fp16=False,
+                  condition_on_previous_text=False,
+                  verbose=False,
+              )
+              return result['text'].strip()
+
+          source_rows = {}
+          for case, path in SOURCES.items():
+              text = transcribe(path)
+              source_rows[case] = {
+                  'text': text,
+                  'expected': EXPECTED[case],
+                  'wer_expected': round(wer(text, EXPECTED[case]), 6),
+              }
+              print('SOURCE', case, json.dumps(source_rows[case], ensure_ascii=False), flush=True)
+
+          output_rows = {}
+          for output_id, path in OUTPUTS.items():
+              case = output_id.split(':', 1)[0]
+              text = transcribe(path)
+              output_wer = wer(text, EXPECTED[case])
+              source_wer = source_rows[case]['wer_expected']
+              source_env, source_duration = energy_envelope(SOURCES[case])
+              output_env, output_duration = energy_envelope(path)
+              row = {
+                  'text': text,
+                  'wer_expected': round(output_wer, 6),
+                  'source_wer_expected': round(source_wer, 6),
+                  'wer_vs_source_transcript': round(wer(text, source_rows[case]['text']), 6),
+                  'content_no_worse_than_source': output_wer <= source_wer + 1e-12,
+                  'source_duration_seconds': round(source_duration, 4),
+                  'output_duration_seconds': round(output_duration, 4),
+                  'duration_ratio': round(output_duration / source_duration, 6),
+                  'energy_envelope_correlation': round(correlation(source_env, output_env), 6),
+              }
+              output_rows[output_id] = row
+              print('OUTPUT', output_id, json.dumps(row, ensure_ascii=False), flush=True)
+
+          content_pass = all(row['content_no_worse_than_source'] for row in output_rows.values())
+          report = {
+              'schema': 'knnvc-machine-qa-v1',
+              'source_run_id': int(os.environ['SOURCE_RUN_ID']),
+              'knnvc_run_id': int(os.environ['KNNVC_RUN_ID']),
+              'whisper': {
+                  'revision': os.environ['WHISPER_REV'],
+                  'model': os.environ['WHISPER_MODEL'],
+                  'model_sha256': model_sha,
+                  'language': 'fr',
+              },
+              'source': source_rows,
+              'outputs': output_rows,
+              'content_gate': {
+                  'pass': content_pass,
+                  'rule': 'each converted WER(expected) <= corresponding expressive-source WER(expected)',
+                  'absolute_wer_threshold': False,
+                  'claim': 'ASR intelligibility/content preservation only; not naturalness or acting proof',
+              },
+              'prosody_diagnostics': {
+                  'claim': 'duration and frame-energy timing diagnostics only; no automatic acting qualification',
+              },
+              'status': 'machine-qa-pass' if content_pass else 'machine-qa-caution',
+          }
+          Path('machine-qa/report.json').write_text(
+              json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8'
+          )
+          print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
+          PY
+      - name: Upload machine QA evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: knnvc-machine-qa
+          path: machine-qa/report.json
+          if-no-files-found: error
+          retention-days: 14
