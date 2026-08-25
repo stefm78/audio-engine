@@ -1,0 +1,250 @@
+name: Voice Casting Qwen3 Contrast Emotion Claire Recovery
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-qwen3-contrast-emotion-claire-recovery.yml
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+env:
+  QWEN_REV: 022e286b98fbec7e1e916cb940cdf532cd9f488e
+  MODEL_ID: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+  MODEL_REV: 5ecdb67327fd37bb2e042aab12ff7391903235d3
+  SOURCE_RUN_ID: "32818950167"
+  SOURCE_ARTIFACT: qwen3-contrast-selected-pair
+  ORIGINAL_RUN_ID: "32821813355"
+  ORIGINAL_LUCIE_ARTIFACT: qwen3-contrast-emotion-lucie
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      issue_number: ${{ steps.locator.outputs.issue_number }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Validate exact recovery protocol
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m unittest tests.test_voice_lab_qwen3_contrast_emotion -v
+      - name: Publish recovery locator
+        id: locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ISSUE_URL=$(gh issue create --repo "${{ github.repository }}" \
+            --title "Claire contrasted emotion recovery running $GITHUB_RUN_ID" \
+            --body "Technical recovery only for stalled Claire render from original run $ORIGINAL_RUN_ID.\n\n- exact original code head inherited\n- exact selected Claire anchor and VoiceDesign description/seed\n- exact same panic, wonder, sadness-contained texts/instructions\n- no parameter changes\n- 3 independent bounded case runners\n- original Lucie artifact reused byte-for-byte\n\nNo second artistic attempt; no tuning; Production Edge unchanged.")
+          echo "issue_number=${ISSUE_URL##*/}" >> "$GITHUB_OUTPUT"
+
+  claire_case:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        case_id: [panic, wonder, sadness-contained]
+    env:
+      CASE_ID: ${{ matrix.case_id }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Verify exact qualified selection
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D selected-pair
+          python - <<'PY'
+          from audio_engine.voice_lab_qwen3_contrast_emotion import validate_selection
+          validate_selection('selected-pair')
+          PY
+      - name: Checkout pinned Qwen3 source
+        run: |
+          git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
+          cd qwen3-upstream
+          git checkout "$QWEN_REV"
+          test "$(git rev-parse HEAD)" = "$QWEN_REV"
+      - name: Install isolated CPU inference stack
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          python -m pip install --disable-pip-version-check -e ./qwen3-upstream
+          python -m pip check
+      - name: Download pinned VoiceDesign model
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REV'], local_dir='qwen3-vd-model'))
+          PY
+          test -f qwen3-vd-model/model.safetensors
+      - name: Render one exact Claire case
+        run: |
+          python - <<'PY'
+          import json, os, random, time
+          from pathlib import Path
+          import numpy as np
+          import soundfile as sf
+          import torch
+          from qwen_tts import Qwen3TTSModel
+          from transformers.utils import logging as transformers_logging
+          from audio_engine.voice_lab_qwen3_contrast_emotion import CASES, character_spec, expressive_instruction
+
+          case_id = os.environ['CASE_ID']
+          case = next(item for item in CASES if item['id'] == case_id)
+          spec = character_spec('claire')
+          seed = int(spec['seed'])
+          random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+          model = Qwen3TTSModel.from_pretrained('qwen3-vd-model', device_map='cpu', dtype=torch.bfloat16, attn_implementation='eager')
+          transformers_logging.disable_progress_bar()
+          root = Path('case-output'); root.mkdir(); out = root / f"{case_id}.wav"
+          started = time.monotonic()
+          print(f"START claire {case_id}", flush=True)
+          wavs, sr = model.generate_voice_design(
+              text=case['text'],
+              instruct=expressive_instruction('claire', case_id),
+              language='French',
+              non_streaming_mode=True,
+              do_sample=True,
+              max_new_tokens=768,
+          )
+          sf.write(out, wavs[0], sr)
+          elapsed = round(time.monotonic() - started, 2)
+          print(f"SUCCESS claire {case_id} {elapsed}s", flush=True)
+          (root / 'case-result.json').write_text(json.dumps({'case_id':case_id,'candidate_id':spec['candidate_id'],'seed':seed,'file':f'{case_id}.wav','render_seconds':elapsed}, ensure_ascii=False, indent=2), encoding='utf-8')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-contrast-emotion-claire-recovery-${{ matrix.case_id }}
+          path: case-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  assemble_claire:
+    needs: claire_case
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Download recovered Claire cases
+        uses: actions/download-artifact@v4
+        with:
+          pattern: qwen3-contrast-emotion-claire-recovery-*
+          path: recovered-cases
+      - name: Assemble canonical Claire artifact
+        run: |
+          python - <<'PY'
+          import json, shutil
+          from pathlib import Path
+          from audio_engine.voice_lab_qwen3_contrast_emotion import CASES, SELECTED
+          out = Path('emotion-output'); clips = out / 'clips'; clips.mkdir(parents=True)
+          rendered=[]
+          for case in CASES:
+              metas=[]
+              for meta in Path('recovered-cases').rglob('case-result.json'):
+                  data=json.loads(meta.read_text(encoding='utf-8'))
+                  if data['case_id']==case['id']:
+                      metas.append((meta,data))
+              if len(metas)!=1:
+                  raise SystemExit(f"expected one recovered {case['id']}, got {len(metas)}")
+              meta,data=metas[0]
+              if data['candidate_id']!=SELECTED['claire']:
+                  raise SystemExit('Claire candidate mismatch')
+              dst=clips / f"{case['id']}.wav"
+              shutil.copy2(meta.parent / data['file'], dst)
+              rendered.append({'id':case['id'],'file':f"clips/{case['id']}.wav",'seed':data['seed'],'render_seconds':data['render_seconds']})
+          result={'schema':'qwen3-contrast-emotion-character-v1','status':'success','role':'claire','candidate_id':SELECTED['claire'],'seed':rendered[0]['seed'],'rendered_count':len(rendered),'rendered':rendered,'technical_recovery':True}
+          (out/'character-result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-contrast-emotion-claire-recovered
+          path: emotion-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  bundle:
+    needs: assemble_claire
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Download recovered Claire
+        uses: actions/download-artifact@v4
+        with:
+          name: qwen3-contrast-emotion-claire-recovered
+          path: emotion-inputs/claire
+      - name: Reuse exact original Lucie artifact
+        run: gh run download "$ORIGINAL_RUN_ID" --repo "${{ github.repository }}" -n "$ORIGINAL_LUCIE_ARTIFACT" -D emotion-inputs/lucie
+      - name: Download exact qualified references
+        run: gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D selected-pair
+      - name: Assemble recovery bundle
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from audio_engine.voice_lab_qwen3_contrast_emotion import assemble_bundle
+          result=assemble_bundle(Path('emotion-inputs'),Path('selected-pair'),Path('bundle'))
+          print(json.dumps({'status':result['status'],'trial_count':result['trial_count'],'distance_diagnostics':{k:v['score'] for k,v in result['distance_diagnostics_not_a_gate'].items()}},ensure_ascii=False,indent=2))
+          if result['status']!='success' or result['trial_count']!=3:
+              raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-qwen3-contrast-emotion-killer-recovery
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 14
+
+  finalize:
+    if: always()
+    needs: [preflight, claire_case, assemble_claire, bundle]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_NUMBER: ${{ needs.preflight.outputs.issue_number }}
+      BUNDLE_RESULT: ${{ needs.bundle.result }}
+    steps:
+      - name: Update recovery locator
+        run: |
+          if [ -z "$ISSUE_NUMBER" ]; then exit 0; fi
+          if [ "$BUNDLE_RESULT" = "success" ]; then
+            gh issue edit "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
+              --title "Claire contrasted emotion recovery completed $GITHUB_RUN_ID" \
+              --body "Technical recovery completed.\n\n- recovery_run_id: $GITHUB_RUN_ID\n- original_run_id: $ORIGINAL_RUN_ID\n- Claire: 3 exact original cases recovered independently\n- Lucie: exact original successful artifact reused\n- final artifact: voice-casting-qwen3-contrast-emotion-killer-recovery\n\nNo parameter changes and no artistic verdict yet."
+          else
+            gh issue edit "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
+              --title "Claire contrasted emotion recovery failed $GITHUB_RUN_ID" \
+              --body "Technical recovery failed.\n\n- recovery_run_id: $GITHUB_RUN_ID\n- original_run_id: $ORIGINAL_RUN_ID\n- no artistic verdict."
+          fi
