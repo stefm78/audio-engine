@@ -83,7 +83,8 @@ jobs:
           python -m pip install --disable-pip-version-check \
             numpy==1.26.4 \
             onnxruntime==1.20.1 \
-            huggingface_hub==0.36.0
+            huggingface_hub==0.36.0 \
+            soundfile==0.12.1
           python -m pip check
 
       - name: Checkout pinned WeSpeaker implementation and license
