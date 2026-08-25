@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import unittest
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:  # Core engine deliberately has no NumPy production dependency.
+    np = None
 
 from audio_engine.voice_lab_facodec_world_prosody_restore import transfer_world_parameters
 
 
+@unittest.skipUnless(np is not None, "WORLD Lab tests require isolated NumPy runtime")
 class WorldProsodyRestoreTests(unittest.TestCase):
     def test_keeps_target_f0_center_and_source_relative_motion(self):
         source_f0 = np.array([0.0, 100.0, 200.0, 0.0])
