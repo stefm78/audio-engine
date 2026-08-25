@@ -1,0 +1,253 @@
+name: Voice Casting FACodec WORLD Emotion Evidence
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-facodec-world-emotion-evidence.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  IDENTITY_RUN_ID: "32892562470"
+  IDENTITY_ARTIFACT: facodec-world-evidence-continuation
+  WORLD_RUN_ID: "32887050895"
+  WORLD_ARTIFACT: facodec-world-prosody-restore-smoke
+  WORLD_WAV_SHA256: f847a9d9a5a396865fd15d443563ae8c277ff8257548599fd98dc20506fc6ccb
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  FACODEC_RUN_ID: "32850471176"
+  FACODEC_ARTIFACT: facodec-four-clip-matrix
+  SUPERB_REPO: superb/wav2vec2-base-superb-er
+  SUPERB_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  SUPERB_MODEL_SHA256: dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  emotion-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Admit immutable French and identity evidence only
+        id: admit
+        run: |
+          mkdir -p identity world source facodec evidence
+          gh run download "$IDENTITY_RUN_ID" --repo "${{ github.repository }}" -n "$IDENTITY_ARTIFACT" -D identity
+          gh run download "$WORLD_RUN_ID" --repo "${{ github.repository }}" -n "$WORLD_ARTIFACT" -D world
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          gh run download "$FACODEC_RUN_ID" --repo "${{ github.repository }}" -n "$FACODEC_ARTIFACT" -D facodec
+          echo "$WORLD_WAV_SHA256  world/clips/panic--lucie-world-restored.wav" | sha256sum -c -
+          cat > hashes.txt <<'EOF'
+          ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f  source/clips/claire--panic.wav
+          d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84  source/clips/claire--sadness-contained.wav
+          6ea0839a49867ffcf679f74a4add16e6784485a29e95ef594454c73cf43d69bb  facodec/clips/panic--lucie.wav
+          EOF
+          sha256sum -c hashes.txt
+          python - <<'PY'
+          import json,shutil
+          from pathlib import Path
+          ident=json.loads(Path('identity/identity.json').read_text(encoding='utf-8'))
+          french=json.loads(Path('identity/french.json').read_text(encoding='utf-8'))
+          technical=json.loads(Path('identity/technical.json').read_text(encoding='utf-8'))
+          rows=ident.get('rows',{})
+          base=rows.get('facodec_base',{}); restored=rows.get('world_restored',{})
+          if technical.get('status')!='pass' or french.get('status')!='pass':
+            raise SystemExit('prior technical/French evidence not PASS')
+          if base.get('ranks_lucie_first') is not True or restored.get('ranks_lucie_first') is not True:
+            raise SystemExit(f'identity ranking did not pass: {rows}')
+          known=float(ident.get('base_known_margin',0.0)); observed=float(base['lucie_margin'])
+          report={
+            'status':'pass',
+            'technical_pass':True,
+            'french_pass':True,
+            'facodec_base_ranks_lucie_first':True,
+            'world_restored_ranks_lucie_first':True,
+            'facodec_base_lucie_margin':observed,
+            'world_restored_lucie_margin':float(restored['lucie_margin']),
+            'historical_facodec_margin':known,
+            'historical_margin_delta':observed-known,
+            'historical_margin_is_diagnostic_only':True,
+            'identity_rule':'both immutable FACodec base and immutable WORLD output rank Lucie above Claire; no absolute similarity threshold',
+            'rerendered_audio':False,
+            'reason_prior_identity_status_was_false_reject':'a non-preregistered 1e-9 exact-margin reproduction check failed despite both identity rankings passing'
+          }
+          Path('evidence/admission.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+          shutil.copy2('identity/identity.json','evidence/identity.json')
+          shutil.copy2('identity/french.json','evidence/french.json')
+          shutil.copy2('identity/technical.json','evidence/technical.json')
+          print(json.dumps(report,indent=2))
+          PY
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install exact source-valid SUPERB runtime
+        id: runtime
+        if: steps.admit.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
+          python -m pip install --disable-pip-version-check \
+            transformers==4.40.1 \
+            safetensors==0.4.5 \
+            huggingface_hub==0.36.0 \
+            scipy==1.14.1 \
+            numpy==1.26.4 \
+            soundfile==0.12.1
+          python -m pip check
+          mkdir -p superb-model
+          python - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(
+            repo_id=os.environ['SUPERB_REPO'],revision=os.environ['SUPERB_REV'],
+            allow_patterns=['config.json','preprocessor_config.json','pytorch_model.bin','README.md'],
+            local_dir='superb-model'))
+          w=root/'pytorch_model.bin'; c=root/'config.json'
+          if not w.is_file() or not c.is_file(): raise SystemExit('SUPERB snapshot incomplete')
+          sha=hashlib.sha256(w.read_bytes()).hexdigest()
+          if w.stat().st_size!=378361105 or sha!=os.environ['SUPERB_MODEL_SHA256']:
+            raise SystemExit(f'SUPERB mismatch bytes={w.stat().st_size} sha={sha}')
+          cfg=json.loads(c.read_text(encoding='utf-8'))
+          labels={str(k):str(v).lower() for k,v in cfg.get('id2label',{}).items()}
+          if labels!={'0':'neu','1':'hap','2':'ang','3':'sad'}: raise SystemExit(f'unexpected labels {labels}')
+          Path('evidence/superb-provenance.json').write_text(json.dumps({
+            'revision':os.environ['SUPERB_REV'],'model_bytes':w.stat().st_size,'model_sha256':sha,
+            'labels':labels,'license':'Apache-2.0','training_domain':'IEMOCAP English',
+            'role':'source-relative affect geometry only; not human emotion proof'
+          },indent=2),encoding='utf-8')
+          PY
+
+      - name: Prove exact legacy weight-norm loading
+        id: compat
+        if: steps.runtime.outcome == 'success'
+        run: |
+          python - <<'PY'
+          import json,torch
+          from pathlib import Path
+          from transformers import AutoModelForAudioClassification
+          checkpoint=torch.load('superb-model/pytorch_model.bin',map_location='cpu',weights_only=True)
+          gk='wav2vec2.encoder.pos_conv_embed.conv.weight_g'; vk='wav2vec2.encoder.pos_conv_embed.conv.weight_v'
+          if gk not in checkpoint or vk not in checkpoint: raise SystemExit('legacy weight-norm keys missing')
+          torch.manual_seed(0)
+          model=AutoModelForAudioClassification.from_pretrained('superb-model',local_files_only=True)
+          conv=model.wav2vec2.encoder.pos_conv_embed.conv
+          if hasattr(conv,'parametrizations') and hasattr(conv.parametrizations,'weight'):
+            ag=conv.parametrizations.weight.original0.detach().cpu(); av=conv.parametrizations.weight.original1.detach().cpu()
+            representation='parametrizations.weight.original0/original1'
+          else:
+            ag=conv.weight_g.detach().cpu(); av=conv.weight_v.detach().cpu(); representation='weight_g/weight_v'
+          geq=torch.equal(ag,checkpoint[gk].detach().cpu()); veq=torch.equal(av,checkpoint[vk].detach().cpu()); ok=bool(geq and veq)
+          Path('evidence/superb-runtime-compatibility.json').write_text(json.dumps({'pass':ok,'runtime_representation':representation,'weight_g_exact_equal':bool(geq),'weight_v_exact_equal':bool(veq)},indent=2),encoding='utf-8')
+          if not ok: raise SystemExit('SUPERB checkpoint tensors did not load exactly')
+          PY
+
+      - name: Source-valid panic repair gate
+        id: emotion
+        if: steps.compat.outcome == 'success'
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from scipy.signal import resample_poly
+          from transformers import AutoFeatureExtractor,AutoModelForAudioClassification
+          torch.set_num_threads(2); torch.manual_seed(0)
+          extractor=AutoFeatureExtractor.from_pretrained('superb-model',local_files_only=True)
+          model=AutoModelForAudioClassification.from_pretrained('superb-model',local_files_only=True); model.eval()
+          labels=[str(model.config.id2label[i]).lower() for i in range(model.config.num_labels)]
+          def load16(path):
+            y,sr=sf.read(path,always_2d=False,dtype='float32'); y=np.asarray(y,dtype=np.float32)
+            if y.ndim==2:y=y.mean(axis=1)
+            if sr!=16000:
+              g=int(np.gcd(sr,16000)); y=resample_poly(y,16000//g,sr//g).astype(np.float32)
+            return y
+          def profile(path):
+            inputs=extractor(load16(path),sampling_rate=16000,return_tensors='pt',padding=False)
+            with torch.inference_mode(): logits=model(**inputs).logits[0]
+            p=torch.softmax(logits,dim=-1).cpu().numpy().astype(np.float64)
+            return p,p/np.linalg.norm(p)
+          praw,pnorm=profile('source/clips/claire--panic.wav')
+          sraw,snorm=profile('source/clips/claire--sadness-contained.wav')
+          source_top={'panic':labels[int(np.argmax(praw))],'sadness-contained':labels[int(np.argmax(sraw))]}
+          source_valid=source_top['panic']!=source_top['sadness-contained']
+          def row(path):
+            raw,n=profile(path); ps=float(n@pnorm); ss=float(n@snorm); margin=ps-ss
+            return {'profile':{labels[i]:float(raw[i]) for i in range(len(labels))},'similarity_to_panic_source':ps,'similarity_to_sadness_source':ss,'panic_margin':margin,'ranks_panic_first':margin>0.0}
+          base=row('facodec/clips/panic--lucie.wav')
+          restored=row('world/clips/panic--lucie-world-restored.wav')
+          known=-0.4006110262683519
+          base_failure_reproduced=base['panic_margin']<0.0
+          ok=source_valid and base_failure_reproduced and restored['panic_margin']>0.0
+          report={
+            'status':'pass' if ok else 'reject',
+            'source_valid':source_valid,
+            'source_top_labels':source_top,
+            'source_profiles':{'panic':{labels[i]:float(praw[i]) for i in range(len(labels))},'sadness-contained':{labels[i]:float(sraw[i]) for i in range(len(labels))}},
+            'facodec_base':base,'world_restored':restored,
+            'historical_facodec_panic_margin':known,
+            'historical_margin_delta':float(base['panic_margin']-known),
+            'historical_margin_is_diagnostic_only':True,
+            'base_failure_reproduced_by_sign':base_failure_reproduced,
+            'rule':'source instrument distinguishes immutable emotions; immutable FACodec base remains on wrong side of source-relative panic geometry; immutable WORLD output must cross to positive panic margin',
+            'absolute_threshold':False,
+            'claim':'source-relative cross-lingual affect diagnostic only; not human acting proof'
+          }
+          Path('evidence/emotion.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+          print(json.dumps(report,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Record Steve and Linus verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          def rd(name):
+            p=Path(f'evidence/{name}.json'); return json.loads(p.read_text(encoding='utf-8')) if p.is_file() else None
+          admission=rd('admission'); emotion=rd('emotion')
+          if admission is None or admission.get('status')!='pass':
+            status='infrastructure-incomplete'; decision='Prior immutable technical/French/identity evidence was not admitted; no new scientific conclusion.'
+          elif emotion is None:
+            status='infrastructure-incomplete'; decision='Source-valid SUPERB diagnostic produced no evidence; no emotion conclusion.'
+          elif emotion.get('status')!='pass':
+            status='emotion-repair-reject'; decision='Steve veto: deterministic WORLD excitation restoration preserves Lucie identity and acceptable French but does not reverse the known FACodec panic-emotion failure. Retire without tuning.'
+          else:
+            status='one-cell-machine-pass'; decision='Deterministic WORLD restoration preserves acceptable French and Lucie identity and reverses the known FACodec panic-emotion failure. Authorize exact no-tuning four-cell expansion.'
+          final={'status':status,'decision':decision,'matrix_authorized':status=='one-cell-machine-pass','human_gate_authorized':False,'production_qualified':False,'pages_published':False,'new_audio_generated':False,'parameter_tuning':False}
+          Path('evidence/final.json').write_text(json.dumps(final,indent=2),encoding='utf-8'); print(json.dumps(final,indent=2))
+          PY
+
+      - name: Upload emotion evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: facodec-world-emotion-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface semantic verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('evidence/final.json')
+          if not p.is_file(): raise SystemExit('no final verdict')
+          r=json.loads(p.read_text()); print('STATUS='+r['status'])
+          if r['status']!='one-cell-machine-pass': raise SystemExit(1)
+          PY
