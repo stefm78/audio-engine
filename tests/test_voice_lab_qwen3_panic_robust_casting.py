@@ -72,7 +72,11 @@ class PanicRobustCastingTests(unittest.TestCase):
             _write_player(Path(tmp), trials)
             html = (Path(tmp) / "index.html").read_text(encoding="utf-8").lower()
         self.assertNotIn("<select", html)
-        self.assertGreaterEqual(html.count('type="radio"'), 4)
+        self.assertIn('type="radio"', html)
+        self.assertIn("radio('identity'", html)
+        self.assertIn("radio('actinga'", html)
+        self.assertIn("radio('actingb'", html)
+        self.assertIn("radio('french'", html)
 
 
 if __name__ == "__main__":
