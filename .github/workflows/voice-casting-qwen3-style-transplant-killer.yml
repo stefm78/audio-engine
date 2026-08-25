@@ -1,0 +1,237 @@
+name: Voice Casting Qwen3 Style Transplant Killer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/qwen3-style-transplant-killer
+    paths:
+      - src/audio_engine/providers/qwen3_style_transplant_lab.py
+      - src/audio_engine/voice_lab_qwen3_style_transplant.py
+      - tests/test_voice_lab_qwen3_style_transplant.py
+      - .github/workflows/voice-casting-qwen3-style-transplant-killer.yml
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+env:
+  QWEN_REV: 022e286b98fbec7e1e916cb940cdf532cd9f488e
+  BASE_MODEL_ID: Qwen/Qwen3-TTS-12Hz-1.7B-Base
+  BASE_MODEL_REV: 74a6279626edc2d5a787d5b6467668eba0b86ef6
+  VD_MODEL_ID: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+  VD_MODEL_REV: 5ecdb67327fd37bb2e042aab12ff7391903235d3
+  SOURCE_RUN_ID: "32772435007"
+  SOURCE_ARTIFACT: voice-casting-qwen3-xvector-identity-confirm
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Run offline gates
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m unittest tests.test_voice_lab_qwen3_style_transplant -v
+      - name: Publish run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --repo "${{ github.repository }}" \
+            --title "Qwen3 style transplant running $GITHUB_RUN_ID" \
+            --body "Style-transplant killer is running.\n\n- run_id: $GITHUB_RUN_ID\n- head: $GITHUB_SHA\n- architecture: frozen character x-vector embedding + VoiceDesign-derived foreign ICL style codes\n- cases: mystery, wonder, contained sadness\n- final artifact: voice-casting-qwen3-style-transplant-killer\n- human boundary after technical PASS: 3 blind screens\n\nLab only. Production Edge unchanged."
+
+  donors:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          df -h /
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Checkout pinned Qwen3-TTS source
+        run: |
+          git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
+          cd qwen3-upstream
+          git checkout "$QWEN_REV"
+          test "$(git rev-parse HEAD)" = "$QWEN_REV"
+      - name: Install isolated CPU inference stack
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          python -m pip install --disable-pip-version-check -e ./qwen3-upstream
+          python -m pip check
+      - name: Download pinned VoiceDesign model
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(repo_id=os.environ['VD_MODEL_ID'], revision=os.environ['VD_MODEL_REV'], local_dir='qwen3-voicedesign-model'))
+          PY
+          test -f qwen3-voicedesign-model/config.json
+          test -f qwen3-voicedesign-model/model.safetensors
+      - name: Generate three expressive style donors
+        run: |
+          python - <<'PY'
+          import json, random, time
+          from pathlib import Path
+          import numpy as np
+          import soundfile as sf
+          import torch
+          from qwen_tts import Qwen3TTSModel
+          from transformers.utils import logging as transformers_logging
+          from audio_engine.voice_lab_qwen3_style_transplant import CASES
+
+          model = Qwen3TTSModel.from_pretrained('qwen3-voicedesign-model', device_map='cpu', dtype=torch.bfloat16, attn_implementation='eager')
+          out = Path('style-donors'); out.mkdir()
+          transformers_logging.disable_progress_bar()
+          records = []
+          for i, case in enumerate(CASES, 1):
+              seed = 2026082500 + i
+              random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+              started = time.monotonic()
+              print(f"START donor {i}/{len(CASES)} · {case['id']}", flush=True)
+              wavs, sr = model.generate_voice_design(
+                  text=case['donor_text'], instruct=case['donor_instruct'], language='French',
+                  non_streaming_mode=True, do_sample=True, max_new_tokens=512,
+              )
+              sf.write(out / f"{case['id']}.wav", wavs[0], sr)
+              elapsed = time.monotonic() - started
+              print(f"SUCCESS donor {i}/{len(CASES)} · {elapsed:.1f}s", flush=True)
+              records.append({'id': case['id'], 'text': case['donor_text'], 'instruct': case['donor_instruct'], 'seed': seed, 'seconds': round(elapsed,2), 'sample_rate': sr})
+          (out / 'donors.json').write_text(json.dumps({'schema':'qwen3-style-donors-v1','records':records}, ensure_ascii=False, indent=2), encoding='utf-8')
+          PY
+      - name: Upload style donors
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-style-transplant-donors
+          path: style-donors/
+          if-no-files-found: error
+          retention-days: 14
+
+  render:
+    needs: donors
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        character: [claire, lucie]
+    env:
+      CHARACTER: ${{ matrix.character }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          df -h /
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Download exact qualified anchors
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D qualified-anchors
+          test -f qualified-anchors/reference-claire-qwen3.wav
+          test -f qualified-anchors/reference-lucie-qwen3.wav
+          sha256sum qualified-anchors/reference-*-qwen3.wav
+      - name: Download style donors
+        uses: actions/download-artifact@v4
+        with:
+          name: qwen3-style-transplant-donors
+          path: style-donors
+      - name: Checkout pinned Qwen3-TTS source
+        run: |
+          git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
+          cd qwen3-upstream
+          git checkout "$QWEN_REV"
+          test "$(git rev-parse HEAD)" = "$QWEN_REV"
+      - name: Install isolated CPU inference stack
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          python -m pip install --disable-pip-version-check -e ./qwen3-upstream
+          python -m pip check
+      - name: Download pinned Base model
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(repo_id=os.environ['BASE_MODEL_ID'], revision=os.environ['BASE_MODEL_REV'], local_dir='qwen3-base-model'))
+          PY
+          test -f qwen3-base-model/config.json
+          test -f qwen3-base-model/model.safetensors
+      - name: Render style-transplanted character
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from audio_engine.providers.qwen3_style_transplant_lab import Qwen3StyleTransplantLabProvider
+          from audio_engine.voice_lab_qwen3_style_transplant import render_character
+          provider = Qwen3StyleTransplantLabProvider(model_dir=Path('qwen3-base-model'), device='cpu')
+          result = render_character(os.environ['CHARACTER'], Path('qualified-anchors'), Path('style-donors'), Path('character-output'), provider=provider)
+          print(json.dumps(result, ensure_ascii=False, indent=2))
+          if result['status'] != 'success' or result['rendered_count'] != 3:
+              raise SystemExit(1)
+          PY
+      - name: Upload character evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-style-transplant-character-${{ matrix.character }}
+          path: character-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  bundle:
+    needs: render
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Download both character artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: qwen3-style-transplant-character-*
+          path: style-transplant-inputs
+      - name: Assemble three-screen blind bundle
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from audio_engine.voice_lab_qwen3_style_transplant import assemble_bundle
+          result = assemble_bundle(Path('style-transplant-inputs'), Path('style-transplant-bundle'))
+          print(json.dumps({'status':result['status'],'trial_count':result['trial_count'],'decision':result['decision']}, ensure_ascii=False, indent=2))
+          if result['status'] != 'success' or result['trial_count'] != 3:
+              raise SystemExit(1)
+          PY
+      - name: Upload final blind bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-qwen3-style-transplant-killer
+          path: style-transplant-bundle/
+          if-no-files-found: error
+          retention-days: 14
