@@ -1,0 +1,230 @@
+name: Voice Casting Qwen3 CustomVoice Identity Emotion Killer
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - src/audio_engine/voice_lab_qwen3_customvoice_identity_emotion.py
+      - tests/test_voice_lab_qwen3_customvoice_identity_emotion.py
+      - .github/workflows/voice-casting-qwen3-customvoice-identity-emotion.yml
+
+permissions:
+  contents: read
+
+env:
+  QWEN_REV: 022e286b98fbec7e1e916cb940cdf532cd9f488e
+  MODEL_ID: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+  MODEL_REV: b611c9f8f2ad5c741ed9c7a0a6a3750e43e0dfd7
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Run offline architecture gates
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m unittest tests.test_voice_lab_qwen3_customvoice_identity_emotion -v
+
+  render:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        role: [serena, vivian]
+    env:
+      ROLE: ${{ matrix.role }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Checkout pinned Qwen3 source
+        run: |
+          git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
+          cd qwen3-upstream
+          git checkout "$QWEN_REV"
+          test "$(git rev-parse HEAD)" = "$QWEN_REV"
+      - name: Install isolated CPU inference stack
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          python -m pip install --disable-pip-version-check -e ./qwen3-upstream
+          python -m pip check
+      - name: Download pinned CustomVoice model
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          path = snapshot_download(
+              repo_id=os.environ["MODEL_ID"],
+              revision=os.environ["MODEL_REV"],
+              local_dir="qwen3-customvoice-model",
+          )
+          print(path)
+          PY
+          test -f qwen3-customvoice-model/model.safetensors
+          test -f qwen3-customvoice-model/speech_tokenizer/model.safetensors
+      - name: Render exactly two emotions for one fixed speaker id
+        run: |
+          python - <<'PY'
+          import json, os, random, time
+          from pathlib import Path
+
+          import numpy as np
+          import soundfile as sf
+          import torch
+          from qwen_tts import Qwen3TTSModel
+          from transformers.utils import logging as transformers_logging
+
+          from audio_engine.voice_lab_qwen3_customvoice_identity_emotion import (
+              CASES,
+              COMMON_TEXT,
+              character_spec,
+          )
+
+          role = os.environ["ROLE"]
+          spec = character_spec(role)
+          seed = int(spec["seed"])
+          model = Qwen3TTSModel.from_pretrained(
+              "qwen3-customvoice-model",
+              device_map="cpu",
+              dtype=torch.bfloat16,
+              attn_implementation="eager",
+          )
+          transformers_logging.disable_progress_bar()
+          supported_speakers = {str(item).lower() for item in model.get_supported_speakers()}
+          supported_languages = {str(item).lower() for item in model.get_supported_languages()}
+          if spec["speaker"].lower() not in supported_speakers:
+              raise SystemExit(f"speaker id not supported: {spec['speaker']}")
+          if "french" not in supported_languages:
+              raise SystemExit("French not supported by pinned CustomVoice model")
+
+          root = Path("render-output")
+          clips = root / "clips"
+          clips.mkdir(parents=True)
+          rendered = []
+          for case in CASES:
+              random.seed(seed)
+              np.random.seed(seed)
+              torch.manual_seed(seed)
+              started = time.monotonic()
+              print(f"START {role} {spec['speaker']} {case['id']}", flush=True)
+              wavs, sr = model.generate_custom_voice(
+                  text=COMMON_TEXT,
+                  language="French",
+                  speaker=spec["speaker"],
+                  instruct=case["instruction"],
+                  non_streaming_mode=True,
+                  do_sample=True,
+                  max_new_tokens=512,
+              )
+              out = clips / f"{case['id']}.wav"
+              sf.write(out, wavs[0], sr)
+              elapsed = round(time.monotonic() - started, 2)
+              print(f"SUCCESS {role} {case['id']} {elapsed}s", flush=True)
+              rendered.append(
+                  {
+                      "id": case["id"],
+                      "file": f"clips/{case['id']}.wav",
+                      "render_seconds": elapsed,
+                  }
+              )
+
+          result = {
+              "schema": "qwen3-customvoice-character-v1",
+              "status": "success",
+              "role": role,
+              "speaker": spec["speaker"],
+              "seed": seed,
+              "rendered_count": len(rendered),
+              "rendered": rendered,
+          }
+          if result["rendered_count"] != 2:
+              raise SystemExit("clip budget violated")
+          (root / "character-result.json").write_text(
+              json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+          )
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-customvoice-killer-${{ matrix.role }}
+          path: render-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  bundle:
+    needs: render
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      eligible: ${{ steps.gate.outputs.eligible }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: qwen3-customvoice-killer-*
+          path: inputs
+      - name: Apply topology gate and build human bundle only on merit
+        id: gate
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          from audio_engine.voice_lab_qwen3_customvoice_identity_emotion import assemble_bundle
+
+          result = assemble_bundle("inputs", "bundle")
+          print(json.dumps(
+              {
+                  "status": result["status"],
+                  "prefilter": result["prefilter"],
+                  "scores": {
+                      key: value["score"]
+                      for key, value in result["distance_diagnostics_not_identity_proof"].items()
+                  },
+                  "trial_count": result["trial_count"],
+              },
+              ensure_ascii=False,
+              indent=2,
+          ))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as out:
+              out.write(f"eligible={'true' if result['status'] == 'human-gate-ready' else 'false'}\n")
+          PY
+      - name: Upload two-screen radio-only human gate
+        if: steps.gate.outputs.eligible == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-qwen3-customvoice-identity-emotion
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload diagnostic only on automatic reject
+        if: steps.gate.outputs.eligible != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-customvoice-identity-emotion-auto-reject
+          path: bundle/manifest.json
+          if-no-files-found: error
+          retention-days: 14
