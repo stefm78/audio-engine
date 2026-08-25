@@ -11,6 +11,7 @@ on:
 permissions:
   contents: read
   actions: read
+  issues: write
   pages: write
   id-token: write
 
@@ -25,8 +26,10 @@ jobs:
       enabled: ${{ steps.request.outputs.enabled }}
       run_id: ${{ steps.request.outputs.run_id }}
       artifact: ${{ steps.request.outputs.artifact }}
+      locator_issue: ${{ steps.locator.outputs.issue_number }}
     steps:
       - uses: actions/checkout@v6
+
       - id: request
         name: Validate publication request
         shell: bash
@@ -48,6 +51,34 @@ jobs:
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
           echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
 
+      - id: locator
+        name: Publish Pages run locator
+        if: steps.request.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ steps.request.outputs.run_id }}
+          ARTIFACT: ${{ steps.request.outputs.artifact }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BODY="$RUNNER_TEMP/pages-locator.md"
+          cat > "$BODY" <<EOF
+          Voice Lab Pages deployment started.
+
+          - pages_run_id: $GITHUB_RUN_ID
+          - source_run_id: $SOURCE_RUN_ID
+          - artifact: $ARTIFACT
+          - target: https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/lab/current/
+
+          This issue is updated automatically on success or failure.
+          EOF
+          ISSUE_URL="$(gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Voice Lab Pages publishing $GITHUB_RUN_ID" \
+            --body-file "$BODY")"
+          ISSUE_NUMBER="${ISSUE_URL##*/}"
+          echo "issue_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
+
   publish:
     needs: request
     if: needs.request.outputs.enabled == 'true'
@@ -66,7 +97,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          REPO="${{ github.repository }}"
+          REPO="$GITHUB_REPOSITORY"
           RUN_JSON="$(gh api "repos/$REPO/actions/runs/$RUN_ID")"
           test "$(jq -r '.repository.full_name' <<<"$RUN_JSON")" = "$REPO"
           test "$(jq -r '.conclusion' <<<"$RUN_JSON")" = "success"
@@ -115,3 +146,58 @@ jobs:
       - name: Deploy Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Mark Pages published
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.request.outputs.locator_issue }}
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+          SOURCE_RUN_ID: ${{ needs.request.outputs.run_id }}
+          ARTIFACT: ${{ needs.request.outputs.artifact }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BODY="$RUNNER_TEMP/pages-success.md"
+          cat > "$BODY" <<EOF
+          Voice Lab Pages deployment succeeded.
+
+          - pages_run_id: $GITHUB_RUN_ID
+          - source_run_id: $SOURCE_RUN_ID
+          - artifact: $ARTIFACT
+          - page_url: $PAGE_URL
+          - direct_test: ${PAGE_URL}lab/current/
+          EOF
+          gh issue edit "$ISSUE_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Voice Lab Pages published $GITHUB_RUN_ID" \
+            --body-file "$BODY"
+
+      - name: Mark Pages failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.request.outputs.locator_issue }}
+          SOURCE_RUN_ID: ${{ needs.request.outputs.run_id }}
+          ARTIFACT: ${{ needs.request.outputs.artifact }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$ISSUE_NUMBER" ]; then
+            exit 0
+          fi
+          BODY="$RUNNER_TEMP/pages-failure.md"
+          cat > "$BODY" <<EOF
+          Voice Lab Pages deployment failed.
+
+          - pages_run_id: $GITHUB_RUN_ID
+          - source_run_id: $SOURCE_RUN_ID
+          - artifact: $ARTIFACT
+          - run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          Inspect the failed step; do not use the Pages URL until this issue is updated to published.
+          EOF
+          gh issue edit "$ISSUE_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Voice Lab Pages FAILED $GITHUB_RUN_ID" \
+            --body-file "$BODY"
