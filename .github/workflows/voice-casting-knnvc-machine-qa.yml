@@ -17,8 +17,8 @@ env:
   KNNVC_RUN_ID: "32846237805"
   KNNVC_ARTIFACT: voice-casting-knnvc-identity-lock
   WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
-  WHISPER_MODEL: base
-  WHISPER_BASE_SHA256: ed3a0b6b1c0edf879ad9b11b1af5a0e6ab5db9205f891f668f8b0e6c6326e34e
+  WHISPER_MODEL: small
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
   OMP_NUM_THREADS: "2"
   MKL_NUM_THREADS: "2"
   PIP_NO_CACHE_DIR: "1"
@@ -132,12 +132,13 @@ jobs:
               bb = np.interp(grid, np.linspace(0.0, 1.0, len(b)), b)
               return float(np.corrcoef(aa, bb)[0, 1])
 
-          print('Loading pinned Whisper base multilingual model', flush=True)
-          model = whisper.load_model(os.environ['WHISPER_MODEL'], device='cpu')
-          model_path = Path.home() / '.cache' / 'whisper' / 'base.pt'
+          model_name = os.environ['WHISPER_MODEL']
+          print(f'Loading pinned Whisper {model_name} multilingual model', flush=True)
+          model = whisper.load_model(model_name, device='cpu')
+          model_path = Path.home() / '.cache' / 'whisper' / f'{model_name}.pt'
           model_sha = hashlib.sha256(model_path.read_bytes()).hexdigest()
-          if model_sha != os.environ['WHISPER_BASE_SHA256']:
-              raise SystemExit(f'Whisper base SHA256 mismatch: {model_sha}')
+          if model_sha != os.environ['WHISPER_MODEL_SHA256']:
+              raise SystemExit(f'Whisper {model_name} SHA256 mismatch: {model_sha}')
 
           def transcribe(path):
               result = model.transcribe(
@@ -190,7 +191,7 @@ jobs:
               'knnvc_run_id': int(os.environ['KNNVC_RUN_ID']),
               'whisper': {
                   'revision': os.environ['WHISPER_REV'],
-                  'model': os.environ['WHISPER_MODEL'],
+                  'model': model_name,
                   'model_sha256': model_sha,
                   'language': 'fr',
               },
