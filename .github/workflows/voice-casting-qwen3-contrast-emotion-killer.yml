@@ -1,0 +1,207 @@
+name: Voice Casting Qwen3 Contrast Emotion Killer
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - src/audio_engine/voice_lab_qwen3_contrast_emotion.py
+      - tests/test_voice_lab_qwen3_contrast_emotion.py
+      - .github/workflows/voice-casting-qwen3-contrast-emotion-killer.yml
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+env:
+  QWEN_REV: 022e286b98fbec7e1e916cb940cdf532cd9f488e
+  MODEL_ID: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+  MODEL_REV: 5ecdb67327fd37bb2e042aab12ff7391903235d3
+  SOURCE_RUN_ID: "32818950167"
+  SOURCE_ARTIFACT: qwen3-contrast-selected-pair
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      issue_number: ${{ steps.locator.outputs.issue_number }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Run offline gates
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m unittest tests.test_voice_lab_qwen3_contrast_emotion -v
+      - name: Publish run locator
+        id: locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ISSUE_URL=$(gh issue create --repo "${{ github.repository }}" \
+            --title "Qwen3 contrasted emotion killer running $GITHUB_RUN_ID" \
+            --body "Direct VoiceDesign emotion stress on the human-qualified contrasted casting.\n\n- run_id: $GITHUB_RUN_ID\n- source neutral qualification: run $SOURCE_RUN_ID\n- selected identities: claire-a + lucie-b\n- cases: panic, wonder, contained sadness\n- architecture: direct VoiceDesign; no x-vector composition, no OpenVoice, no style transplant\n- human gate: identity 3/3, French clean, acting >=5/6 and >=2/3 per character\n\nLab only. Production Edge unchanged.")
+          echo "issue_number=${ISSUE_URL##*/}" >> "$GITHUB_OUTPUT"
+
+  render:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        role: [claire, lucie]
+    env:
+      ROLE: ${{ matrix.role }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Download exact human-qualified contrasted anchors
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D selected-pair
+          python - <<'PY'
+          from audio_engine.voice_lab_qwen3_contrast_emotion import validate_selection
+          data = validate_selection('selected-pair')
+          print(data['selected'])
+          print(data['selected_anchor_sha256'])
+          PY
+      - name: Checkout pinned Qwen3 source
+        run: |
+          git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
+          cd qwen3-upstream
+          git checkout "$QWEN_REV"
+          test "$(git rev-parse HEAD)" = "$QWEN_REV"
+      - name: Install isolated CPU inference stack
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          python -m pip install --disable-pip-version-check -e ./qwen3-upstream
+          python -m pip check
+      - name: Download pinned VoiceDesign model
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REV'], local_dir='qwen3-vd-model'))
+          PY
+          test -f qwen3-vd-model/model.safetensors
+      - name: Render three expressive clips with one model load
+        run: |
+          python - <<'PY'
+          import json, os, random, time
+          from pathlib import Path
+          import numpy as np
+          import soundfile as sf
+          import torch
+          from qwen_tts import Qwen3TTSModel
+          from transformers.utils import logging as transformers_logging
+          from audio_engine.voice_lab_qwen3_contrast_emotion import CASES, character_spec, expressive_instruction
+
+          role = os.environ['ROLE']
+          spec = character_spec(role)
+          model = Qwen3TTSModel.from_pretrained('qwen3-vd-model', device_map='cpu', dtype=torch.bfloat16, attn_implementation='eager')
+          transformers_logging.disable_progress_bar()
+          root = Path('emotion-output'); clips = root / 'clips'; clips.mkdir(parents=True)
+          rendered = []
+          for index, case in enumerate(CASES, 1):
+              seed = int(spec['seed'])
+              random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+              started = time.monotonic()
+              print(f"START {role} {index}/3 {case['id']}", flush=True)
+              wavs, sr = model.generate_voice_design(
+                  text=case['text'],
+                  instruct=expressive_instruction(role, case['id']),
+                  language='French',
+                  non_streaming_mode=True,
+                  do_sample=True,
+                  max_new_tokens=768,
+              )
+              out = clips / f"{case['id']}.wav"
+              sf.write(out, wavs[0], sr)
+              elapsed = round(time.monotonic() - started, 2)
+              print(f"SUCCESS {role} {case['id']} {elapsed}s", flush=True)
+              rendered.append({'id': case['id'], 'file': f"clips/{case['id']}.wav", 'seed': seed, 'render_seconds': elapsed})
+          result = {'schema':'qwen3-contrast-emotion-character-v1','status':'success','role':role,'candidate_id':spec['candidate_id'],'seed':int(spec['seed']),'rendered_count':len(rendered),'rendered':rendered}
+          (root / 'character-result.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-contrast-emotion-${{ matrix.role }}
+          path: emotion-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  bundle:
+    needs: render
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install core engine
+        run: python -m pip install --disable-pip-version-check -e .
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: qwen3-contrast-emotion-*
+          path: emotion-inputs
+      - name: Download exact qualified references
+        run: gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D selected-pair
+      - name: Assemble three-screen blind gate
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from audio_engine.voice_lab_qwen3_contrast_emotion import assemble_bundle
+          result = assemble_bundle(Path('emotion-inputs'), Path('selected-pair'), Path('bundle'))
+          print(json.dumps({'status':result['status'],'trial_count':result['trial_count'],'distance_diagnostics':{k:v['score'] for k,v in result['distance_diagnostics_not_a_gate'].items()}}, ensure_ascii=False, indent=2))
+          if result['status'] != 'success' or result['trial_count'] != 3:
+              raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voice-casting-qwen3-contrast-emotion-killer
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 14
+
+  finalize:
+    if: always()
+    needs: [preflight, render, bundle]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_NUMBER: ${{ needs.preflight.outputs.issue_number }}
+      BUNDLE_RESULT: ${{ needs.bundle.result }}
+    steps:
+      - name: Update locator
+        run: |
+          if [ -z "$ISSUE_NUMBER" ]; then exit 0; fi
+          if [ "$BUNDLE_RESULT" = "success" ]; then
+            gh issue edit "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
+              --title "Qwen3 contrasted emotion killer completed $GITHUB_RUN_ID" \
+              --body "Direct contrasted VoiceDesign emotion killer completed technically.\n\n- run_id: $GITHUB_RUN_ID\n- artifact: voice-casting-qwen3-contrast-emotion-killer\n- 6 expressive clips: 2 characters x 3 emotions\n- human gate: identity 3/3, French both-good on all screens, acting >=5/6 total and >=2/3 per character\n\nNo artistic verdict yet. Lab only; Production Edge unchanged."
+          else
+            gh issue edit "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
+              --title "Qwen3 contrasted emotion killer failed technically $GITHUB_RUN_ID" \
+              --body "Technical failure in contrasted VoiceDesign emotion killer.\n\n- run_id: $GITHUB_RUN_ID\n- no artistic verdict\n- no production change."
+          fi
