@@ -1,0 +1,398 @@
+name: Voice Casting XVC French Content Smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-xvc-french-content-smoke.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  XVC_CODE_REV: 49df8c591eafc48b096e466d96f9839f9c0dd739
+  XVC_MODEL_REPO: chenxie95/X-VC
+  XVC_MODEL_REV: 9e54747d8c4d1ef544b903e2300a4ba040dcc126
+  XVC_MODEL_SHA256: 1ba0ca3187d2a6753a1529db18c5490e5cb20c8874dc067b92935ff39cfed687
+  GLM_REPO: zai-org/glm-4-voice-tokenizer
+  GLM_REV: a5f2404e63c84e92f5238908e1706316324ebafa
+  GLM_SHA256: 2800bd503f52b51e45f0c53cfd5c31dcfe8ef7f13d22b396aa3d53e0280dd1e4
+  ERES_REV: v1.0.2
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  SUPERB_REPO: superb/wav2vec2-base-superb-er
+  SUPERB_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL: small
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Steve and Linus zero-cost protocol gate
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          policy = {
+            "architecture_question": "Can X-VC preserve immutable French lexical content while converting Claire panic to the fixed Lucie identity?",
+            "cell": "claire-panic -> lucie-reference",
+            "new_tts": False,
+            "parameter_tuning": False,
+            "streaming": False,
+            "gate_order": ["technical", "French no-worse-than-source", "independent target identity", "source-relative emotion"],
+            "expansion_rule": "No four-cell matrix unless this one-cell smoke passes every gate.",
+            "license": {
+              "xvc_code_and_checkpoint": "MIT",
+              "speaker_encoder": "Apache-2.0",
+              "glm_tokenizer": "custom glm-4-voice License; academic research permitted; commercial use requires registration and obligations",
+              "lab_only": True,
+              "production_blocked_pending_license_decision": True
+            }
+          }
+          Path("evidence").mkdir(exist_ok=True)
+          Path("evidence/protocol.json").write_text(json.dumps(policy, indent=2), encoding="utf-8")
+          print(json.dumps(policy, indent=2))
+          PY
+
+      - name: Free disk and record runner capacity
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          df -h /
+          free -h
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d={}
+          with open('/proc/meminfo') as f:
+            for line in f:
+              if line.startswith(('MemTotal:','MemAvailable:')):
+                k,v=line.split(':',1); d[k]=v.strip()
+          st=os.statvfs('.')
+          d['disk_free_bytes']=st.f_bavail*st.f_frsize
+          Path('evidence/runner.json').write_text(json.dumps(d,indent=2),encoding='utf-8')
+          print(d)
+          PY
+
+      - name: Download and verify immutable Lab source inputs
+        run: |
+          mkdir -p source
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          cat > source-hashes.txt <<'EOF'
+          3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe  source/reference-claire.wav
+          9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822  source/reference-lucie.wav
+          ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f  source/clips/claire--panic.wav
+          d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84  source/clips/claire--sadness-contained.wav
+          EOF
+          sha256sum -c source-hashes.txt
+
+      - name: Install inference-only X-VC CPU runtime
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchaudio==2.5.1
+          python -m pip install --disable-pip-version-check \
+            numpy==1.26.4 einops==0.8.0 x-transformers==1.40.2 \
+            hydra-core==1.3.2 omegaconf==2.3.0 julius==0.2.7 \
+            librosa==0.10.2 scipy==1.12.0 soundfile==0.12.1 soxr==0.3.7 \
+            einx==0.3.0 transformers==4.44.1 packaging==24.2 \
+            descript_audiotools==0.7.2 matplotlib==3.7.5 \
+            wandb==0.18.5 tensorboard==2.20.0 \
+            huggingface_hub==0.36.0 psutil==6.1.0
+          python -m pip check
+
+      - name: Checkout exact X-VC code and verify code license
+        run: |
+          git init X-VC
+          git -C X-VC remote add origin https://github.com/Jerrister/X-VC.git
+          git -C X-VC fetch --depth=1 origin "$XVC_CODE_REV"
+          git -C X-VC checkout --detach FETCH_HEAD
+          test "$(git -C X-VC rev-parse HEAD)" = "$XVC_CODE_REV"
+          test -f X-VC/LICENSE
+          grep -qi "MIT License" X-VC/LICENSE
+
+      - name: Download pinned X-VC, GLM tokenizer and ERes2Net weights
+        run: |
+          mkdir -p weights/xvc weights/glm weights/eres
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+          xroot=Path(snapshot_download(repo_id=os.environ['XVC_MODEL_REPO'], revision=os.environ['XVC_MODEL_REV'], allow_patterns=['README.md','config.json','xvc.pt'], local_dir='weights/xvc'))
+          xp=xroot/'xvc.pt'
+          if sha(xp)!=os.environ['XVC_MODEL_SHA256']:
+            raise SystemExit('X-VC checkpoint SHA mismatch')
+          if 'MIT' not in (xroot/'README.md').read_text(encoding='utf-8'):
+            raise SystemExit('X-VC model card no longer declares MIT')
+          groot=Path(snapshot_download(repo_id=os.environ['GLM_REPO'], revision=os.environ['GLM_REV'], allow_patterns=['LICENSE','README.md','config.json','preprocessor_config.json','model.safetensors'], local_dir='weights/glm'))
+          gp=groot/'model.safetensors'
+          if gp.stat().st_size!=1458374480 or sha(gp)!=os.environ['GLM_SHA256']:
+            raise SystemExit('GLM tokenizer checkpoint mismatch')
+          lic=(groot/'LICENSE').read_text(encoding='utf-8')
+          required=['academic research','commercial purposes','registration','Built with glm-4']
+          if not all(s.lower() in lic.lower() for s in required):
+            raise SystemExit('GLM license terms changed; refuse silent acceptance')
+          report={'xvc':{'revision':os.environ['XVC_MODEL_REV'],'bytes':xp.stat().st_size,'sha256':sha(xp),'license':'MIT'},'glm':{'revision':os.environ['GLM_REV'],'bytes':gp.stat().st_size,'sha256':sha(gp),'license':'custom; research allowed, commercial registration/obligations required'}}
+          Path('evidence/provenance-hf.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+          print(json.dumps(report,indent=2))
+          PY
+          curl --fail --location --retry 3 \
+            "https://www.modelscope.cn/api/v1/models/iic/speech_eres2net_sv_en_voxceleb_16k/repo?Revision=$ERES_REV&FilePath=configuration.json" \
+            -o weights/eres/configuration.json
+          curl --fail --location --retry 3 \
+            "https://www.modelscope.cn/api/v1/models/iic/speech_eres2net_sv_en_voxceleb_16k/repo?Revision=$ERES_REV&FilePath=pretrained_eres2net.ckpt" \
+            -o weights/eres/pretrained_eres2net.ckpt
+          python - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          cfg=json.loads(Path('weights/eres/configuration.json').read_text())
+          if cfg['model']['pretrained_model']!='pretrained_eres2net.ckpt': raise SystemExit('Unexpected ERes2Net model file')
+          p=Path('weights/eres/pretrained_eres2net.ckpt')
+          r={'revision':os.environ['ERES_REV'],'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'license':'Apache-2.0 per ModelScope model card'}
+          Path('evidence/provenance-eres.json').write_text(json.dumps(r,indent=2),encoding='utf-8')
+          print(r)
+          PY
+
+      - name: Prepare fully local offline inference config and memory-safe checkpoint load
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from omegaconf import OmegaConf
+          root=Path.cwd()
+          cfg=OmegaConf.load('X-VC/configs/xvc.yaml')
+          gen=cfg.model.generator
+          glm=str((root/'weights/glm').resolve())
+          eres=str((root/'weights/eres').resolve())
+          gen.semantic_encoder.encoder.from_pretrained.hf_repo=None
+          gen.semantic_encoder.encoder.from_pretrained.local_ckpt=glm
+          gen.semantic_encoder.cfg.hf_repo=None
+          gen.semantic_encoder.cfg.local_ckpt=glm
+          gen.speaker_encoder.pretrained_dir=eres
+          OmegaConf.save(cfg,'X-VC/configs/lab_xvc_smoke.yaml')
+          p=Path('X-VC/models/codec/sac/model.py')
+          text=p.read_text(encoding='utf-8')
+          old='state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=False)'
+          new='state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=False, mmap=True)'
+          if old not in text: raise SystemExit('X-VC checkpoint load site changed; refuse patch')
+          p.write_text(text.replace(old,new,1),encoding='utf-8')
+          print('Linus memory adapter: torch.load mmap=True only; model values unchanged')
+          PY
+          python -m py_compile X-VC/models/codec/sac/model.py X-VC/bins/infer_single.py X-VC/bins/infer_utils.py
+
+      - name: Render exactly one French content-smoke conversion
+        id: render
+        env:
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+          PYTHONPATH: ${{ github.workspace }}/X-VC
+        run: |
+          mkdir -p evidence/clips
+          /usr/bin/time -v python -m bins.infer_single \
+            --config configs/lab_xvc_smoke.yaml \
+            --ckpt "${{ github.workspace }}/weights/xvc/xvc.pt" \
+            --source_wav_path "${{ github.workspace }}/source/clips/claire--panic.wav" \
+            --target_wav_path "${{ github.workspace }}/source/reference-lucie.wav" \
+            --save_dir "${{ github.workspace }}/evidence/clips" \
+            --device 0 \
+            --current 0 2> "${{ github.workspace }}/evidence/render-time.txt"
+          test "$(find evidence/clips -maxdepth 1 -name '*.wav' | wc -l)" -eq 1
+          find evidence/clips -maxdepth 1 -name '*.wav' -print
+          echo "rendered=true" >> "$GITHUB_OUTPUT"
+        working-directory: X-VC
+
+      - name: Technical integrity gate
+        id: technical
+        if: steps.render.outputs.rendered == 'true'
+        run: |
+          python - <<'PY'
+          import json,glob,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf
+          out=glob.glob('evidence/clips/*.wav'); assert len(out)==1
+          y,sr=sf.read(out[0],dtype='float32'); s,ssr=sf.read('source/clips/claire--panic.wav',dtype='float32')
+          if y.ndim==2:y=y.mean(1)
+          if s.ndim==2:s=s.mean(1)
+          dur=len(y)/sr; sdur=len(s)/ssr; ratio=dur/max(sdur,1e-9); rms=float(np.sqrt(np.mean(y*y))) if len(y) else 0.0
+          ok=sr==16000 and bool(np.isfinite(y).all()) and rms>1e-5 and 0.5<=ratio<=1.5
+          r={'status':'pass' if ok else 'reject','output':out[0],'sample_rate':sr,'duration':dur,'source_duration':sdur,'duration_ratio':ratio,'rms':rms,'rule':'16k finite non-silent and 0.5x..1.5x source duration'}
+          Path('evidence/technical.json').write_text(json.dumps(r,indent=2),encoding='utf-8');print(json.dumps(r,indent=2))
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install Whisper only after technical PASS
+        if: steps.technical.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV" imageio-ffmpeg==0.6.0
+          FFMPEG_BIN="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$FFMPEG_BIN" "$HOME/.local/bin/ffmpeg"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: French lexical content no-worse-than-source gate
+        id: french
+        if: steps.technical.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import glob,hashlib,json,os,re,unicodedata
+          from pathlib import Path
+          import whisper
+          expected="Vite ! Ils arrivent ! Fermez la porte !"
+          def norm(t):
+            t=unicodedata.normalize('NFKC',t).lower().replace('’',"'");t=re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+",' ',t);return ' '.join(t.split())
+          def dist(a,b):
+            p=list(range(len(b)+1))
+            for i,x in enumerate(a,1):
+              c=[i]
+              for j,y in enumerate(b,1):c.append(min(c[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+              p=c
+            return p[-1]
+          def wer(r,h):
+            a,b=norm(r).split(),norm(h).split();return dist(a,b)/max(1,len(a))
+          model=whisper.load_model(os.environ['WHISPER_MODEL'],device='cpu')
+          cp=Path.home()/'.cache'/'whisper'/f"{os.environ['WHISPER_MODEL']}.pt";sha=hashlib.sha256(cp.read_bytes()).hexdigest()
+          if sha!=os.environ['WHISPER_MODEL_SHA256']:raise SystemExit(f'Whisper SHA mismatch {sha}')
+          def tr(p):return str(model.transcribe(p,language='fr',task='transcribe',fp16=False,temperature=0,condition_on_previous_text=False).get('text','')).strip()
+          source='source/clips/claire--panic.wav';output=glob.glob('evidence/clips/*.wav')[0]
+          st,ot=tr(source),tr(output); sw,ow=wer(expected,st),wer(expected,ot); ok=ow<=sw+1e-12
+          r={'status':'pass' if ok else 'reject','expected':expected,'source_transcript':st,'source_wer':sw,'output_transcript':ot,'output_wer':ow,'rule':'output WER <= immutable expressive-source WER','absolute_threshold':False}
+          Path('evidence/french.json').write_text(json.dumps(r,ensure_ascii=False,indent=2),encoding='utf-8');print(json.dumps(r,ensure_ascii=False,indent=2))
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install independent WeSpeaker verifier after French PASS
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check onnxruntime==1.20.1
+          git init WeSpeaker
+          git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git
+          git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV"
+          git -C WeSpeaker checkout --detach FETCH_HEAD
+          test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"
+          test -f WeSpeaker/LICENSE && grep -qi "Apache License" WeSpeaker/LICENSE
+          mkdir -p weights/wespeaker
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(repo_id=os.environ['WESPEAKER_MODEL_REPO'],revision=os.environ['WESPEAKER_MODEL_REV'],allow_patterns=['voxceleb_resnet34.onnx'],local_dir='weights/wespeaker'))
+          p=root/'voxceleb_resnet34.onnx'; got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest()); expected=(26534127,'9fea6516d7ad6bf0a76c7689f5a49b65d330fad6dde96c91bb4435ffbfe056a1')
+          if got!=expected:raise SystemExit(f'WeSpeaker mismatch {got}')
+          PY
+
+      - name: One-cell independent target identity gate
+        id: identity
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import glob,importlib.util,json,os
+          from pathlib import Path
+          import numpy as np,onnxruntime as ort
+          spec=importlib.util.spec_from_file_location('ws','WeSpeaker/wespeaker/bin/infer_onnx.py');mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
+          session=ort.InferenceSession('weights/wespeaker/voxceleb_resnet34.onnx',providers=['CPUExecutionProvider'])
+          def emb(p):
+            f=mod.compute_fbank(p).unsqueeze(0).numpy();e=np.asarray(session.run(['embs'],{'feats':f})[0]).reshape(-1).astype(np.float64);return e/np.linalg.norm(e)
+          o=emb(glob.glob('evidence/clips/*.wav')[0]);lucie=emb('source/reference-lucie.wav');claire=emb('source/reference-claire.wav')
+          a,b=float(o@lucie),float(o@claire);m=a-b;ok=m>0
+          r={'status':'pass' if ok else 'reject','sim_intended_lucie':a,'sim_source_identity_claire':b,'margin':m,'rule':'converted output closer to intended Lucie reference than Claire source reference','absolute_threshold':False,'claim':'machine diagnostic only'}
+          Path('evidence/identity.json').write_text(json.dumps(r,indent=2),encoding='utf-8');print(json.dumps(r,indent=2))
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install source-valid SUPERB emotion verifier after identity PASS
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check transformers==4.40.1 scipy==1.14.1
+          mkdir -p weights/superb
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(repo_id=os.environ['SUPERB_REPO'],revision=os.environ['SUPERB_REV'],allow_patterns=['config.json','preprocessor_config.json','pytorch_model.bin'],local_dir='weights/superb'))
+          p=root/'pytorch_model.bin';got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest());expected=(378361105,'dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b')
+          if got!=expected:raise SystemExit(f'SUPERB mismatch {got}')
+          PY
+
+      - name: One-cell source-relative emotion gate
+        id: emotion
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import glob,json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from transformers import AutoFeatureExtractor,AutoModelForAudioClassification
+          ex=AutoFeatureExtractor.from_pretrained('weights/superb',local_files_only=True);m=AutoModelForAudioClassification.from_pretrained('weights/superb',local_files_only=True).eval();labels=[str(m.config.id2label[i]).lower() for i in range(m.config.num_labels)]
+          def prof(p):
+            y,sr=sf.read(p,dtype='float32');y=np.asarray(y,dtype=np.float32);y=y.mean(1) if y.ndim==2 else y
+            x=ex(y,sampling_rate=sr,return_tensors='pt');
+            with torch.inference_mode():q=torch.softmax(m(**x).logits[0],-1).numpy().astype(np.float64)
+            return q,q/np.linalg.norm(q)
+          pr,pn=prof('source/clips/claire--panic.wav');sr,sn=prof('source/clips/claire--sadness-contained.wav'); source_valid=labels[int(pr.argmax())]!=labels[int(sr.argmax())]
+          oraw,on=prof(glob.glob('evidence/clips/*.wav')[0]);a,b=float(on@pn),float(on@sn);margin=a-b;ok=source_valid and margin>0
+          r={'status':'pass' if ok else 'reject','source_preflight_distinguishable':source_valid,'panic_source_top':labels[int(pr.argmax())],'sadness_source_top':labels[int(sr.argmax())],'output_top':labels[int(oraw.argmax())],'similarity_to_panic_source':a,'similarity_to_sadness_source':b,'margin':margin,'rule':'source instrument discriminates sources and output profile ranks panic source first','claim':'relative machine diagnostic only'}
+          Path('evidence/emotion.json').write_text(json.dumps(r,indent=2),encoding='utf-8');print(json.dumps(r,indent=2))
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Record Steve and Linus semantic verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          def rd(n):
+            p=Path(f'evidence/{n}.json');return json.loads(p.read_text()) if p.is_file() else None
+          t,f,i,e=rd('technical'),rd('french'),rd('identity'),rd('emotion')
+          if t is None: status='infrastructure-incomplete';decision='Linus veto: X-VC produced no technically assessable WAV.'
+          elif t.get('status')!='pass':status='technical-reject';decision='Linus veto: output integrity failed; no tuning.'
+          elif f is None or f.get('status')!='pass':status='french-reject';decision='Steve/Linus veto: French lexical content did not beat MeanVC failure mode; retire X-VC without matrix.'
+          elif i is None or i.get('status')!='pass':status='identity-reject';decision='Steve veto: one-cell target identity failed; no matrix.'
+          elif e is None or e.get('status')!='pass':status='emotion-reject';decision='Steve veto: panic profile not preserved relative to immutable source; no matrix.'
+          else:status='one-cell-machine-pass';decision='One-cell X-VC smoke passes technical, French, target identity and relative emotion. Authorized next step: exact four-cell matrix in Lab; production remains license-blocked and human-unproven.'
+          r={'status':status,'decision':decision,'matrix_authorized':status=='one-cell-machine-pass','human_gate_authorized':False,'production_qualified':False,'production_license_blocked':True,'pages_published':False,'parameter_tuning':False}
+          Path('evidence/final.json').write_text(json.dumps(r,indent=2),encoding='utf-8');print(json.dumps(r,indent=2))
+          PY
+
+      - name: Upload X-VC smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xvc-french-content-smoke
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface scientific reject in job status
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('evidence/final.json')
+          if not p.is_file(): raise SystemExit('No semantic verdict')
+          r=json.loads(p.read_text())
+          print('SEMANTIC_STATUS='+r['status'])
+          if r['status']!='one-cell-machine-pass': raise SystemExit(1)
+          PY
