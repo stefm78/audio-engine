@@ -1,9 +1,11 @@
-# Reopen synchronization only; frozen scientific contract is unchanged.
-# Synchronization-only commit after workflow creation; frozen science below is unchanged.
+# Dedicated execution trigger only; frozen scientific contract below is unchanged.
 name: Voice Casting CosyVoice3 Claire Panic One-Cell
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - lab/cosyvoice3-claire-panic-one-cell-run
   pull_request:
     branches: [main]
     paths:
