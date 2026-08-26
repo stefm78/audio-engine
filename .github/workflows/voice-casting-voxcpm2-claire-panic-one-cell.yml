@@ -1,0 +1,426 @@
+name: Voice Casting VoxCPM2 Claire Panic One-Cell Killer
+
+on:
+  push:
+    branches:
+      - lab/voxcpm2-claire-panic-one-cell
+    paths:
+      - .github/workflows/voice-casting-voxcpm2-claire-panic-one-cell.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  VOXCPM_REPO: https://github.com/OpenBMB/VoxCPM.git
+  VOXCPM_REV: f5a1c6a6b901bc732e20f0d59a369f6829ad717a
+  MODEL_REPO: openbmb/VoxCPM2
+  MODEL_REV: 32279effe8c19989596f05d353d1447f51d9e915
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  HISTORICAL_PANIC_SHA256: ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f
+  CLAIRE_REF_SHA256: 3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe
+  LUCIE_REF_SHA256: 9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822
+  SADNESS_SHA256: d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  SUPERB_REPO: superb/wav2vec2-base-superb-er
+  SUPERB_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    outputs:
+      eligible: ${{ steps.technical.outputs.eligible }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Freeze scientific contract before the only render
+        run: |
+          mkdir -p render/clips source weights upstream
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          contract={
+            'status':'contract-frozen',
+            'architecture':'VoxCPM2 Basic Controllable Cloning',
+            'killer_cell':'claire--panic',
+            'scientific_render_count':1,
+            'seed':0,
+            'spoken_text':'Vite ! Ils arrivent ! Fermez la porte !',
+            'control_prefix':'(fast, intense panic and fear, short of breath)',
+            'full_text':'(fast, intense panic and fear, short of breath)Vite ! Ils arrivent ! Fermez la porte !',
+            'identity_source':'immutable Claire reference audio only; no identity words in control prompt',
+            'reference_preconditioning':'deterministic mono resample of immutable Claire reference to 16 kHz before VoxCPM2 input; output is not transformed',
+            'upstream_revision':os.environ['VOXCPM_REV'],
+            'model_revision':os.environ['MODEL_REV'],
+            'generation':{
+              'cfg_value':2.0,'inference_timesteps':10,'normalize':False,
+              'denoise':False,'retry_badcase':False,'seed':0,
+              'device':'cpu','load_denoiser':False,'optimize':False,
+            },
+            'technical_gate':'native 48 kHz; finite non-silent; duration 0.5x..1.5x immutable direct-Qwen panic duration',
+            'identity_gate':'independent WeSpeaker cosine Claire > Lucie; no absolute threshold',
+            'french_gate':'Whisper Small French WER <= immutable historical direct-Qwen panic source WER 0.5',
+            'emotion_gate':'SUPERB profile closer to immutable panic profile than immutable contained-sadness profile',
+            'human_gate':'only after all four machine gates PASS',
+            'forbidden':['second render','retry','replacement seed','parameter tuning','alternate reference','DSP output transform','voice conversion','training','finetuning','production'],
+          }
+          Path('render/contract.json').write_text(json.dumps(contract,indent=2,ensure_ascii=False),encoding='utf-8')
+          print(json.dumps(contract,indent=2,ensure_ascii=False))
+          PY
+
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          df -h /
+
+      - name: Recover and verify immutable source material
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          test "$(sha256sum source/clips/claire--panic.wav | cut -d' ' -f1)" = "$HISTORICAL_PANIC_SHA256"
+          test "$(sha256sum source/reference-claire.wav | cut -d' ' -f1)" = "$CLAIRE_REF_SHA256"
+          test "$(sha256sum source/reference-lucie.wav | cut -d' ' -f1)" = "$LUCIE_REF_SHA256"
+          test "$(sha256sum source/clips/claire--sadness-contained.wav | cut -d' ' -f1)" = "$SADNESS_SHA256"
+
+      - name: Install exact CPU VoxCPM2 runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg sox libsndfile1
+          git clone --filter=blob:none "$VOXCPM_REPO" upstream/VoxCPM
+          git -C upstream/VoxCPM checkout --detach "$VOXCPM_REV"
+          test "$(git -C upstream/VoxCPM rev-parse HEAD)" = "$VOXCPM_REV"
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchaudio==2.7.1
+          python -m pip install --disable-pip-version-check -e upstream/VoxCPM
+          python -m pip install --disable-pip-version-check psutil==6.1.1
+          python -m pip check
+          python - <<'PY'
+          import torch
+          assert not torch.cuda.is_available()
+          print('CPU_ONLY_PASS',torch.__version__)
+          PY
+
+      - name: Download exact preflight-approved VoxCPM2 snapshot
+        run: |
+          python - <<'PY'
+          import hashlib, os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(repo_id=os.environ['MODEL_REPO'],revision=os.environ['MODEL_REV'],local_dir='weights/VoxCPM2'))
+          files=[]; total=0
+          for p in sorted(root.rglob('*')):
+              if not p.is_file() or '.cache' in p.parts: continue
+              h=hashlib.sha256(); total += p.stat().st_size
+              with p.open('rb') as f:
+                  for c in iter(lambda:f.read(8*1024*1024),b''): h.update(c)
+              files.append((str(p.relative_to(root)),p.stat().st_size,h.hexdigest()))
+          raw=('\n'.join(f'{a}\t{b}\t{c}' for a,b,c in files)+'\n').encode()
+          print('MODEL_REV',os.environ['MODEL_REV'],'FILES',len(files),'TOTAL_BYTES',total,'CANONICAL_TABLE_SHA256',hashlib.sha256(raw).hexdigest())
+          if len(files)!=9 or total!=4960731866: raise SystemExit((len(files),total))
+          PY
+
+      - name: Deterministically prepare the 16 kHz Claire cloning reference
+        run: |
+          python - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          import numpy as np, soundfile as sf
+          from scipy.signal import resample_poly
+          p=Path('source/reference-claire.wav')
+          y,sr=sf.read(p,dtype='float32'); y=np.asarray(y,dtype=np.float32); y=y.mean(1) if y.ndim==2 else y
+          if sr!=16000:
+              g=int(np.gcd(sr,16000)); y=resample_poly(y,16000//g,sr//g).astype(np.float32)
+          out=Path('render/reference-claire-16k.wav'); sf.write(out,y,16000,subtype='PCM_16')
+          r={'source_sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'output_sha256':hashlib.sha256(out.read_bytes()).hexdigest(),'sample_rate':16000,'samples':int(len(y)),'duration_seconds':float(len(y)/16000)}
+          Path('render/reference-preconditioning.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          PY
+
+      - name: Render exactly one Claire panic candidate
+        run: |
+          /usr/bin/time -v -o render/render-time.txt python - <<'PY'
+          import hashlib,json,resource,time
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from voxcpm import VoxCPM
+          model=VoxCPM(voxcpm_model_path='weights/VoxCPM2',enable_denoiser=False,optimize=False,device='cpu')
+          text='(fast, intense panic and fear, short of breath)Vite ! Ils arrivent ! Fermez la porte !'
+          started=time.time()
+          wav=model.generate(
+              text=text,
+              reference_wav_path='render/reference-claire-16k.wav',
+              cfg_value=2.0,
+              inference_timesteps=10,
+              normalize=False,
+              denoise=False,
+              retry_badcase=False,
+              seed=0,
+          )
+          wall=time.time()-started
+          y=np.asarray(wav,dtype=np.float32).reshape(-1); sr=48000
+          out=Path('render/clips/voxcpm2-claire-panic.wav'); sf.write(out,y,sr)
+          r={'status':'rendered','render_count':1,'retry_count':0,'replacement_count':0,'seed':0,'sample_rate':sr,'samples':int(y.size),'duration_seconds':float(y.size/sr),'rms':float(np.sqrt(np.mean(y*y))) if y.size else 0.0,'finite':bool(np.isfinite(y).all()),'render_wall_seconds':wall,'max_rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,'output_sha256':hashlib.sha256(out.read_bytes()).hexdigest(),'cuda_available':torch.cuda.is_available()}
+          Path('render/render.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          PY
+          test "$(find render/clips -maxdepth 1 -name '*.wav' | wc -l)" = "1"
+
+      - name: Frozen technical gate
+        id: technical
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf
+          y,sr=sf.read('render/clips/voxcpm2-claire-panic.wav',dtype='float32'); y=np.asarray(y,dtype=np.float32); y=y.mean(1) if y.ndim==2 else y
+          s,ssr=sf.read('source/clips/claire--panic.wav',dtype='float32'); s=np.asarray(s,dtype=np.float32); s=s.mean(1) if s.ndim==2 else s
+          duration=len(y)/sr; source_duration=len(s)/ssr; ratio=duration/source_duration
+          rms=float(np.sqrt(np.mean(y*y))) if y.size else 0.0; finite=bool(np.isfinite(y).all()) if y.size else False
+          ok=sr==48000 and y.size>0 and finite and rms>1e-5 and .5<=ratio<=1.5
+          r={'status':'pass' if ok else 'reject','sr':sr,'expected_native_sr':48000,'duration':duration,'historical_duration':source_duration,'duration_ratio':ratio,'rms':rms,'finite':finite,'rule':'native 48 kHz; finite non-silent; duration 0.5x..1.5x immutable direct-Qwen panic'}
+          Path('render/technical.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Upload immutable scientific render evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voxcpm2-claire-panic-one-cell-render
+          path: render/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface technical verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('render/technical.json').read_text())['status']
+          if s!='pass': raise SystemExit(f'verdict: voxcpm2-technical-{s}')
+          print('TECHNICAL_PASS')
+          PY
+
+  validate:
+    needs: render
+    if: needs.render.outputs.eligible == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - uses: actions/download-artifact@v4
+        with:
+          name: voxcpm2-claire-panic-one-cell-render
+          path: render
+
+      - name: Recover immutable validation references
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          mkdir -p source evidence human weights
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          test "$(sha256sum source/reference-claire.wav | cut -d' ' -f1)" = "$CLAIRE_REF_SHA256"
+          test "$(sha256sum source/reference-lucie.wav | cut -d' ' -f1)" = "$LUCIE_REF_SHA256"
+          test "$(sha256sum source/clips/claire--panic.wav | cut -d' ' -f1)" = "$HISTORICAL_PANIC_SHA256"
+          test "$(sha256sum source/clips/claire--sadness-contained.wav | cut -d' ' -f1)" = "$SADNESS_SHA256"
+          cp render/clips/voxcpm2-claire-panic.wav evidence/candidate.wav
+          cp render/contract.json render/render.json render/technical.json evidence/
+
+      - name: Install CPU audio validation runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchaudio==2.7.1
+          python -m pip install --disable-pip-version-check numpy scipy soundfile huggingface-hub
+
+      - name: Install pinned independent WeSpeaker
+        run: |
+          python -m pip install --disable-pip-version-check onnxruntime==1.20.1
+          git init WeSpeaker
+          git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git
+          git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV"
+          git -C WeSpeaker checkout --detach FETCH_HEAD
+          test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"
+          mkdir -p weights/wespeaker
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          p=Path(snapshot_download(repo_id=os.environ['WESPEAKER_MODEL_REPO'],revision=os.environ['WESPEAKER_MODEL_REV'],allow_patterns=['voxceleb_resnet34.onnx'],local_dir='weights/wespeaker'))/'voxceleb_resnet34.onnx'
+          got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
+          if got!=(26534127,'9fea6516d7ad6bf0a76c7689f5a49b65d330fad6dde96c91bb4435ffbfe056a1'): raise SystemExit(got)
+          PY
+
+      - name: Independent Claire identity gate
+        id: identity
+        run: |
+          python - <<'PY'
+          import importlib.util,json,os
+          from pathlib import Path
+          import numpy as np,onnxruntime as ort
+          spec=importlib.util.spec_from_file_location('ws','WeSpeaker/wespeaker/bin/infer_onnx.py')
+          m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          sess=ort.InferenceSession('weights/wespeaker/voxceleb_resnet34.onnx',providers=['CPUExecutionProvider'])
+          def emb(p):
+              f=m.compute_fbank(p).unsqueeze(0).numpy(); e=np.asarray(sess.run(['embs'],{'feats':f})[0]).reshape(-1).astype(np.float64)
+              n=np.linalg.norm(e)
+              if not np.isfinite(e).all() or n<=0: raise SystemExit(f'bad embedding {p}')
+              return e/n
+          o,c,l=emb('evidence/candidate.wav'),emb('source/reference-claire.wav'),emb('source/reference-lucie.wav')
+          a=float(o@c); b=float(o@l); margin=a-b; ok=margin>0
+          r={'status':'pass' if ok else 'reject','sim_claire':a,'sim_lucie':b,'target_margin':margin,'rule':'independent WeSpeaker Claire > Lucie; no absolute threshold'}
+          Path('evidence/identity.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned Whisper only after identity PASS
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV" imageio-ffmpeg==0.6.0
+          F="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"
+          mkdir -p "$HOME/.local/bin"; ln -sf "$F" "$HOME/.local/bin/ffmpeg"; echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: French no-worse-than-historical-source gate
+        id: french
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,re,unicodedata
+          from pathlib import Path
+          import whisper
+          expected="Vite ! Ils arrivent ! Fermez la porte !"; source_wer=.5
+          def norm(t): return ' '.join(re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+",' ',unicodedata.normalize('NFKC',t).lower().replace('’',"'")).split())
+          def dist(a,b):
+              p=list(range(len(b)+1))
+              for i,x in enumerate(a,1):
+                  q=[i]
+                  for j,y in enumerate(b,1):q.append(min(q[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+                  p=q
+              return p[-1]
+          def wer(r,h):
+              a,b=norm(r).split(),norm(h).split(); return dist(a,b)/max(1,len(a))
+          model=whisper.load_model('small',device='cpu')
+          p=Path.home()/'.cache/whisper/small.pt'; sha=hashlib.sha256(p.read_bytes()).hexdigest()
+          if sha!=os.environ['WHISPER_MODEL_SHA256']: raise SystemExit(sha)
+          text=str(model.transcribe('evidence/candidate.wav',language='fr',task='transcribe',fp16=False,temperature=0,condition_on_previous_text=False).get('text','')).strip()
+          value=wer(expected,text); ok=value<=source_wer+1e-12
+          r={'status':'pass' if ok else 'reject','expected':expected,'transcript':text,'wer':value,'immutable_historical_source_wer':source_wer,'rule':'VoxCPM2 WER <= immutable historical direct-Qwen panic WER'}
+          Path('evidence/french.json').write_text(json.dumps(r,ensure_ascii=False,indent=2)); print(json.dumps(r,ensure_ascii=False,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned SUPERB only after French PASS
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check transformers==4.40.1
+          mkdir -p weights/superb
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          p=Path(snapshot_download(repo_id=os.environ['SUPERB_REPO'],revision=os.environ['SUPERB_REV'],allow_patterns=['config.json','preprocessor_config.json','pytorch_model.bin'],local_dir='weights/superb'))/'pytorch_model.bin'
+          got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
+          if got!=(378361105,'dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b'): raise SystemExit(got)
+          PY
+
+      - name: Source-relative panic preservation gate
+        id: emotion
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from scipy.signal import resample_poly
+          from transformers import AutoFeatureExtractor,AutoModelForAudioClassification
+          torch.set_num_threads(2)
+          ex=AutoFeatureExtractor.from_pretrained('weights/superb',local_files_only=True)
+          model=AutoModelForAudioClassification.from_pretrained('weights/superb',local_files_only=True).eval()
+          labels=[str(model.config.id2label[i]).lower() for i in range(4)]
+          y,sr=sf.read('evidence/candidate.wav',dtype='float32'); y=np.asarray(y,dtype=np.float32); y=y.mean(1) if y.ndim==2 else y
+          if sr!=16000:
+              g=int(np.gcd(sr,16000)); y=resample_poly(y,16000//g,sr//g).astype(np.float32)
+          x=ex(y,sampling_rate=16000,return_tensors='pt',padding=False)
+          with torch.inference_mode():raw=torch.softmax(model(**x).logits[0],dim=-1).cpu().numpy().astype(np.float64)
+          n=raw/np.linalg.norm(raw)
+          panic=np.array([.0415043309,.6996874809,.2587981224,.0000100258]); sad=np.array([.0128470538,.4423151910,.5446761847,.0001615520])
+          panic/=np.linalg.norm(panic); sad/=np.linalg.norm(sad)
+          a=float(n@panic); b=float(n@sad); margin=a-b; ok=margin>0
+          r={'status':'pass' if ok else 'reject','profile':{labels[i]:float(raw[i]) for i in range(4)},'similarity_panic':a,'similarity_sadness':b,'relative_margin':margin,'rule':'closer to immutable direct-Qwen panic profile than immutable contained-sadness profile','semantic_label_claim':False}
+          Path('evidence/emotion.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Build authoritative machine verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          def status(name):
+              p=Path('evidence')/f'{name}.json'
+              return json.loads(p.read_text())['status'] if p.exists() else 'skipped'
+          gates={'technical':json.loads(Path('evidence/technical.json').read_text())['status'],'identity':status('identity'),'french':status('french'),'emotion':status('emotion')}
+          order=['technical','identity','french','emotion']; first=next((g for g in order if gates[g]!='pass'),None)
+          final='machine-pass' if first is None else f'{first}-reject' if gates[first]=='reject' else f'{first}-not-run'
+          out={'status':final,'gates':gates,'human_gate_authorized':first is None,'render_count':1,'retry_count':0,'replacement_count':0,'production':False}
+          Path('evidence/final.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          if first is None:
+              import shutil
+              shutil.copy2('source/reference-claire.wav','human/reference-1.wav')
+              shutil.copy2('source/reference-lucie.wav','human/reference-2.wav')
+              shutil.copy2('evidence/candidate.wav','human/candidate-A.wav')
+              Path('human/instructions.txt').write_text('Blind human gate\n\n1. Candidate A sounds closer to Reference 1 or Reference 2?\n2. Is the panic urgent and credible? yes/no\n3. Is the French natural and intact? yes/no\n\nDo not inspect machine metrics before answering.\n',encoding='utf-8')
+          PY
+
+      - name: Upload machine evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voxcpm2-claire-panic-one-cell-machine-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload blind human gate only after complete machine PASS
+        if: steps.emotion.outputs.eligible == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: voxcpm2-claire-panic-one-cell-human-gate
+          path: human/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface machine verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('evidence/final.json').read_text())['status']
+          if s!='machine-pass': raise SystemExit(f'verdict: {s}')
+          print('MACHINE_PASS')
+          PY
