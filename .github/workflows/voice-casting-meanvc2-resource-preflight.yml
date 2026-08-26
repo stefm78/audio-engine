@@ -18,10 +18,16 @@ env:
   HF_REV: 4a73815c6b392bcb435769f69d7f5fdeccbc39dd
   VC_SHA256: 04ea21a4fb55400469e6004ae842c3e7f059f759e92946fb95123418cad5d818
   VC_SIZE: "70839448"
+  ASR_SHA256: 9a372c1b7178f564a15da1cd36901d7d0c9081a2fabf53cb6cc0d971deca4928
+  ASR_SIZE: "246275643"
   VOCOS_SHA256: df1f2ba9f7ac35c96832579421ee1ed913a68c3a1d2f8a6536739f902f194a93
   VOCOS_SIZE: "33223674"
   WAVLM_GDRIVE_ID: 12-cB34qCTvByWT-QtOcZaqwwO21FLSqU
+  WAVLM_SHA256: 6fb4b3c3e6aa567f0a997b30855859cb81528ee8078802af439f7b2da0bf100f
+  WAVLM_SIZE: "1261965425"
   WAVLM_FINETUNE_GDRIVE_ID: 1-aE1NfzpRCLxA4GUxX9ITI3F9LlbtEGP
+  WAVLM_FINETUNE_SHA256: 51f07e3b94d9e0262a6a675ef5a087be3dd09e8c62e9d886827f44f82fe7f94b
+  WAVLM_FINETUNE_SIZE: "1301926579"
   PIP_NO_CACHE_DIR: "1"
   HF_HUB_DISABLE_TELEMETRY: "1"
   OMP_NUM_THREADS: "2"
@@ -83,11 +89,11 @@ jobs:
             'numpy>=1.26,<2.1' soundfile librosa soxr safetensors \
             einops==0.8.0 x-transformers==2.2.11 torchdiffeq==0.2.5 \
             huggingface-hub==0.36.0 gdown==5.2.0 omegaconf==2.3.0 \
-            s3prl==0.4.18
+            s3prl==0.4.18 matplotlib==3.9.2
           python - <<'PY'
-          import torch, torchaudio, numpy, soundfile, librosa, safetensors, s3prl
+          import torch, torchaudio, numpy, soundfile, librosa, safetensors, s3prl, matplotlib
           assert not torch.cuda.is_available()
-          print("CPU_RUNTIME_PASS", torch.__version__, torchaudio.__version__, numpy.__version__)
+          print("CPU_RUNTIME_PASS", torch.__version__, torchaudio.__version__, numpy.__version__, matplotlib.__version__)
           PY
 
       - name: Download exact public MeanVC2 quality assets
@@ -111,15 +117,19 @@ jobs:
           PY
           test "$(stat -c%s MeanVC2/ckpts/pretrained_models/meanvc2_120ms_40ms.safetensors)" = "$VC_SIZE"
           test "$(sha256sum MeanVC2/ckpts/pretrained_models/meanvc2_120ms_40ms.safetensors | cut -d' ' -f1)" = "$VC_SHA256"
+          test "$(stat -c%s MeanVC2/preprocess/ckpts/fastu2pp_160ms.pt)" = "$ASR_SIZE"
+          test "$(sha256sum MeanVC2/preprocess/ckpts/fastu2pp_160ms.pt | cut -d' ' -f1)" = "$ASR_SHA256"
           test "$(stat -c%s MeanVC2/ckpts/vocos/vocos.pt)" = "$VOCOS_SIZE"
           test "$(sha256sum MeanVC2/ckpts/vocos/vocos.pt | cut -d' ' -f1)" = "$VOCOS_SHA256"
 
       - name: Download official public WavLM speaker assets without account or token
         run: |
-          gdown --id "$WAVLM_GDRIVE_ID" -O MeanVC2/preprocess/ckpts/wavlm_large.pt
-          gdown --id "$WAVLM_FINETUNE_GDRIVE_ID" -O MeanVC2/preprocess/ckpts/wavlm_large_finetune.pth
-          test -s MeanVC2/preprocess/ckpts/wavlm_large.pt
-          test -s MeanVC2/preprocess/ckpts/wavlm_large_finetune.pth
+          gdown "$WAVLM_GDRIVE_ID" -O MeanVC2/preprocess/ckpts/wavlm_large.pt
+          gdown "$WAVLM_FINETUNE_GDRIVE_ID" -O MeanVC2/preprocess/ckpts/wavlm_large_finetune.pth
+          test "$(stat -c%s MeanVC2/preprocess/ckpts/wavlm_large.pt)" = "$WAVLM_SIZE"
+          test "$(sha256sum MeanVC2/preprocess/ckpts/wavlm_large.pt | cut -d' ' -f1)" = "$WAVLM_SHA256"
+          test "$(stat -c%s MeanVC2/preprocess/ckpts/wavlm_large_finetune.pth)" = "$WAVLM_FINETUNE_SIZE"
+          test "$(sha256sum MeanVC2/preprocess/ckpts/wavlm_large_finetune.pth | cut -d' ' -f1)" = "$WAVLM_FINETUNE_SHA256"
 
       - name: Freeze exact asset hashes and sizes before any scientific render
         run: |
@@ -133,14 +143,20 @@ jobs:
             'wavlm_large':'MeanVC2/preprocess/ckpts/wavlm_large.pt',
             'wavlm_finetuned':'MeanVC2/preprocess/ckpts/wavlm_large_finetune.pth',
           }
+          expected={
+            'vc_model':(int(os.environ['VC_SIZE']),os.environ['VC_SHA256']),
+            'asr_160ms':(int(os.environ['ASR_SIZE']),os.environ['ASR_SHA256']),
+            'vocos':(int(os.environ['VOCOS_SIZE']),os.environ['VOCOS_SHA256']),
+            'wavlm_large':(int(os.environ['WAVLM_SIZE']),os.environ['WAVLM_SHA256']),
+            'wavlm_finetuned':(int(os.environ['WAVLM_FINETUNE_SIZE']),os.environ['WAVLM_FINETUNE_SHA256']),
+          }
           out={}
           for key,name in files.items():
             p=Path(name); h=hashlib.sha256()
             with p.open('rb') as f:
-              for block in iter(lambda:f.read(1024*1024),b''):h.update(block)
+              for block in iter(lambda:f.read(1024*1024),b''): h.update(block)
             out[key]={'path':name,'bytes':p.stat().st_size,'sha256':h.hexdigest()}
-          assert out['vc_model']['sha256']==os.environ['VC_SHA256']
-          assert out['vocos']['sha256']==os.environ['VOCOS_SHA256']
+            assert (out[key]['bytes'],out[key]['sha256'])==expected[key], (key,out[key],expected[key])
           Path('evidence/assets.json').write_text(json.dumps(out,indent=2),encoding='utf-8')
           print(json.dumps(out,indent=2))
           PY
