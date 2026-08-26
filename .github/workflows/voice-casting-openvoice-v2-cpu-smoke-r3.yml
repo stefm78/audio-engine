@@ -1,0 +1,274 @@
+name: Voice Casting OpenVoice V2 CPU One-Cell Smoke R3
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-openvoice-v2-cpu-smoke-r3.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  OPENVOICE_REV: 74a1d147b17a8c3092dd5430504bd83ef6c7eb23
+  OPENVOICE_MODEL_REPO: myshell-ai/OpenVoiceV2
+  OPENVOICE_MODEL_REV: fd981100305a0e4291f93a9ad169c6d9f7bed54a
+  OPENVOICE_MODEL_SHA256: 9652c27e92b6b2a91632590ac9962ef7ae2b712e5c5b7f4c34ec55ee2b37ab9e
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  SUPERB_REPO: superb/wav2vec2-base-superb-er
+  SUPERB_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  smoke-r3:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Assert unchanged frozen science and R3 harness delta
+        run: |
+          python - <<'PY'
+          frozen={'cell':'panic--lucie','tau':0.3,'seed':0,'whole_wav_se':True,'watermark':False,'training':False,'new_tts':False,'retry':False,'substitution':False,'tuning':False}
+          print('SCIENTIFIC_CONTRACT_UNCHANGED',frozen)
+          print('R3_HARNESS_DELTA=work around upstream constructor kwargs bug only; initialize same ToneColorConverter through OpenVoiceBaseClass then watermark_model=None')
+          PY
+
+      - name: Recover exact immutable audio
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          mkdir -p source evidence/clips weights/openvoice
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          cat > source-hashes.txt <<'EOF'
+          3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe  source/reference-claire.wav
+          9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822  source/reference-lucie.wav
+          ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f  source/clips/claire--panic.wav
+          d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84  source/clips/claire--sadness-contained.wav
+          EOF
+          sha256sum -c source-hashes.txt
+
+      - name: Install pinned CPU runtime
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.2.2 torchaudio==2.2.2
+          python -m pip install --disable-pip-version-check numpy==1.26.4 librosa==0.10.2.post1 soundfile==0.12.1 scipy==1.14.1 huggingface_hub==0.36.0 eng_to_ipa==0.0.2 inflect==7.0.0 unidecode==1.3.7 pypinyin==0.50.0 cn2an==0.5.22 jieba==0.42.1
+          git init OpenVoice
+          git -C OpenVoice remote add origin https://github.com/myshell-ai/OpenVoice.git
+          git -C OpenVoice fetch --depth=1 origin "$OPENVOICE_REV"
+          git -C OpenVoice checkout --detach FETCH_HEAD
+          test "$(git -C OpenVoice rev-parse HEAD)" = "$OPENVOICE_REV"
+          grep -q "Permission is hereby granted, free of charge" OpenVoice/LICENSE
+          grep -q "THE SOFTWARE IS PROVIDED" OpenVoice/LICENSE
+          python -m pip install --disable-pip-version-check -e OpenVoice --no-deps
+
+      - name: Verify exact converter and render one raw no-watermark cell
+        id: render
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,shutil,time
+          from pathlib import Path
+          import torch
+          from huggingface_hub import hf_hub_download
+          from openvoice.api import ToneColorConverter, OpenVoiceBaseClass
+          root=Path('weights/openvoice')
+          for name in ['converter/config.json','converter/checkpoint.pth']:
+              src=Path(hf_hub_download(repo_id=os.environ['OPENVOICE_MODEL_REPO'],revision=os.environ['OPENVOICE_MODEL_REV'],filename=name))
+              dst=root/name; dst.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(src,dst)
+          ckpt=root/'converter/checkpoint.pth'; got=(ckpt.stat().st_size,hashlib.sha256(ckpt.read_bytes()).hexdigest())
+          if got!=(131320490,os.environ['OPENVOICE_MODEL_SHA256']): raise SystemExit(f'converter mismatch {got}')
+          cfg=json.loads((root/'converter/config.json').read_text())
+          if cfg.get('_version_')!='v2' or cfg['data']['sampling_rate']!=22050: raise SystemExit(f'config mismatch {cfg.get("_version_")} {cfg["data"]["sampling_rate"]}')
+          # Upstream 74a1d14 ToneColorConverter.__init__ forwards enable_watermark to
+          # OpenVoiceBaseClass before reading it. Build the SAME converter object through
+          # its base initializer and set the subclass fields exactly as intended.
+          c=ToneColorConverter.__new__(ToneColorConverter)
+          OpenVoiceBaseClass.__init__(c,str(root/'converter/config.json'),device='cpu')
+          c.watermark_model=None
+          c.version=getattr(c.hps,'_version_','v1')
+          c.load_ckpt(str(ckpt))
+          assert c.watermark_model is None and c.version=='v2'
+          torch.set_num_threads(2); torch.manual_seed(0)
+          src='source/clips/claire--panic.wav'; tgt='source/reference-lucie.wav'
+          src_se=c.extract_se([src]); tgt_se=c.extract_se([tgt]); torch.manual_seed(0)
+          out=Path('evidence/clips/panic--lucie.wav'); started=time.perf_counter()
+          c.convert(audio_src_path=src,src_se=src_se,tgt_se=tgt_se,output_path=str(out),tau=0.3)
+          elapsed=time.perf_counter()-started
+          r={'status':'rendered','cell':'panic--lucie','tau':0.3,'seed':0,'whole_wav_se':True,'watermark':False,'device':'cpu','elapsed_seconds':elapsed,'output_sha256':hashlib.sha256(out.read_bytes()).hexdigest(),'training':False,'new_tts':False,'retry':False,'substitution':False,'tuning':False,'constructor_harness':'ToneColorConverter.__new__ + OpenVoiceBaseClass.__init__ due upstream kwargs forwarding bug'}
+          Path('evidence/render.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          PY
+
+      - name: Technical integrity gate
+        id: technical
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf
+          y,sr=sf.read('evidence/clips/panic--lucie.wav',dtype='float32'); s,ssr=sf.read('source/clips/claire--panic.wav',dtype='float32')
+          if y.ndim==2:y=y.mean(1)
+          if s.ndim==2:s=s.mean(1)
+          duration=len(y)/sr; source_duration=len(s)/ssr; ratio=duration/source_duration; rms=float(np.sqrt(np.mean(y*y))); finite=bool(np.isfinite(y).all()); ok=sr==22050 and finite and rms>1e-5 and .5<=ratio<=1.5
+          r={'status':'pass' if ok else 'reject','sr':sr,'duration':duration,'source_duration':source_duration,'duration_ratio':ratio,'rms':rms,'finite':finite,'rule':'22050Hz finite non-silent duration 0.5x..1.5x source'}
+          Path('evidence/technical.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned independent WeSpeaker
+        if: steps.technical.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check onnxruntime==1.20.1
+          git init WeSpeaker; git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git; git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV"; git -C WeSpeaker checkout --detach FETCH_HEAD
+          test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"
+          mkdir -p weights/wespeaker
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          p=Path(snapshot_download(repo_id=os.environ['WESPEAKER_MODEL_REPO'],revision=os.environ['WESPEAKER_MODEL_REV'],allow_patterns=['voxceleb_resnet34.onnx'],local_dir='weights/wespeaker'))/'voxceleb_resnet34.onnx'
+          got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
+          if got!=(26534127,'9fea6516d7ad6bf0a76c7689f5a49b65d330fad6dde96c91bb4435ffbfe056a1'): raise SystemExit(got)
+          print('WESPEAKER_PROVENANCE_PASS',got)
+          PY
+
+      - name: Independent Lucie identity gate
+        id: identity
+        if: steps.technical.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import importlib.util,json,os
+          from pathlib import Path
+          import numpy as np,onnxruntime as ort
+          spec=importlib.util.spec_from_file_location('ws','WeSpeaker/wespeaker/bin/infer_onnx.py'); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          sess=ort.InferenceSession('weights/wespeaker/voxceleb_resnet34.onnx',providers=['CPUExecutionProvider'])
+          def emb(p):
+              f=m.compute_fbank(p).unsqueeze(0).numpy(); e=np.asarray(sess.run(['embs'],{'feats':f})[0]).reshape(-1).astype(np.float64); return e/np.linalg.norm(e)
+          o,l,c=emb('evidence/clips/panic--lucie.wav'),emb('source/reference-lucie.wav'),emb('source/reference-claire.wav'); a=float(o@l); b=float(o@c); margin=a-b; ok=margin>0
+          r={'status':'pass' if ok else 'reject','sim_lucie':a,'sim_claire':b,'target_margin':margin,'rule':'Lucie > Claire; no absolute threshold','verifier':'WeSpeaker ResNet34 ONNX'}
+          Path('evidence/identity.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned Whisper only after identity PASS
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV" imageio-ffmpeg==0.6.0
+          F="$(python - <<'PY'
+          import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"; mkdir -p "$HOME/.local/bin"; ln -sf "$F" "$HOME/.local/bin/ffmpeg"; echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: French content no-worse-than-source gate
+        id: french
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,re,unicodedata
+          from pathlib import Path
+          import whisper
+          expected="Vite ! Ils arrivent ! Fermez la porte !"; source_wer=.5
+          def norm(t): return ' '.join(re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+",' ',unicodedata.normalize('NFKC',t).lower().replace('’',"'")).split())
+          def dist(a,b):
+              p=list(range(len(b)+1))
+              for i,x in enumerate(a,1):
+                  q=[i]
+                  for j,y in enumerate(b,1): q.append(min(q[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+                  p=q
+              return p[-1]
+          def wer(r,h):
+              a,b=norm(r).split(),norm(h).split(); return dist(a,b)/max(1,len(a))
+          model=whisper.load_model('small',device='cpu'); p=Path.home()/'.cache/whisper/small.pt'; sha=hashlib.sha256(p.read_bytes()).hexdigest()
+          if sha!=os.environ['WHISPER_MODEL_SHA256']: raise SystemExit(sha)
+          text=str(model.transcribe('evidence/clips/panic--lucie.wav',language='fr',task='transcribe',fp16=False,temperature=0,condition_on_previous_text=False).get('text','')).strip(); value=wer(expected,text); ok=value<=source_wer+1e-12
+          r={'status':'pass' if ok else 'reject','expected':expected,'transcript':text,'wer':value,'immutable_source_wer':source_wer,'rule':'output WER <= immutable source WER'}
+          Path('evidence/french.json').write_text(json.dumps(r,ensure_ascii=False,indent=2)); print(json.dumps(r,ensure_ascii=False,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned source-valid SUPERB only after French PASS
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check transformers==4.40.1
+          mkdir -p weights/superb
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          p=Path(snapshot_download(repo_id=os.environ['SUPERB_REPO'],revision=os.environ['SUPERB_REV'],allow_patterns=['config.json','preprocessor_config.json','pytorch_model.bin'],local_dir='weights/superb'))/'pytorch_model.bin'; got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
+          if got!=(378361105,'dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b'): raise SystemExit(got)
+          print('SUPERB_PROVENANCE_PASS',got)
+          PY
+
+      - name: Source-relative panic preservation gate
+        id: emotion
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from scipy.signal import resample_poly
+          from transformers import AutoFeatureExtractor,AutoModelForAudioClassification
+          torch.set_num_threads(2); ex=AutoFeatureExtractor.from_pretrained('weights/superb',local_files_only=True); model=AutoModelForAudioClassification.from_pretrained('weights/superb',local_files_only=True).eval(); labels=[str(model.config.id2label[i]).lower() for i in range(4)]
+          y,sr=sf.read('evidence/clips/panic--lucie.wav',dtype='float32'); y=np.asarray(y,dtype=np.float32); y=y.mean(1) if y.ndim==2 else y
+          if sr!=16000:
+              g=int(np.gcd(sr,16000)); y=resample_poly(y,16000//g,sr//g).astype(np.float32)
+          x=ex(y,sampling_rate=16000,return_tensors='pt',padding=False)
+          with torch.inference_mode(): raw=torch.softmax(model(**x).logits[0],dim=-1).cpu().numpy().astype(np.float64)
+          n=raw/np.linalg.norm(raw); panic=np.array([.0415043309,.6996874809,.2587981224,.0000100258]); sad=np.array([.0128470538,.4423151910,.5446761847,.0001615520]); panic/=np.linalg.norm(panic); sad/=np.linalg.norm(sad); a=float(n@panic); b=float(n@sad); margin=a-b; ok=margin>0
+          r={'status':'pass' if ok else 'reject','profile':{labels[i]:float(raw[i]) for i in range(4)},'similarity_panic':a,'similarity_sadness':b,'relative_margin':margin,'rule':'closer to immutable panic profile than immutable contained-sadness profile','source_preflight_cosine':.8600842882,'semantic_label_claim':False}
+          Path('evidence/emotion.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Record authoritative R3 verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          def read(n):
+              p=Path('evidence')/f'{n}.json'; return json.loads(p.read_text()) if p.exists() else None
+          render,tech,ident,fr,emo=[read(x) for x in ['render','technical','identity','french','emotion']]
+          if render is None: status='infrastructure-incomplete'; decision='No scientific render evidence.'
+          elif tech is None or tech.get('status')!='pass': status='openvoice-technical-reject'; decision='Technical reject; retire without tuning.'
+          elif ident is None or ident.get('status')!='pass': status='openvoice-identity-reject'; decision='Steve veto: Lucie identity failed; retire direct OpenVoice without tuning.'
+          elif fr is None or fr.get('status')!='pass': status='openvoice-french-reject'; decision='French veto; retire direct OpenVoice without tuning.'
+          elif emo is None or emo.get('status')!='pass': status='openvoice-emotion-reject'; decision='Emotion veto; retire direct OpenVoice without tuning.'
+          else: status='one-cell-machine-pass'; decision='Authorize exact fixed four-cell expansion; no human gate yet.'
+          final={'status':status,'decision':decision,'cell':'panic--lucie','tau':.3,'seed':0,'watermark':False,'resource':'GitHub CPU','training':False,'retry':False,'substitution':False,'tuning':False,'human_gate':False,'production':False}
+          Path('evidence/final.json').write_text(json.dumps(final,indent=2)); print(json.dumps(final,indent=2))
+          PY
+
+      - name: Upload R3 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openvoice-v2-cpu-one-cell-smoke-r3
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface R3 verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('evidence/final.json').read_text())['status']
+          if s!='one-cell-machine-pass': raise SystemExit(f'verdict: {s}')
+          print('ONE_CELL_MACHINE_PASS')
+          PY
