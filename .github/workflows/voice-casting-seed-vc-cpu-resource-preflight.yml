@@ -1,0 +1,176 @@
+name: Voice Casting Seed-VC CPU Resource Preflight
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-seed-vc-cpu-resource-preflight.yml
+
+permissions:
+  contents: read
+
+env:
+  SEED_VC_REV: "51383efd921027683c89e5348211d93ff12ac2a8"
+  SEED_VC_MODEL_REPO: "Plachta/Seed-VC"
+  SEED_VC_MODEL_FILE: "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth"
+  SEED_VC_CONFIG_FILE: "config_dit_mel_seed_uvit_whisper_small_wavenet.yml"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  resource-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Free runner disk before model download
+        run: |
+          df -h
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          df -h
+
+      - name: Checkout exact archived Seed-VC upstream
+        run: |
+          git init SeedVC
+          git -C SeedVC remote add origin https://github.com/Plachtaa/seed-vc.git
+          git -C SeedVC fetch --depth=1 origin "$SEED_VC_REV"
+          git -C SeedVC checkout --detach FETCH_HEAD
+          test "$(git -C SeedVC rev-parse HEAD)" = "$SEED_VC_REV"
+          grep -q "GNU GENERAL PUBLIC LICENSE" SeedVC/LICENSE
+          grep -q "Version 3, 29 June 2007" SeedVC/LICENSE
+
+      - name: Install exact CPU runtime family
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu \
+            torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0
+          python -m pip install --disable-pip-version-check \
+            numpy==1.26.4 \
+            scipy==1.13.1 \
+            librosa==0.10.2 \
+            huggingface-hub==0.28.1 \
+            munch==4.0.0 \
+            einops==0.8.0 \
+            descript-audio-codec==1.0.0 \
+            transformers==4.46.3 \
+            soundfile==0.12.1 \
+            hydra-core==1.3.2 \
+            pyyaml==6.0.2 \
+            accelerate==1.2.1
+          python -m pip check
+          ffmpeg -version | head -1
+
+      - name: Load complete frozen Seed-VC inference stack on CPU only
+        working-directory: SeedVC
+        run: |
+          mkdir -p ../evidence
+          /usr/bin/time -v -o ../evidence/time.txt python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import resource
+          import time
+          from argparse import Namespace
+          from pathlib import Path
+
+          import torch
+
+          started = time.perf_counter()
+          token_env = {k: bool(os.environ.get(k)) for k in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")}
+          if any(token_env.values()):
+              raise SystemExit(f"private Hugging Face token unexpectedly present: {token_env}")
+          if torch.cuda.is_available():
+              raise SystemExit("resource preflight requires the standard CPU lane, not CUDA")
+
+          from inference import device, load_models
+
+          if device.type != "cpu":
+              raise SystemExit(f"upstream selected unexpected device: {device}")
+
+          args = Namespace(fp16=False, f0_condition=False, checkpoint=None, config=None)
+          loaded = load_models(args)
+          elapsed = time.perf_counter() - started
+
+          model, semantic_fn, f0_fn, vocoder_fn, campplus_model, to_mel, mel_args = loaded
+          if f0_fn is not None:
+              raise SystemExit("non-F0 frozen variant unexpectedly returned an F0 extractor")
+          if not callable(semantic_fn) or not callable(vocoder_fn) or not callable(to_mel):
+              raise SystemExit("inference stack is incomplete")
+          if not model or campplus_model is None:
+              raise SystemExit("model stack is incomplete")
+
+          files = []
+          root = Path("checkpoints")
+          total = 0
+          if root.exists():
+              for p in sorted(root.rglob("*")):
+                  if p.is_file() and not p.is_symlink():
+                      size = p.stat().st_size
+                      total += size
+                      # Hash model/config payloads; ignore tiny cache bookkeeping files.
+                      sha = hashlib.sha256(p.read_bytes()).hexdigest() if size >= 4096 else None
+                      files.append({"path": str(p), "bytes": size, "sha256": sha})
+
+          rss_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+          result = {
+              "status": "resource-preflight-pass",
+              "architecture": "Seed-VC-v1-zero-shot",
+              "upstream_revision": os.environ["SEED_VC_REV"],
+              "license": "GPL-3.0",
+              "production_authorized": False,
+              "device": device.type,
+              "cuda_available": torch.cuda.is_available(),
+              "torch": torch.__version__,
+              "frozen_variant": {
+                  "model_repo": os.environ["SEED_VC_MODEL_REPO"],
+                  "model_file": os.environ["SEED_VC_MODEL_FILE"],
+                  "config_file": os.environ["SEED_VC_CONFIG_FILE"],
+                  "f0_condition": False,
+                  "fp16": False,
+                  "future_science_defaults": {
+                      "diffusion_steps": 30,
+                      "length_adjust": 1.0,
+                      "inference_cfg_rate": 0.7
+                  }
+              },
+              "private_token_env": token_env,
+              "load_wall_seconds": elapsed,
+              "max_rss_kib": rss_kib,
+              "checkpoint_regular_file_bytes": total,
+              "downloaded_regular_files": files,
+              "science_authorized_next": True,
+              "render_count": 0
+          }
+          Path("../evidence/resource.json").write_text(json.dumps(result, indent=2))
+          print(json.dumps({k: result[k] for k in ["status", "device", "load_wall_seconds", "max_rss_kib", "checkpoint_regular_file_bytes", "render_count"]}, indent=2))
+          PY
+
+      - name: Surface authoritative resource verdict
+        if: always()
+        run: |
+          if [ ! -f evidence/resource.json ]; then
+            echo "RESOURCE_PREFLIGHT_INFRA_FAILURE"
+            exit 1
+          fi
+          cat evidence/resource.json
+          test "$(python -c 'import json; print(json.load(open("evidence/resource.json"))["status"])')" = "resource-preflight-pass"
+          test "$(python -c 'import json; print(json.load(open("evidence/resource.json"))["render_count"])')" = "0"
+
+      - name: Upload resource evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seed-vc-cpu-resource-preflight
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 14
