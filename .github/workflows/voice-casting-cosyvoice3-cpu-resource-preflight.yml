@@ -16,6 +16,7 @@ env:
   MATCHA_REV: dd9105b34bf2be2230f4aa1e4769fb586a3c824e
   MODEL_REPO: FunAudioLLM/Fun-CosyVoice3-0.5B-2512
   MODEL_REV: 29e01c4e8d000f4bcd70751be16fa94bf3d85a18
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
   MODEL_DIR: ${{ github.workspace }}/weights/Fun-CosyVoice3-0.5B-2512
   TOKENIZERS_PARALLELISM: "false"
   HF_HUB_DISABLE_TELEMETRY: "1"
@@ -40,7 +41,7 @@ jobs:
           import json, os, platform
           from pathlib import Path
           contract={
-            'purpose':'resource-only-preflight-r2',
+            'purpose':'resource-only-preflight-r3',
             'architecture':'Fun-CosyVoice3-0.5B-2512 instruct2 zero-shot clone',
             'scientific_audio_render':False,
             'scientific_source_audio_used':False,
@@ -49,11 +50,13 @@ jobs:
             'matcha_revision':os.environ['MATCHA_REV'],
             'model_repo':os.environ['MODEL_REPO'],
             'model_revision':os.environ['MODEL_REV'],
-            'model_revision_provenance':'resolved before model download during infrastructure-only R1 run 32972648883; frozen before R2',
+            'model_revision_provenance':'resolved before model download during infrastructure-only R1 run 32972648883; frozen before R2/R3',
+            'whisper_revision':os.environ['WHISPER_REV'],
             'runtime':'GitHub-hosted ubuntu-24.04 CPU only',
             'python':platform.python_version(),
-            'r1_failure':'upstream openai-whisper==20231117 build isolation failed on missing pkg_resources before model download/load',
-            'r2_infrastructure_change':'omit obsolete openai-whisper package and CUDA/training accelerators only; no model code/math/weights change',
+            'r1_failure':'upstream openai-whisper==20231117 build isolation failed before model download/load',
+            'r2_failure':'exact model snapshot downloaded and hashed; first CosyVoice import failed because frontend requires whisper module',
+            'r3_infrastructure_change':'install already Lab-frozen OpenAI Whisper revision only to satisfy CosyVoice frontend mel-spectrogram dependency; no model code/math/weights change',
             'cpu_execution_probe':{
               'text':'Bonjour.',
               'instruction':'You are a helpful assistant. Speak with calm, neutral delivery.<|endofprompt|>',
@@ -103,13 +106,14 @@ jobs:
           PY
           python -m pip install --disable-pip-version-check -r /tmp/cosyvoice-cpu-requirements.txt
           python -m pip install --disable-pip-version-check onnxruntime==1.18.0 huggingface-hub==0.36.2 psutil==6.1.1 tqdm
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV"
           python -m pip check
           python - <<'PY'
-          import json,torch,torchaudio,onnxruntime,psutil
+          import json,torch,torchaudio,onnxruntime,psutil,whisper
           from pathlib import Path
           r={'torch':torch.__version__,'torchaudio':torchaudio.__version__,'onnxruntime':onnxruntime.__version__,
              'cuda_available':torch.cuda.is_available(),'cpu_count':psutil.cpu_count(logical=True),
-             'ram_total_bytes':psutil.virtual_memory().total}
+             'ram_total_bytes':psutil.virtual_memory().total,'whisper_import':True}
           assert not r['cuda_available']
           Path('evidence/runtime.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
           PY
@@ -119,7 +123,6 @@ jobs:
         continue-on-error: true
         run: |
           echo "$MODEL_REV" | tee evidence/model_revision.txt
-          test "$(git ls-remote "https://huggingface.co/$MODEL_REPO" "$MODEL_REV" | awk '{print $1}' | head -1)" = "$MODEL_REV" || true
           python - <<'PY'
           import hashlib,json,os
           from pathlib import Path
