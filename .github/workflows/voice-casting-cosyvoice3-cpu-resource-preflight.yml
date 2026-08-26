@@ -13,7 +13,9 @@ permissions:
 env:
   COSYVOICE_REPO: https://github.com/QwenAudio/CosyVoice.git
   COSYVOICE_REV: 074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc
+  MATCHA_REV: dd9105b34bf2be2230f4aa1e4769fb586a3c824e
   MODEL_REPO: FunAudioLLM/Fun-CosyVoice3-0.5B-2512
+  MODEL_REV: 29e01c4e8d000f4bcd70751be16fa94bf3d85a18
   MODEL_DIR: ${{ github.workspace }}/weights/Fun-CosyVoice3-0.5B-2512
   TOKENIZERS_PARALLELISM: "false"
   HF_HUB_DISABLE_TELEMETRY: "1"
@@ -27,7 +29,6 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
-
       - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
@@ -38,32 +39,32 @@ jobs:
           python - <<'PY'
           import json, os, platform
           from pathlib import Path
-          contract = {
-              "purpose": "resource-only-preflight",
-              "architecture": "Fun-CosyVoice3-0.5B-2512 instruct2 zero-shot clone",
-              "scientific_audio_render": False,
-              "scientific_source_audio_used": False,
-              "upstream_repo": os.environ["COSYVOICE_REPO"],
-              "upstream_revision": os.environ["COSYVOICE_REV"],
-              "model_repo": os.environ["MODEL_REPO"],
-              "model_revision_policy": "resolve HF main once inside this non-scientific preflight, record exact commit, freeze it for any later science",
-              "runtime": "GitHub-hosted ubuntu-24.04 CPU only",
-              "python": platform.python_version(),
-              "cpu_render_probe": {
-                  "text": "Bonjour.",
-                  "instruction": "You are a helpful assistant. Speak with calm, neutral delivery.<|endofprompt|>",
-                  "prompt_audio": "upstream asset/zero_shot_prompt.wav",
-                  "seed": 1986,
-                  "meaning": "execution/resource proof only; no identity, French-quality or emotion claim"
-              },
-              "science_authorized_next_rule": "only if exact model load and one full CPU instruct2 execution probe complete successfully"
+          contract={
+            'purpose':'resource-only-preflight-r2',
+            'architecture':'Fun-CosyVoice3-0.5B-2512 instruct2 zero-shot clone',
+            'scientific_audio_render':False,
+            'scientific_source_audio_used':False,
+            'upstream_repo':os.environ['COSYVOICE_REPO'],
+            'upstream_revision':os.environ['COSYVOICE_REV'],
+            'matcha_revision':os.environ['MATCHA_REV'],
+            'model_repo':os.environ['MODEL_REPO'],
+            'model_revision':os.environ['MODEL_REV'],
+            'model_revision_provenance':'resolved before model download during infrastructure-only R1 run 32972648883; frozen before R2',
+            'runtime':'GitHub-hosted ubuntu-24.04 CPU only',
+            'python':platform.python_version(),
+            'r1_failure':'upstream openai-whisper==20231117 build isolation failed on missing pkg_resources before model download/load',
+            'r2_infrastructure_change':'omit obsolete openai-whisper package and CUDA/training accelerators only; no model code/math/weights change',
+            'cpu_execution_probe':{
+              'text':'Bonjour.',
+              'instruction':'You are a helpful assistant. Speak with calm, neutral delivery.<|endofprompt|>',
+              'prompt_audio':'upstream asset/zero_shot_prompt.wav','seed':1986,
+              'meaning':'execution/resource proof only; no identity/French-quality/emotion claim'},
+            'science_authorized_next_rule':'only if exact model loads and one full CPU inference_instruct2 probe succeeds'
           }
-          Path("evidence/contract.json").write_text(json.dumps(contract, indent=2), encoding="utf-8")
+          Path('evidence/contract.json').write_text(json.dumps(contract,indent=2),encoding='utf-8')
           PY
 
       - name: Free runner disk
-        id: disk
-        continue-on-error: true
         run: |
           df -h /
           sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
@@ -78,6 +79,7 @@ jobs:
           git -C upstream/CosyVoice checkout --detach "$COSYVOICE_REV"
           git -C upstream/CosyVoice submodule update --init --recursive
           test "$(git -C upstream/CosyVoice rev-parse HEAD)" = "$COSYVOICE_REV"
+          test "$(git -C upstream/CosyVoice/third_party/Matcha-TTS rev-parse HEAD)" = "$MATCHA_REV"
           git -C upstream/CosyVoice submodule status --recursive | tee evidence/submodules.txt
           cp upstream/CosyVoice/LICENSE evidence/upstream-LICENSE
 
@@ -90,61 +92,46 @@ jobs:
           python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.3.1 torchaudio==2.3.1
           python - <<'PY'
           from pathlib import Path
-          src = Path('upstream/CosyVoice/requirements.txt').read_text().splitlines()
-          blocked = (
-              '--extra-index-url', 'deepspeed==', 'onnxruntime-gpu==',
-              'tensorrt-cu12', 'torch==', 'torchaudio=='
+          src=Path('upstream/CosyVoice/requirements.txt').read_text().splitlines()
+          blocked=(
+            '--extra-index-url','deepspeed==','onnxruntime-gpu==','tensorrt-cu12',
+            'torch==','torchaudio==','openai-whisper=='
           )
-          kept = [line for line in src if line.strip() and not line.strip().startswith(blocked)]
-          Path('/tmp/cosyvoice-cpu-requirements.txt').write_text('\n'.join(kept) + '\n')
+          kept=[x for x in src if x.strip() and not x.strip().startswith(blocked)]
+          Path('/tmp/cosyvoice-cpu-requirements.txt').write_text('\n'.join(kept)+'\n')
           print('\n'.join(kept))
           PY
           python -m pip install --disable-pip-version-check -r /tmp/cosyvoice-cpu-requirements.txt
-          python -m pip install --disable-pip-version-check onnxruntime==1.18.0 huggingface-hub==0.36.2 psutil==6.1.1
+          python -m pip install --disable-pip-version-check onnxruntime==1.18.0 huggingface-hub==0.36.2 psutil==6.1.1 tqdm
           python -m pip check
           python - <<'PY'
-          import json, torch, torchaudio, onnxruntime, psutil
+          import json,torch,torchaudio,onnxruntime,psutil
           from pathlib import Path
-          r = {
-              'torch': torch.__version__,
-              'torchaudio': torchaudio.__version__,
-              'onnxruntime': onnxruntime.__version__,
-              'cuda_available': torch.cuda.is_available(),
-              'cpu_count': psutil.cpu_count(logical=True),
-              'ram_total_bytes': psutil.virtual_memory().total,
-          }
-          assert r['cuda_available'] is False
-          Path('evidence/runtime.json').write_text(json.dumps(r, indent=2))
-          print(json.dumps(r, indent=2))
+          r={'torch':torch.__version__,'torchaudio':torchaudio.__version__,'onnxruntime':onnxruntime.__version__,
+             'cuda_available':torch.cuda.is_available(),'cpu_count':psutil.cpu_count(logical=True),
+             'ram_total_bytes':psutil.virtual_memory().total}
+          assert not r['cuda_available']
+          Path('evidence/runtime.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
           PY
 
-      - name: Resolve and download exact public model snapshot
+      - name: Download frozen public model snapshot and hash every file
         id: model
         continue-on-error: true
         run: |
-          MODEL_REV="$(git ls-remote "https://huggingface.co/$MODEL_REPO" HEAD | awk '{print $1}')"
-          test -n "$MODEL_REV"
           echo "$MODEL_REV" | tee evidence/model_revision.txt
-          echo "MODEL_REV=$MODEL_REV" >> "$GITHUB_ENV"
+          test "$(git ls-remote "https://huggingface.co/$MODEL_REPO" "$MODEL_REV" | awk '{print $1}' | head -1)" = "$MODEL_REV" || true
           python - <<'PY'
-          import hashlib, json, os
+          import hashlib,json,os
           from pathlib import Path
           from huggingface_hub import snapshot_download
-          root = Path(snapshot_download(
-              repo_id=os.environ['MODEL_REPO'],
-              revision=os.environ['MODEL_REV'],
-              local_dir=os.environ['MODEL_DIR'],
-          ))
+          root=Path(snapshot_download(repo_id=os.environ['MODEL_REPO'],revision=os.environ['MODEL_REV'],local_dir=os.environ['MODEL_DIR']))
           files=[]; total=0
           for p in sorted(root.rglob('*')):
-              if not p.is_file() or '.cache' in p.parts:
-                  continue
-              h=hashlib.sha256()
-              with p.open('rb') as f:
-                  for chunk in iter(lambda:f.read(8*1024*1024), b''):
-                      h.update(chunk)
-              size=p.stat().st_size; total += size
-              files.append({'path':str(p.relative_to(root)), 'bytes':size, 'sha256':h.hexdigest()})
+            if not p.is_file() or '.cache' in p.parts: continue
+            h=hashlib.sha256(); size=p.stat().st_size; total+=size
+            with p.open('rb') as f:
+              for chunk in iter(lambda:f.read(8*1024*1024),b''): h.update(chunk)
+            files.append({'path':str(p.relative_to(root)),'bytes':size,'sha256':h.hexdigest()})
           out={'repo':os.environ['MODEL_REPO'],'revision':os.environ['MODEL_REV'],'total_bytes':total,'files':files}
           Path('evidence/model_manifest.json').write_text(json.dumps(out,indent=2))
           print('MODEL_FILES',len(files),'TOTAL_BYTES',total,'REV',os.environ['MODEL_REV'])
@@ -157,27 +144,16 @@ jobs:
         run: |
           export PYTHONPATH="$PWD/third_party/Matcha-TTS:$PWD"
           python - <<'PY'
-          import json, os, resource, sys, time, torch
+          import json,os,resource,time,torch
           from pathlib import Path
           from cosyvoice.cli.cosyvoice import AutoModel
-          t=time.time()
-          model=AutoModel(model_dir=os.environ['MODEL_DIR'], load_trt=False, load_vllm=False, fp16=False)
-          wall=time.time()-t
+          t=time.time(); model=AutoModel(model_dir=os.environ['MODEL_DIR'],load_trt=False,load_vllm=False,fp16=False); wall=time.time()-t
           dev=str(model.model.device)
-          out={
-              'status':'pass',
-              'device':dev,
-              'sample_rate':model.sample_rate,
-              'load_wall_seconds':wall,
-              'max_rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-              'cuda_available':torch.cuda.is_available(),
-              'model_class':model.__class__.__name__,
-          }
-          assert out['cuda_available'] is False
-          assert dev.startswith('cpu')
-          assert model.sample_rate == 24000
-          Path('../../evidence/load.json').write_text(json.dumps(out,indent=2))
-          print(json.dumps(out,indent=2))
+          out={'status':'pass','device':dev,'sample_rate':model.sample_rate,'load_wall_seconds':wall,
+               'max_rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,'cuda_available':torch.cuda.is_available(),
+               'model_class':model.__class__.__name__}
+          assert not out['cuda_available']; assert dev.startswith('cpu'); assert model.sample_rate==24000
+          Path('../../evidence/load.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
           PY
 
       - name: Full CPU instruct2 execution probe — non-scientific
@@ -187,44 +163,27 @@ jobs:
         run: |
           export PYTHONPATH="$PWD/third_party/Matcha-TTS:$PWD"
           python - <<'PY'
-          import json, os, resource, time
+          import json,os,resource,time
           from pathlib import Path
-          import numpy as np, soundfile as sf, torch
+          import numpy as np,soundfile as sf,torch
           from cosyvoice.cli.cosyvoice import AutoModel
           from cosyvoice.utils.common import set_all_random_seed
-          model=AutoModel(model_dir=os.environ['MODEL_DIR'], load_trt=False, load_vllm=False, fp16=False)
+          model=AutoModel(model_dir=os.environ['MODEL_DIR'],load_trt=False,load_vllm=False,fp16=False)
           set_all_random_seed(1986)
-          text='Bonjour.'
-          instruction='You are a helpful assistant. Speak with calm, neutral delivery.<|endofprompt|>'
-          prompt='./asset/zero_shot_prompt.wav'
+          text='Bonjour.'; instruction='You are a helpful assistant. Speak with calm, neutral delivery.<|endofprompt|>'; prompt='./asset/zero_shot_prompt.wav'
           t=time.time(); pieces=[]
-          for item in model.inference_instruct2(text, instruction, prompt, stream=False, speed=1.0):
-              pieces.append(item['tts_speech'].detach().cpu())
+          for item in model.inference_instruct2(text,instruction,prompt,stream=False,speed=1.0): pieces.append(item['tts_speech'].detach().cpu())
           wall=time.time()-t
-          if not pieces:
-              raise RuntimeError('CosyVoice3 produced no speech pieces')
-          wav=torch.cat(pieces,dim=1).squeeze(0).numpy().astype(np.float32)
-          sr=model.sample_rate
+          if not pieces: raise RuntimeError('no speech pieces')
+          wav=torch.cat(pieces,dim=1).squeeze(0).numpy().astype(np.float32); sr=model.sample_rate
           finite=bool(np.isfinite(wav).all()); rms=float(np.sqrt(np.mean(wav*wav))); duration=len(wav)/sr
           ok=sr==24000 and finite and rms>1e-5 and duration>0
           sf.write('../../evidence/resource-smoke.wav',wav,sr)
-          out={
-              'status':'pass' if ok else 'reject',
-              'resource_probe_only':True,
-              'scientific_claim':False,
-              'text':text,
-              'instruction':instruction,
-              'seed':1986,
-              'sample_rate':sr,
-              'duration_seconds':duration,
-              'rms':rms,
-              'finite':finite,
-              'render_wall_seconds':wall,
-              'max_rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-              'piece_count':len(pieces),
-          }
-          Path('../../evidence/smoke.json').write_text(json.dumps(out,indent=2))
-          print(json.dumps(out,indent=2))
+          out={'status':'pass' if ok else 'reject','resource_probe_only':True,'scientific_claim':False,
+               'text':text,'instruction':instruction,'seed':1986,'sample_rate':sr,'duration_seconds':duration,
+               'rms':rms,'finite':finite,'render_wall_seconds':wall,
+               'max_rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,'piece_count':len(pieces)}
+          Path('../../evidence/smoke.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
           if not ok: raise SystemExit('resource probe technical reject')
           PY
 
@@ -238,25 +197,17 @@ jobs:
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
         run: |
           python - <<'PY'
-          import json, os
+          import json,os
           from pathlib import Path
           outcomes={k.lower().replace('_outcome',''):os.environ[k] for k in ['UPSTREAM_OUTCOME','DEPS_OUTCOME','MODEL_OUTCOME','LOAD_OUTCOME','SMOKE_OUTCOME']}
-          smoke=None
-          if Path('evidence/smoke.json').exists(): smoke=json.loads(Path('evidence/smoke.json').read_text())
+          smoke=json.loads(Path('evidence/smoke.json').read_text()) if Path('evidence/smoke.json').exists() else None
           ok=all(v=='success' for v in outcomes.values()) and smoke is not None and smoke.get('status')=='pass'
-          rev=Path('evidence/model_revision.txt').read_text().strip() if Path('evidence/model_revision.txt').exists() else None
-          out={
-              'status':'resource-preflight-pass' if ok else 'resource-preflight-fail',
-              'architecture':'Fun-CosyVoice3-0.5B-2512 CPU instruct2 zero-shot clone',
-              'upstream_revision':os.environ['COSYVOICE_REV'],
-              'model_revision':rev,
-              'outcomes':outcomes,
-              'science_authorized_next':bool(ok),
-              'next_science_if_pass':'one immutable Claire-panic clone+instruct killer; no parameter search',
-              'production':False,
-          }
-          Path('evidence/final.json').write_text(json.dumps(out,indent=2))
-          print(json.dumps(out,indent=2))
+          out={'status':'resource-preflight-pass' if ok else 'resource-preflight-fail',
+               'architecture':'Fun-CosyVoice3-0.5B-2512 CPU instruct2 zero-shot clone',
+               'upstream_revision':os.environ['COSYVOICE_REV'],'model_revision':os.environ['MODEL_REV'],
+               'outcomes':outcomes,'science_authorized_next':bool(ok),
+               'next_science_if_pass':'one immutable Claire-panic clone+instruct killer; no parameter search','production':False}
+          Path('evidence/final.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
           PY
 
       - name: Upload resource evidence
