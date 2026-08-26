@@ -1,0 +1,495 @@
+name: Voice Casting Qwen3 Bounded Native Selection Killer
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-qwen3-bounded-native-selection.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  QWEN_REV: 022e286b98fbec7e1e916cb940cdf532cd9f488e
+  VOICE_DESIGN_ID: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+  VOICE_DESIGN_REV: 5ecdb67327fd37bb2e042aab12ff7391903235d3
+  BASE_ID: Qwen/Qwen3-TTS-12Hz-1.7B-Base
+  BASE_REV: 74a6279626edc2d5a787d5b6467668eba0b86ef6
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  HISTORICAL_PANIC_SHA256: ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f
+  CLAIRE_REF_SHA256: 3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe
+  LUCIE_REF_SHA256: 9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822
+  SADNESS_SHA256: d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  SUPERB_REPO: superb/wav2vec2-base-superb-er
+  SUPERB_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  TOKENIZERS_PARALLELISM: "false"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  render-bank:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Freeze bounded-selection contract before any new render
+        run: |
+          mkdir -p bank
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          contract={
+            'status':'contract-frozen',
+            'architecture':'native-qwen-bounded-identity-selection',
+            'killer_cell':'claire--panic',
+            'candidate_count':3,
+            'candidate_seeds':[2026082511,2026082513,2026082514],
+            'historical_seed_reused':2026082511,
+            'new_render_seeds':[2026082513,2026082514],
+            'selector':'Qwen3-TTS Base speaker embedding target margin Claire-minus-Lucie',
+            'selector_rule':'choose maximum target margin; tie -> lower seed; selector margin must be > 0',
+            'independent_identity_gate':'WeSpeaker Lucie/Claire references; selected must be closer to Claire',
+            'french_gate':'Whisper Small output WER <= immutable historical panic source WER 0.5',
+            'emotion_gate':'SUPERB selected profile closer to immutable panic than contained-sadness profile',
+            'human_gate_only_after_all_machine_pass':True,
+            'forbidden':['fourth candidate','retry','replacement seed','parameter tuning','voice conversion','DSP identity transform','training','finetuning','production'],
+          }
+          Path('bank/contract.json').write_text(json.dumps(contract,indent=2),encoding='utf-8')
+          print(json.dumps(contract,indent=2))
+          PY
+
+      - name: Recover immutable historical candidate and references
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          mkdir -p source bank/clips
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          test "$(sha256sum source/clips/claire--panic.wav | cut -d' ' -f1)" = "$HISTORICAL_PANIC_SHA256"
+          test "$(sha256sum source/reference-claire.wav | cut -d' ' -f1)" = "$CLAIRE_REF_SHA256"
+          test "$(sha256sum source/reference-lucie.wav | cut -d' ' -f1)" = "$LUCIE_REF_SHA256"
+          test "$(sha256sum source/clips/claire--sadness-contained.wav | cut -d' ' -f1)" = "$SADNESS_SHA256"
+          cp source/clips/claire--panic.wav bank/clips/seed-2026082511.wav
+
+      - name: Checkout pinned Qwen3 source and CPU runtime
+        run: |
+          git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
+          git -C qwen3-upstream checkout "$QWEN_REV"
+          test "$(git -C qwen3-upstream rev-parse HEAD)" = "$QWEN_REV"
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          python -m pip install --disable-pip-version-check -e ./qwen3-upstream
+          python -m pip check
+          python - <<'PY'
+          import torch
+          assert not torch.cuda.is_available()
+          print('CPU_ONLY_PASS',torch.__version__)
+          PY
+
+      - name: Download pinned VoiceDesign model
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(repo_id=os.environ['VOICE_DESIGN_ID'],revision=os.environ['VOICE_DESIGN_REV'],local_dir='qwen3-vd-model'))
+          PY
+          test -f qwen3-vd-model/model.safetensors
+
+      - name: Render exactly two new panic candidates with one model load
+        run: |
+          /usr/bin/time -v -o bank/render-time.txt python - <<'PY'
+          import hashlib,json,random,time
+          from pathlib import Path
+          import numpy as np
+          import soundfile as sf
+          import torch
+          from qwen_tts import Qwen3TTSModel
+          from transformers.utils import logging as transformers_logging
+
+          text='Vite ! Ils arrivent ! Fermez la porte !'
+          character=("Femme française d'environ 52 ans. Contralto bas, chaud et mat, forte résonance "
+                     "de poitrine, léger grain velouté, consonnes posées, débit calme et mesuré, "
+                     "autorité tranquille. Voix naturelle, sans caricature.")
+          acting=("Panique urgente et crédible : souffle court, débit accéléré, tension élevée. "
+                  "Reste intelligible et naturelle, sans caricature et sans déformer le timbre.")
+          instruct=character+' Conserve cette identité vocale de façon reconnaissable. Interprétation : '+acting
+          seeds=[2026082513,2026082514]
+          model=Qwen3TTSModel.from_pretrained('qwen3-vd-model',device_map='cpu',dtype=torch.bfloat16,attn_implementation='eager')
+          transformers_logging.disable_progress_bar()
+          outdir=Path('bank/clips'); rendered=[]
+          for seed in seeds:
+              random.seed(seed); np.random.seed(seed%(2**32-1)); torch.manual_seed(seed)
+              started=time.monotonic()
+              wavs,sr=model.generate_voice_design(text=text,instruct=instruct,language='French',non_streaming_mode=True,do_sample=True,max_new_tokens=768)
+              p=outdir/f'seed-{seed}.wav'; sf.write(p,wavs[0],sr)
+              elapsed=time.monotonic()-started
+              rendered.append({'seed':seed,'file':str(p.relative_to('bank')),'sr':sr,'seconds':elapsed,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()})
+              print('RENDERED',seed,round(elapsed,2),rendered[-1]['sha256'],flush=True)
+          historical=Path('bank/clips/seed-2026082511.wav')
+          manifest={
+            'status':'bank-complete','architecture':'native-qwen-bounded-identity-selection',
+            'candidate_count':3,'seeds':[2026082511,2026082513,2026082514],
+            'historical':{'seed':2026082511,'file':'clips/seed-2026082511.wav','sha256':hashlib.sha256(historical.read_bytes()).hexdigest()},
+            'new_renders':rendered,'retry_count':0,'replacement_count':0,
+          }
+          Path('bank/manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
+          print(json.dumps(manifest,indent=2))
+          PY
+
+      - name: Verify bank cardinality and historical immutability
+        run: |
+          test "$(find bank/clips -maxdepth 1 -name 'seed-*.wav' | wc -l)" = "3"
+          test "$(sha256sum bank/clips/seed-2026082511.wav | cut -d' ' -f1)" = "$HISTORICAL_PANIC_SHA256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-bounded-native-panic-bank
+          path: bank/
+          if-no-files-found: error
+          retention-days: 14
+
+  select:
+    needs: render-bank
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    outputs:
+      eligible: ${{ steps.selector.outputs.eligible }}
+      seed: ${{ steps.selector.outputs.seed }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: qwen3-bounded-native-panic-bank
+          path: bank
+
+      - name: Recover and verify exact neutral references
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          mkdir -p source selection
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          test "$(sha256sum source/reference-claire.wav | cut -d' ' -f1)" = "$CLAIRE_REF_SHA256"
+          test "$(sha256sum source/reference-lucie.wav | cut -d' ' -f1)" = "$LUCIE_REF_SHA256"
+          test "$(sha256sum bank/clips/seed-2026082511.wav | cut -d' ' -f1)" = "$HISTORICAL_PANIC_SHA256"
+          test "$(find bank/clips -maxdepth 1 -name 'seed-*.wav' | wc -l)" = "3"
+
+      - name: Install pinned Qwen3 Base CPU selector
+        run: |
+          git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
+          git -C qwen3-upstream checkout "$QWEN_REV"
+          test "$(git -C qwen3-upstream rev-parse HEAD)" = "$QWEN_REV"
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          python -m pip install --disable-pip-version-check -e ./qwen3-upstream
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(repo_id=os.environ['BASE_ID'],revision=os.environ['BASE_REV'],local_dir='qwen3-base-model'))
+          PY
+          test -f qwen3-base-model/model.safetensors
+
+      - name: Select exactly one candidate by frozen Qwen Base speaker-embedding margin
+        id: selector
+        run: |
+          /usr/bin/time -v -o selection/selector-time.txt python - <<'PY'
+          import hashlib,json,os,shutil
+          from pathlib import Path
+          import numpy as np
+          import torch
+          from qwen_tts import Qwen3TTSModel
+
+          torch.set_num_threads(2)
+          model=Qwen3TTSModel.from_pretrained('qwen3-base-model',device_map='cpu',dtype=torch.bfloat16,attn_implementation='eager')
+          def emb(path):
+              item=model.create_voice_clone_prompt(ref_audio=str(path),ref_text=None,x_vector_only_mode=True)[0]
+              e=item.ref_spk_embedding
+              if hasattr(e,'detach'): e=e.detach().cpu().float().numpy()
+              e=np.asarray(e,dtype=np.float64).reshape(-1)
+              n=np.linalg.norm(e)
+              if not np.isfinite(e).all() or n<=0: raise SystemExit(f'bad embedding {path}')
+              return e/n
+          claire=emb(Path('source/reference-claire.wav'))
+          lucie=emb(Path('source/reference-lucie.wav'))
+          rows=[]
+          for seed in [2026082511,2026082513,2026082514]:
+              p=Path(f'bank/clips/seed-{seed}.wav'); e=emb(p)
+              a=float(e@claire); b=float(e@lucie)
+              rows.append({'seed':seed,'file':str(p),'sim_claire':a,'sim_lucie':b,'target_margin':a-b,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()})
+          rows.sort(key=lambda r:(-r['target_margin'],r['seed']))
+          chosen=rows[0]; ok=chosen['target_margin']>0
+          shutil.copy2(chosen['file'],'selection/selected.wav')
+          result={
+            'status':'selector-pass' if ok else 'selector-reject',
+            'selector':'Qwen3 Base ref_spk_embedding','selector_model_revision':os.environ['BASE_REV'],
+            'rule':'max Claire-minus-Lucie cosine margin; ties lower seed; selected margin > 0',
+            'candidate_count':3,'scores':rows,'selected_seed':chosen['seed'],
+            'selected_margin':chosen['target_margin'],'selected_sha256':chosen['sha256'],
+            'retry_count':0,'replacement_count':0,
+          }
+          Path('selection/selection.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
+          print(json.dumps(result,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:
+              f.write(f"eligible={'true' if ok else 'false'}\n")
+              f.write(f"seed={chosen['seed']}\n")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qwen3-bounded-native-panic-selection
+          path: selection/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface selector verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('selection/selection.json').read_text())['status']
+          if s!='selector-pass': raise SystemExit(f'verdict: {s}')
+          print('SELECTOR_PASS')
+          PY
+
+  validate:
+    needs: select
+    if: needs.select.outputs.eligible == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: qwen3-bounded-native-panic-selection
+          path: selection
+
+      - name: Recover exact immutable references and source profiles
+        run: |
+          mkdir -p source evidence/clips human
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          test "$(sha256sum source/reference-claire.wav | cut -d' ' -f1)" = "$CLAIRE_REF_SHA256"
+          test "$(sha256sum source/reference-lucie.wav | cut -d' ' -f1)" = "$LUCIE_REF_SHA256"
+          test "$(sha256sum source/clips/claire--panic.wav | cut -d' ' -f1)" = "$HISTORICAL_PANIC_SHA256"
+          test "$(sha256sum source/clips/claire--sadness-contained.wav | cut -d' ' -f1)" = "$SADNESS_SHA256"
+          cp selection/selected.wav evidence/clips/selected.wav
+          cp selection/selection.json evidence/selection.json
+
+      - name: Install CPU audio runtime and technical gate
+        id: technical
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+          python -m pip install --disable-pip-version-check numpy soundfile scipy huggingface-hub
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf
+          y,sr=sf.read('evidence/clips/selected.wav',dtype='float32')
+          s,ssr=sf.read('source/clips/claire--panic.wav',dtype='float32')
+          if y.ndim==2:y=y.mean(1)
+          if s.ndim==2:s=s.mean(1)
+          duration=len(y)/sr; source_duration=len(s)/ssr; ratio=duration/source_duration
+          rms=float(np.sqrt(np.mean(y*y))); finite=bool(np.isfinite(y).all())
+          ok=sr==ssr and finite and rms>1e-5 and .5<=ratio<=1.5
+          r={'status':'pass' if ok else 'reject','sr':sr,'historical_sr':ssr,'duration':duration,'historical_duration':source_duration,'duration_ratio':ratio,'rms':rms,'finite':finite,'rule':'same native SR as immutable direct-Qwen panic; finite non-silent; duration 0.5x..1.5x'}
+          Path('evidence/technical.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned independent WeSpeaker
+        if: steps.technical.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check onnxruntime==1.20.1
+          git init WeSpeaker
+          git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git
+          git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV"
+          git -C WeSpeaker checkout --detach FETCH_HEAD
+          test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"
+          mkdir -p weights/wespeaker
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          p=Path(snapshot_download(repo_id=os.environ['WESPEAKER_MODEL_REPO'],revision=os.environ['WESPEAKER_MODEL_REV'],allow_patterns=['voxceleb_resnet34.onnx'],local_dir='weights/wespeaker'))/'voxceleb_resnet34.onnx'
+          got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
+          if got!=(26534127,'9fea6516d7ad6bf0a76c7689f5a49b65d330fad6dde96c91bb4435ffbfe056a1'): raise SystemExit(got)
+          PY
+
+      - name: Independent Claire identity gate
+        id: identity
+        if: steps.technical.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import importlib.util,json,os
+          from pathlib import Path
+          import numpy as np,onnxruntime as ort
+          spec=importlib.util.spec_from_file_location('ws','WeSpeaker/wespeaker/bin/infer_onnx.py')
+          m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          sess=ort.InferenceSession('weights/wespeaker/voxceleb_resnet34.onnx',providers=['CPUExecutionProvider'])
+          def emb(p):
+              f=m.compute_fbank(p).unsqueeze(0).numpy(); e=np.asarray(sess.run(['embs'],{'feats':f})[0]).reshape(-1).astype(np.float64); return e/np.linalg.norm(e)
+          o,c,l=emb('evidence/clips/selected.wav'),emb('source/reference-claire.wav'),emb('source/reference-lucie.wav')
+          a=float(o@c); b=float(o@l); margin=a-b; ok=margin>0
+          r={'status':'pass' if ok else 'reject','sim_claire':a,'sim_lucie':b,'target_margin':margin,'rule':'independent WeSpeaker Claire > Lucie; no absolute threshold'}
+          Path('evidence/identity.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned Whisper only after identity PASS
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV" imageio-ffmpeg==0.6.0
+          F="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"
+          mkdir -p "$HOME/.local/bin"; ln -sf "$F" "$HOME/.local/bin/ffmpeg"; echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: French no-worse-than-historical-source gate
+        id: french
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,re,unicodedata
+          from pathlib import Path
+          import whisper
+          expected="Vite ! Ils arrivent ! Fermez la porte !"; source_wer=.5
+          def norm(t): return ' '.join(re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+",' ',unicodedata.normalize('NFKC',t).lower().replace('’',"'")).split())
+          def dist(a,b):
+              p=list(range(len(b)+1))
+              for i,x in enumerate(a,1):
+                  q=[i]
+                  for j,y in enumerate(b,1):q.append(min(q[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+                  p=q
+              return p[-1]
+          def wer(r,h):
+              a,b=norm(r).split(),norm(h).split(); return dist(a,b)/max(1,len(a))
+          model=whisper.load_model('small',device='cpu')
+          p=Path.home()/'.cache/whisper/small.pt'; sha=hashlib.sha256(p.read_bytes()).hexdigest()
+          if sha!=os.environ['WHISPER_MODEL_SHA256']: raise SystemExit(sha)
+          text=str(model.transcribe('evidence/clips/selected.wav',language='fr',task='transcribe',fp16=False,temperature=0,condition_on_previous_text=False).get('text','')).strip()
+          value=wer(expected,text); ok=value<=source_wer+1e-12
+          r={'status':'pass' if ok else 'reject','expected':expected,'transcript':text,'wer':value,'immutable_historical_source_wer':source_wer,'rule':'selected native-Qwen WER <= immutable historical direct-Qwen panic WER'}
+          Path('evidence/french.json').write_text(json.dumps(r,ensure_ascii=False,indent=2)); print(json.dumps(r,ensure_ascii=False,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned SUPERB only after French PASS
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check transformers==4.40.1
+          mkdir -p weights/superb
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          p=Path(snapshot_download(repo_id=os.environ['SUPERB_REPO'],revision=os.environ['SUPERB_REV'],allow_patterns=['config.json','preprocessor_config.json','pytorch_model.bin'],local_dir='weights/superb'))/'pytorch_model.bin'
+          got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
+          if got!=(378361105,'dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b'): raise SystemExit(got)
+          PY
+
+      - name: Source-relative panic preservation gate
+        id: emotion
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from scipy.signal import resample_poly
+          from transformers import AutoFeatureExtractor,AutoModelForAudioClassification
+          torch.set_num_threads(2)
+          ex=AutoFeatureExtractor.from_pretrained('weights/superb',local_files_only=True)
+          model=AutoModelForAudioClassification.from_pretrained('weights/superb',local_files_only=True).eval()
+          labels=[str(model.config.id2label[i]).lower() for i in range(4)]
+          y,sr=sf.read('evidence/clips/selected.wav',dtype='float32'); y=np.asarray(y,dtype=np.float32); y=y.mean(1) if y.ndim==2 else y
+          if sr!=16000:
+              g=int(np.gcd(sr,16000)); y=resample_poly(y,16000//g,sr//g).astype(np.float32)
+          x=ex(y,sampling_rate=16000,return_tensors='pt',padding=False)
+          with torch.inference_mode():raw=torch.softmax(model(**x).logits[0],dim=-1).cpu().numpy().astype(np.float64)
+          n=raw/np.linalg.norm(raw)
+          panic=np.array([.0415043309,.6996874809,.2587981224,.0000100258]); sad=np.array([.0128470538,.4423151910,.5446761847,.0001615520])
+          panic/=np.linalg.norm(panic); sad/=np.linalg.norm(sad)
+          a=float(n@panic); b=float(n@sad); margin=a-b; ok=margin>0
+          r={'status':'pass' if ok else 'reject','profile':{labels[i]:float(raw[i]) for i in range(4)},'similarity_panic':a,'similarity_sadness':b,'relative_margin':margin,'rule':'closer to immutable direct-Qwen panic profile than immutable contained-sadness profile','semantic_label_claim':False}
+          Path('evidence/emotion.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Record authoritative machine verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          def read(n):
+              p=Path('evidence')/f'{n}.json'; return json.loads(p.read_text()) if p.exists() else None
+          t,i,f,e=[read(x) for x in ['technical','identity','french','emotion']]
+          if t is None or t.get('status')!='pass': status='technical-reject'
+          elif i is None or i.get('status')!='pass': status='independent-identity-reject'
+          elif f is None or f.get('status')!='pass': status='french-reject'
+          elif e is None or e.get('status')!='pass': status='emotion-reject'
+          else: status='one-cell-machine-pass'
+          sel=json.loads(Path('evidence/selection.json').read_text())
+          out={'status':status,'architecture':'native-qwen-bounded-identity-selection','cell':'claire--panic','candidate_count':3,'selected_seed':sel['selected_seed'],'selected_sha256':sel['selected_sha256'],'selector_margin':sel['selected_margin'],'retry_count':0,'replacement_count':0,'voice_conversion':False,'human_gate_authorized':status=='one-cell-machine-pass','production':False}
+          Path('evidence/final.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          PY
+
+      - name: Build blind human gate only after complete machine PASS
+        if: steps.emotion.outputs.eligible == 'true'
+        run: |
+          cp source/reference-claire.wav human/reference-1.wav
+          cp source/reference-lucie.wav human/reference-2.wav
+          cp evidence/clips/selected.wav human/candidate-a.wav
+          cat > human/index.html <<'EOF'
+          <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Gate humain — Claire panique</title><style>body{font-family:system-ui,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem}.card{border:1px solid #aaa;border-radius:12px;padding:1rem;margin:1rem 0}audio{width:100%}label{display:block;margin:.7rem 0}button{padding:.7rem 1rem}</style></head><body><h1>Gate humain — Claire panique</h1><p>Écoutez les références puis A. Ne cherchez pas à deviner la technique utilisée.</p><div class="card"><h2>Référence 1</h2><audio controls src="reference-1.wav"></audio><h2>Référence 2</h2><audio controls src="reference-2.wav"></audio><h2>A — « Vite ! Ils arrivent ! Fermez la porte ! »</h2><audio controls src="candidate-a.wav"></audio></div><h3>À quelle référence correspond A ?</h3><label><input type="radio" name="identity" value="Référence 1"> Référence 1</label><label><input type="radio" name="identity" value="Référence 2"> Référence 2</label><label><input type="radio" name="identity" value="uncertain"> Impossible à distinguer</label><h3>Panique crédible ?</h3><label><input type="radio" name="acting" value="yes"> Oui</label><label><input type="radio" name="acting" value="no"> Non</label><h3>Français naturel et intact ?</h3><label><input type="radio" name="french" value="good"> Oui</label><label><input type="radio" name="french" value="defect"> Non</label><p><button onclick="save()">Exporter le résultat</button></p><script>function pick(n){const x=document.querySelector(`input[name=${n}]:checked`);return x?x.value:null}function save(){const r={schema:'qwen3-bounded-native-selection-human-v1',identity:pick('identity'),acting:pick('acting'),french:pick('french')};if(!r.identity||!r.acting||!r.french){alert('Répondez aux trois questions.');return}const b=new Blob([JSON.stringify(r,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='qwen3-bounded-native-selection-human.json';a.click();URL.revokeObjectURL(a.href)}</script></body></html>
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qwen3-bounded-native-selection-machine-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        if: steps.emotion.outputs.eligible == 'true'
+        with:
+          name: qwen3-bounded-native-selection-human-gate
+          path: human/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface machine verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('evidence/final.json').read_text())['status']
+          if s!='one-cell-machine-pass': raise SystemExit(f'verdict: {s}')
+          print('ONE_CELL_MACHINE_PASS_HUMAN_GATE_AUTHORIZED')
+          PY
