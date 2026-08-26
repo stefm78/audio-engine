@@ -1,0 +1,301 @@
+name: Voice Casting RVC Lucie Neutral Dataset Expansion
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - src/audio_engine/voice_lab_rvc_lucie_dataset_expansion.py
+      - tests/test_voice_lab_rvc_lucie_dataset_expansion.py
+      - .github/workflows/voice-casting-rvc-lucie-dataset-expansion.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  QWEN_REV: 022e286b98fbec7e1e916cb940cdf532cd9f488e
+  BASE_MODEL_ID: Qwen/Qwen3-TTS-12Hz-1.7B-Base
+  BASE_MODEL_REV: 74a6279626edc2d5a787d5b6467668eba0b86ef6
+  SELECTED_PAIR_RUN_ID: "32818950167"
+  SELECTED_PAIR_ARTIFACT: qwen3-contrast-selected-pair
+  PILOT_RUN_ID: "32939596171"
+  PILOT_ARTIFACT: rvc-lucie-neutral-dataset-pilot-qualified-parallel
+  LUCIE_ANCHOR_SHA256: 9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822
+  CLAIRE_ANCHOR_SHA256: 3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL: small
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  TOKENIZERS_PARALLELISM: "false"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Freeze expansion contract before synthesis
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m unittest tests.test_voice_lab_rvc_lucie_dataset_expansion -v
+          python - <<'PY'
+          import json
+          from audio_engine.voice_lab_rvc_lucie_dataset_expansion import CANDIDATES, expansion_spec
+          assert [cid for cid,_ in CANDIDATES] == [f'n{i:02d}' for i in range(11,71)]
+          spec=expansion_spec(); assert spec['candidate_count']==60
+          print(json.dumps(spec,ensure_ascii=False,indent=2))
+          PY
+
+  render:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    env:
+      SHARD: ${{ matrix.shard }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+      - name: Recover exact human-qualified contrasted anchors
+        run: |
+          mkdir -p selected-pair
+          gh run download "$SELECTED_PAIR_RUN_ID" --repo "${{ github.repository }}" -n "$SELECTED_PAIR_ARTIFACT" -D selected-pair
+          echo "$LUCIE_ANCHOR_SHA256  selected-pair/reference-lucie.wav" | sha256sum -c -
+          echo "$CLAIRE_ANCHOR_SHA256  selected-pair/reference-claire.wav" | sha256sum -c -
+      - name: Install exact pilot-qualified Qwen3 Base CPU environment
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
+          git -C qwen3-upstream checkout "$QWEN_REV"
+          test "$(git -C qwen3-upstream rev-parse HEAD)" = "$QWEN_REV"
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.13.0 torchaudio==2.11.0
+          python -m pip install --disable-pip-version-check -e ./qwen3-upstream
+          python -m pip check
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(repo_id=os.environ['BASE_MODEL_ID'],revision=os.environ['BASE_MODEL_REV'],local_dir='qwen3-base-model'))
+          PY
+          test -f qwen3-base-model/model.safetensors
+      - name: Render exactly ten preregistered neutral candidates
+        run: |
+          mkdir -p render/clips
+          python - <<'PY'
+          import hashlib,json,os,time
+          from pathlib import Path
+          import numpy as np, soundfile as sf
+          from audio_engine.providers.qwen3_xvector_lab import Qwen3XVectorLabProvider
+          from audio_engine.voice_lab_rvc_lucie_dataset_expansion import CANDIDATES, expansion_spec, seed_for
+          shard=int(os.environ['SHARD']); subset=CANDIDATES[shard*10:(shard+1)*10]
+          expected=[f'n{i:02d}' for i in range(11+shard*10,21+shard*10)]
+          assert [cid for cid,_ in subset]==expected
+          provider=Qwen3XVectorLabProvider(model_dir=Path('qwen3-base-model'),device='cpu')
+          prompt=provider.build_identity_prompt(Path('selected-pair/reference-lucie.wav'))
+          rows=[]
+          for cid,text in subset:
+              out=Path('render/clips')/f'{cid}.wav'; started=time.monotonic()
+              print('RENDER_START',cid,flush=True)
+              provider.synthesize({'text':text,'language':'French','seed':seed_for(cid),'max_new_tokens':512},out,voice_clone_prompt=prompt)
+              y,sr=sf.read(out,dtype='float32',always_2d=False); y=np.asarray(y,dtype=np.float32)
+              if y.ndim==2:y=y.mean(1)
+              duration=float(len(y)/sr); rms=float(np.sqrt(np.mean(y*y))) if len(y) else 0.0; peak=float(np.max(np.abs(y))) if len(y) else 0.0
+              technical=bool(len(y)>0 and np.isfinite(y).all() and rms>1e-5 and peak<1.0 and 1.5<=duration<=10.0)
+              row={'id':cid,'text':text,'seed':seed_for(cid),'file':f'clips/{cid}.wav','sha256':hashlib.sha256(out.read_bytes()).hexdigest(),'sample_rate':int(sr),'duration_seconds':duration,'rms':rms,'peak':peak,'technical_pass':technical,'render_seconds':time.monotonic()-started,'shard':shard}
+              rows.append(row); print(json.dumps(row,ensure_ascii=False),flush=True)
+          m=expansion_spec();m.update({'status':'rendered-shard','shard':shard,'rows':rows,'rendered_count':10,'all_technical_pass':all(r['technical_pass'] for r in rows)})
+          Path('render/render-manifest.json').write_text(json.dumps(m,ensure_ascii=False,indent=2),encoding='utf-8')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rvc-lucie-neutral-expansion-render-${{ matrix.shard }}
+          path: render/
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify:
+    needs: render
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    env:
+      SHARD: ${{ matrix.shard }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: rvc-lucie-neutral-expansion-render-${{ matrix.shard }}
+          path: render
+      - name: Recover exact anchors and verify shard bytes
+        run: |
+          mkdir -p selected-pair qualified/clips evidence
+          gh run download "$SELECTED_PAIR_RUN_ID" --repo "${{ github.repository }}" -n "$SELECTED_PAIR_ARTIFACT" -D selected-pair
+          echo "$LUCIE_ANCHOR_SHA256  selected-pair/reference-lucie.wav" | sha256sum -c -
+          echo "$CLAIRE_ANCHOR_SHA256  selected-pair/reference-claire.wav" | sha256sum -c -
+          python - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          shard=int(os.environ['SHARD']);m=json.loads(Path('render/render-manifest.json').read_text())
+          assert m['status']=='rendered-shard' and m['shard']==shard and len(m['rows'])==10
+          for row in m['rows']:
+              p=Path('render')/row['file'];assert p.is_file();assert hashlib.sha256(p.read_bytes()).hexdigest()==row['sha256']
+          PY
+      - name: Install exact pilot-qualified WeSpeaker and Whisper stack
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchaudio==2.5.1
+          python -m pip install --disable-pip-version-check soundfile==0.12.1 onnxruntime==1.20.1 huggingface_hub==0.36.0 imageio-ffmpeg==0.6.0
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV"
+          git init WeSpeaker; git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git
+          git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV"; git -C WeSpeaker checkout --detach FETCH_HEAD
+          test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"; grep -qi "Apache License" WeSpeaker/LICENSE
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(repo_id=os.environ['WESPEAKER_MODEL_REPO'],revision=os.environ['WESPEAKER_MODEL_REV'],allow_patterns=['voxceleb_resnet34.onnx'],local_dir='weights/wespeaker'))
+          p=root/'voxceleb_resnet34.onnx';got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest());expected=(26534127,'9fea6516d7ad6bf0a76c7689f5a49b65d330fad6dde96c91bb4435ffbfe056a1')
+          if got!=expected:raise SystemExit(f'WeSpeaker mismatch {got}')
+          PY
+          FFMPEG_BIN="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"; mkdir -p "$HOME/.local/bin"; ln -sf "$FFMPEG_BIN" "$HOME/.local/bin/ffmpeg"; echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Qualify fixed shard with no retry or substitution
+        run: |
+          python - <<'PY'
+          import hashlib,importlib.util,json,os,re,shutil,unicodedata
+          from pathlib import Path
+          import numpy as np,onnxruntime as ort,whisper
+          m=json.loads(Path('render/render-manifest.json').read_text());rows=m['rows']
+          spec=importlib.util.spec_from_file_location('ws','WeSpeaker/wespeaker/bin/infer_onnx.py');mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
+          session=ort.InferenceSession('weights/wespeaker/voxceleb_resnet34.onnx',providers=['CPUExecutionProvider'])
+          def emb(path):
+              feats=mod.compute_fbank(str(path)).unsqueeze(0).numpy();e=np.asarray(session.run(['embs'],{'feats':feats})[0]).reshape(-1).astype(np.float64);return e/np.linalg.norm(e)
+          claire=emb(Path('selected-pair/reference-claire.wav'));lucie=emb(Path('selected-pair/reference-lucie.wav'))
+          model=whisper.load_model(os.environ['WHISPER_MODEL'],device='cpu');mp=Path.home()/'.cache'/'whisper'/f"{os.environ['WHISPER_MODEL']}.pt";sha=hashlib.sha256(mp.read_bytes()).hexdigest()
+          if sha!=os.environ['WHISPER_MODEL_SHA256']:raise SystemExit(f'Whisper SHA {sha}')
+          def norm(t):
+              t=unicodedata.normalize('NFKC',t).lower().replace('’',"'");t=re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+",' ',t);return ' '.join(t.split())
+          def edit(a,b):
+              p=list(range(len(b)+1))
+              for i,x in enumerate(a,1):
+                  c=[i]
+                  for j,y in enumerate(b,1):c.append(min(c[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+                  p=c
+              return p[-1]
+          out=[]
+          for row in rows:
+              p=Path('render')/row['file'];e=emb(p);sl=float(e@lucie);sc=float(e@claire);margin=sl-sc
+              tr=str(model.transcribe(str(p),language='fr',task='transcribe',fp16=False,temperature=0,condition_on_previous_text=False).get('text','')).strip();ref=norm(row['text']).split();hyp=norm(tr).split();errors=edit(ref,hyp);wer=errors/max(1,len(ref))
+              accepted=bool(row['technical_pass'] and margin>0 and wer<=0.20+1e-12)
+              q={**row,'sim_lucie':sl,'sim_claire':sc,'lucie_margin':margin,'identity_pass':margin>0,'transcript':tr,'reference_words':len(ref),'word_errors':errors,'wer':wer,'french_pass':wer<=0.20+1e-12,'accepted':accepted};out.append(q)
+              if accepted:shutil.copy2(p,Path('qualified/clips')/f"{row['id']}.wav")
+              print(json.dumps(q,ensure_ascii=False),flush=True)
+          final={'schema':'rvc-lucie-neutral-expansion-shard-qualified-v1','status':'qualified-shard','shard':int(os.environ['SHARD']),'rows':out,'generated_count':10,'accepted_count':sum(r['accepted'] for r in out),'accepted_duration_seconds':sum(float(r['duration_seconds']) for r in out if r['accepted']),'reference_words':sum(int(r['reference_words']) for r in out if r['accepted']),'word_errors':sum(int(r['word_errors']) for r in out if r['accepted']),'retries':0,'substitutions':0}
+          Path('qualified/manifest.json').write_text(json.dumps(final,ensure_ascii=False,indent=2),encoding='utf-8');Path('evidence/final.json').write_text(json.dumps(final,ensure_ascii=False,indent=2),encoding='utf-8')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rvc-lucie-neutral-expansion-qualified-${{ matrix.shard }}
+          path: |
+            qualified/
+            evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  aggregate:
+    needs: qualify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rvc-lucie-neutral-expansion-qualified-*
+          path: expansion-shards
+      - name: Recover exact pilot
+        run: |
+          mkdir -p pilot dataset/clips evidence
+          gh run download "$PILOT_RUN_ID" --repo "${{ github.repository }}" -n "$PILOT_ARTIFACT" -D pilot
+      - name: Aggregate once under preregistered 5-minute corpus gates
+        run: |
+          python - <<'PY'
+          import hashlib,json,shutil
+          from pathlib import Path
+          pilot=json.loads(Path('pilot/manifest.json').read_text());assert pilot['status']=='pilot-pass' and pilot['accepted_count']==10
+          assert abs(float(pilot['accepted_duration_seconds'])-51.12)<1e-6
+          manifests=list(Path('expansion-shards').rglob('qualified/manifest.json'));assert len(manifests)==6,manifests
+          expansion_rows=[];shards=set()
+          for p in manifests:
+              m=json.loads(p.read_text());assert m['status']=='qualified-shard' and m['generated_count']==10 and m['retries']==0 and m['substitutions']==0
+              shards.add(m['shard']);expansion_rows.extend(m['rows'])
+          assert shards==set(range(6));assert len(expansion_rows)==60;assert sorted(r['id'] for r in expansion_rows)==[f'n{i:02d}' for i in range(11,71)]
+          accepted_exp=[r for r in expansion_rows if r['accepted']];rate=len(accepted_exp)/60
+          for p in Path('pilot/clips').glob('*.wav'):shutil.copy2(p,Path('dataset/clips')/p.name)
+          for p in Path('expansion-shards').rglob('qualified/clips/*.wav'):
+              dst=Path('dataset/clips')/p.name
+              if dst.exists():raise SystemExit(f'duplicate clip {p.name}')
+              shutil.copy2(p,dst)
+          pilot_words=int(pilot['aggregate_reference_words']);pilot_errors=int(pilot['aggregate_word_errors']);pilot_duration=float(pilot['accepted_duration_seconds'])
+          exp_words=sum(int(r['reference_words']) for r in accepted_exp);exp_errors=sum(int(r['word_errors']) for r in accepted_exp);exp_duration=sum(float(r['duration_seconds']) for r in accepted_exp)
+          total_words=pilot_words+exp_words;total_errors=pilot_errors+exp_errors;total_duration=pilot_duration+exp_duration;agg_wer=total_errors/max(1,total_words)
+          duration_ok=total_duration>=300.0;wer_ok=agg_wer<=0.05+1e-12;rate_ok=rate>=0.85-1e-12;ok=duration_ok and wer_ok and rate_ok
+          final={'schema':'rvc-lucie-neutral-dataset-qualified-v1','status':'dataset-pass' if ok else 'dataset-reject','pilot_run_id':32939596171,'pilot_accepted_count':10,'expansion_generated_count':60,'expansion_accepted_count':len(accepted_exp),'expansion_acceptance_rate':rate,'accepted_count':10+len(accepted_exp),'accepted_duration_seconds':total_duration,'aggregate_reference_words':total_words,'aggregate_word_errors':total_errors,'aggregate_wer':agg_wer,'duration_gate_pass':duration_ok,'aggregate_french_pass':wer_ok,'acceptance_rate_pass':rate_ok,'retries':0,'substitutions':0,'accepted_ids':[f'n{i:02d}' for i in range(1,11)]+[r['id'] for r in accepted_exp],'expansion_rows':expansion_rows,'training_authorized':False,'human_gate':False,'production_qualified':False,'rules':{'every accepted clip':'technical AND WeSpeaker Lucie>Claire AND Whisper WER<=0.20','total accepted duration':'>=300 s','aggregate WER':'<=0.05','fixed expansion acceptance rate':'>=0.85','retry':False,'substitution':False}}
+          Path('dataset/manifest.json').write_text(json.dumps(final,ensure_ascii=False,indent=2),encoding='utf-8');Path('evidence/final.json').write_text(json.dumps(final,ensure_ascii=False,indent=2),encoding='utf-8')
+          hashes=[]
+          for p in sorted(Path('dataset/clips').glob('*.wav')):hashes.append(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  clips/{p.name}")
+          Path('dataset/SHA256SUMS').write_text('\n'.join(hashes)+'\n')
+          print(json.dumps({k:final[k] for k in ['status','expansion_accepted_count','expansion_acceptance_rate','accepted_count','accepted_duration_seconds','aggregate_wer']},ensure_ascii=False,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rvc-lucie-neutral-dataset-qualified-5min
+          path: |
+            dataset/
+            evidence/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Surface corpus verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('evidence/final.json')
+          if not p.is_file():raise SystemExit('no corpus evidence')
+          r=json.loads(p.read_text());print('SCIENTIFIC_STATUS='+r['status'])
+          if r['status']!='dataset-pass':raise SystemExit(1)
+          PY
