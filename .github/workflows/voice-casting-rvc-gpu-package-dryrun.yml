@@ -78,14 +78,15 @@ jobs:
           mkdir -p pilot
           gh run download "$PILOT_RUN_ID" --repo "${{ github.repository }}" -n "$PILOT_ARTIFACT" -D pilot
           python - <<'PY'
-          import json, shutil, tempfile
+          import json
           from pathlib import Path
           from audio_engine.voice_lab_rvc_gpu_package import validate_dataset_manifest
-          pilot=json.loads(Path('pilot/manifest.json').read_text())
+          manifest=Path('pilot/qualified/manifest.json')
+          pilot=json.loads(manifest.read_text())
           assert pilot['status']=='pilot-pass'
           assert abs(float(pilot['accepted_duration_seconds'])-51.12)<1e-6
           try:
-              validate_dataset_manifest(Path('pilot/manifest.json'))
+              validate_dataset_manifest(manifest)
           except ValueError as e:
               print('EXPECTED_PILOT_REJECT_FOR_TRAINING',e)
           else:
