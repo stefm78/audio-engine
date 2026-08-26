@@ -20,7 +20,7 @@ env:
   VC_SIZE: "70839448"
   VOCOS_SHA256: df1f2ba9f7ac35c96832579421ee1ed913a68c3a1d2f8a6536739f902f194a93
   VOCOS_SIZE: "33223674"
-  WAVLM_URL: https://github.com/microsoft/unilm/releases/download/wavlm/WavLM-Large.pt
+  WAVLM_GDRIVE_ID: 12-cB34qCTvByWT-QtOcZaqwwO21FLSqU
   WAVLM_FINETUNE_GDRIVE_ID: 1-aE1NfzpRCLxA4GUxX9ITI3F9LlbtEGP
   PIP_NO_CACHE_DIR: "1"
   HF_HUB_DISABLE_TELEMETRY: "1"
@@ -114,9 +114,9 @@ jobs:
           test "$(stat -c%s MeanVC2/ckpts/vocos/vocos.pt)" = "$VOCOS_SIZE"
           test "$(sha256sum MeanVC2/ckpts/vocos/vocos.pt | cut -d' ' -f1)" = "$VOCOS_SHA256"
 
-      - name: Download public WavLM speaker assets without account or token
+      - name: Download official public WavLM speaker assets without account or token
         run: |
-          curl --fail --location --retry 3 --retry-delay 2 "$WAVLM_URL" -o MeanVC2/preprocess/ckpts/wavlm_large.pt
+          gdown --id "$WAVLM_GDRIVE_ID" -O MeanVC2/preprocess/ckpts/wavlm_large.pt
           gdown --id "$WAVLM_FINETUNE_GDRIVE_ID" -O MeanVC2/preprocess/ckpts/wavlm_large_finetune.pth
           test -s MeanVC2/preprocess/ckpts/wavlm_large.pt
           test -s MeanVC2/preprocess/ckpts/wavlm_large_finetune.pth
