@@ -1,0 +1,204 @@
+name: Voice Casting Seed-VC CPU One-Cell Specimen R2
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-seed-vc-cpu-one-cell-r2.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  HISTORICAL_PANIC_SHA256: ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f
+  CLAIRE_REF_SHA256: 3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe
+  LUCIE_REF_SHA256: 9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822
+  SADNESS_SHA256: d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84
+
+  SEED_VC_REV: "51383efd921027683c89e5348211d93ff12ac2a8"
+  SEED_VC_HF_REV: "7bdd5167c96c7ec71b6f11e38ce5a385b64ff157"
+  CAMPPLUS_HF_REV: "0817bacbf3f87a85962e3b7bbe231ff3c606f404"
+  WHISPER_SMALL_HF_REV: "973afd24965f72e36ca33b3055d56a652f456b4d"
+  BIGVGAN_HF_REV: "633ff708ed5b74903e86ff1298cf4a98e921c513"
+
+  SEED_VC_MODEL_SHA256: "8ec8841b20bb46df9f7e8e570a6946a4b87b940133c7f0e778487ff33841f720"
+  CAMPPLUS_SHA256: "3388cf5fd3493c9ac9c69851d8e7a8badcfb4f3dc631020c4961371646d5ada8"
+  INTERNAL_WHISPER_MODEL_SHA256: "1d7734884874f1a1513ed9aa760a4f8e97aaa02fd6d93a3a85d27b2ae9ca596b"
+  INTERNAL_WHISPER_PREPROCESSOR_SHA256: "9b5cd03a36fbb8a627c64d98a5b5b126ead95a77720723944487311f0110b666"
+  BIGVGAN_GENERATOR_SHA256: "e95ba25972d3de0628d99cd156e9315a9c018899bf739988959ebe3544080ced"
+
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  one-specimen:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Recover and verify immutable source corpus
+        run: |
+          mkdir -p source evidence/clips
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          test "$(sha256sum source/clips/claire--panic.wav | cut -d' ' -f1)" = "$HISTORICAL_PANIC_SHA256"
+          test "$(sha256sum source/reference-claire.wav | cut -d' ' -f1)" = "$CLAIRE_REF_SHA256"
+          test "$(sha256sum source/reference-lucie.wav | cut -d' ' -f1)" = "$LUCIE_REF_SHA256"
+          test "$(sha256sum source/clips/claire--sadness-contained.wav | cut -d' ' -f1)" = "$SADNESS_SHA256"
+
+      - name: Checkout exact Seed-VC and install resource-qualified CPU runtime
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          git init SeedVC
+          git -C SeedVC remote add origin https://github.com/Plachtaa/seed-vc.git
+          git -C SeedVC fetch --depth=1 origin "$SEED_VC_REV"
+          git -C SeedVC checkout --detach FETCH_HEAD
+          test "$(git -C SeedVC rev-parse HEAD)" = "$SEED_VC_REV"
+          grep -q "GNU GENERAL PUBLIC LICENSE" SeedVC/LICENSE
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu \
+            torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0
+          python -m pip install --disable-pip-version-check \
+            numpy==1.26.4 scipy==1.13.1 librosa==0.10.2 huggingface-hub==0.28.1 \
+            munch==4.0.0 einops==0.8.0 descript-audio-codec==1.0.0 \
+            transformers==4.46.3 soundfile==0.12.1 hydra-core==1.3.2 \
+            pyyaml==6.0.2 accelerate==1.2.1
+          python -m pip check
+
+      - name: Freeze exact resource-qualified public assets before render
+        id: freeze
+        working-directory: SeedVC
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,shutil
+          from pathlib import Path
+          from huggingface_hub import hf_hub_download,snapshot_download
+
+          def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+          def set_main(cache_dir,repo,revision):
+              p=Path(cache_dir)/("models--"+repo.replace('/','--'))/'refs'/'main'
+              p.parent.mkdir(parents=True,exist_ok=True); p.write_text(revision)
+
+          Path('frozen').mkdir(exist_ok=True)
+          seed_model=Path(hf_hub_download(repo_id='Plachta/Seed-VC',filename='DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth',revision=os.environ['SEED_VC_HF_REV'],cache_dir='./checkpoints'))
+          seed_cfg=Path(hf_hub_download(repo_id='Plachta/Seed-VC',filename='config_dit_mel_seed_uvit_whisper_small_wavenet.yml',revision=os.environ['SEED_VC_HF_REV'],cache_dir='./checkpoints'))
+          camp=Path(hf_hub_download(repo_id='funasr/campplus',filename='campplus_cn_common.bin',revision=os.environ['CAMPPLUS_HF_REV'],cache_dir='./checkpoints'))
+          set_main('./checkpoints','funasr/campplus',os.environ['CAMPPLUS_HF_REV'])
+
+          wh=Path(snapshot_download(repo_id='openai/whisper-small',revision=os.environ['WHISPER_SMALL_HF_REV'],cache_dir='./checkpoints/hf_cache',allow_patterns=['config.json','model.safetensors','preprocessor_config.json']))
+          set_main('./checkpoints/hf_cache','openai/whisper-small',os.environ['WHISPER_SMALL_HF_REV'])
+          big=Path(snapshot_download(repo_id='nvidia/bigvgan_v2_22khz_80band_256x',revision=os.environ['BIGVGAN_HF_REV'],cache_dir='./checkpoints/hf_cache',allow_patterns=['config.json','bigvgan_generator.pt']))
+          set_main('./checkpoints/hf_cache','nvidia/bigvgan_v2_22khz_80band_256x',os.environ['BIGVGAN_HF_REV'])
+
+          checks={
+            'seed_model':(seed_model,440312082,os.environ['SEED_VC_MODEL_SHA256']),
+            'campplus':(camp,28036335,os.environ['CAMPPLUS_SHA256']),
+            'internal_whisper_model':(wh/'model.safetensors',966995080,os.environ['INTERNAL_WHISPER_MODEL_SHA256']),
+            'internal_whisper_preprocessor':(wh/'preprocessor_config.json',184990,os.environ['INTERNAL_WHISPER_PREPROCESSOR_SHA256']),
+            'bigvgan_generator':(big/'bigvgan_generator.pt',449228171,os.environ['BIGVGAN_GENERATOR_SHA256']),
+          }
+          out={'status':'asset-freeze-pass','render_count':0,'revisions':{
+            'seed_vc':os.environ['SEED_VC_HF_REV'],'campplus':os.environ['CAMPPLUS_HF_REV'],
+            'whisper_small':os.environ['WHISPER_SMALL_HF_REV'],'bigvgan':os.environ['BIGVGAN_HF_REV']}}
+          for name,(p,size,expected) in checks.items():
+              got=(p.stat().st_size,sha(p))
+              if got!=(size,expected): raise SystemExit(f'{name}: {got}')
+              out[name]={'bytes':got[0],'sha256':got[1]}
+          shutil.copy2(seed_model,'frozen/seedvc.pth'); shutil.copy2(seed_cfg,'frozen/seedvc.yml')
+          out['seed_config']={'bytes':seed_cfg.stat().st_size,'sha256':sha(seed_cfg)}
+          Path('../evidence/assets.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          PY
+
+      - name: Render the one authorized seed-0 specimen
+        id: render
+        working-directory: SeedVC
+        env:
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          mkdir -p ../evidence/rendered
+          /usr/bin/time -v -o ../evidence/render-time.txt python - <<'PY'
+          import hashlib,json,os,random,shutil,time
+          from argparse import Namespace
+          from pathlib import Path
+          import numpy as np,torch
+          if torch.cuda.is_available(): raise SystemExit('CUDA unexpectedly available')
+          random.seed(0); np.random.seed(0); torch.manual_seed(0)
+          import inference
+          if inference.device.type!='cpu': raise SystemExit(str(inference.device))
+          args=Namespace(source='../source/clips/claire--panic.wav',target='../source/reference-claire.wav',output='../evidence/rendered',diffusion_steps=30,length_adjust=1.0,inference_cfg_rate=0.7,f0_condition=False,auto_f0_adjust=False,semi_tone_shift=0,checkpoint='frozen/seedvc.pth',config='frozen/seedvc.yml',fp16=False)
+          started=time.perf_counter(); inference.main(args); elapsed=time.perf_counter()-started
+          outs=sorted(Path('../evidence/rendered').glob('*.wav'))
+          if len(outs)!=1: raise SystemExit(f'exactly one WAV required, got {outs}')
+          p=outs[0]; digest=hashlib.sha256(p.read_bytes()).hexdigest(); shutil.copy2(p,'../evidence/clips/seed-vc.wav')
+          r={'status':'render-pass','architecture':'Seed-VC-v1-zero-shot-self-target-stabilizer','cell':'claire--panic','seed':0,'device':'cpu','source_sha256':os.environ['HISTORICAL_PANIC_SHA256'],'target_reference_sha256':os.environ['CLAIRE_REF_SHA256'],'diffusion_steps':30,'length_adjust':1.0,'inference_cfg_rate':0.7,'f0_condition':False,'auto_f0_adjust':False,'semi_tone_shift':0,'fp16':False,'output_sha256':digest,'render_wall_seconds':elapsed,'render_count':1,'retry_count':0,'replacement_count':0,'training':False,'finetuning':False,'production':False}
+          Path('../evidence/render.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          PY
+
+      - name: Technical gate on the immutable specimen
+        id: technical
+        if: steps.render.outcome == 'success'
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import numpy as np,soundfile as sf
+          y,sr=sf.read('evidence/clips/seed-vc.wav',dtype='float32'); s,ssr=sf.read('source/clips/claire--panic.wav',dtype='float32')
+          if y.ndim==2:y=y.mean(1)
+          if s.ndim==2:s=s.mean(1)
+          d=len(y)/sr; sd=len(s)/ssr; ratio=d/sd; rms=float(np.sqrt(np.mean(y*y))); finite=bool(np.isfinite(y).all())
+          ok=sr==22050 and finite and rms>1e-5 and .5<=ratio<=1.5
+          r={'status':'pass' if ok else 'reject','sr':sr,'expected_native_sr':22050,'duration':d,'source_duration':sd,'duration_ratio':ratio,'rms':rms,'finite':finite,'rule':'native 22050 Hz; finite non-silent; duration 0.5x..1.5x source'}
+          Path('evidence/technical.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          PY
+
+      - name: Record specimen-stage verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          def read(n):
+              p=Path('evidence')/f'{n}.json'; return json.loads(p.read_text()) if p.exists() else None
+          a,r,t=read('assets'),read('render'),read('technical')
+          if a is None: status='pre-render-infrastructure-failure'
+          elif r is None: status='render-infrastructure-failure'
+          elif t is None: status='post-render-technical-infrastructure-failure'
+          elif t.get('status')!='pass': status='technical-reject'
+          else: status='specimen-technical-pass'
+          out={'status':status,'architecture':'Seed-VC-v1-zero-shot-self-target-stabilizer','cell':'claire--panic','render_count':0 if r is None else 1,'retry_count':0,'replacement_count':0,'validation_authorized':status=='specimen-technical-pass','human_gate_authorized':False,'production_authorized':False,'license':'GPL-3.0'}
+          if r: out['output_sha256']=r['output_sha256']
+          Path('evidence/final.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          PY
+
+      - name: Upload immutable specimen evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seed-vc-cpu-one-cell-specimen-r2
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Surface specimen-stage verdict
+        if: always()
+        run: |
+          test -f evidence/final.json || exit 1
+          cat evidence/final.json
+          STATUS="$(python -c 'import json; print(json.load(open("evidence/final.json"))["status"])')"
+          test "$STATUS" = "specimen-technical-pass" || { echo "verdict: $STATUS"; exit 1; }
+          echo SEED_VC_SPECIMEN_FROZEN_ZERO_RENDER_VALIDATION_AUTHORIZED
