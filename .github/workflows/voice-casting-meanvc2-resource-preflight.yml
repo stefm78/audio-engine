@@ -1,0 +1,222 @@
+name: Voice Casting MeanVC2 CPU Resource Preflight
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-meanvc2-resource-preflight.yml
+      - docs/lab/MEANVC2_CPU_RESOURCE_PREFLIGHT.md
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  MEANVC2_REV: 0d39c8ae416a37edb9884db67334e4b9d0c3e308
+  HF_REPO: ASLP-lab/MeanVC2
+  HF_REV: 4a73815c6b392bcb435769f69d7f5fdeccbc39dd
+  VC_SHA256: 04ea21a4fb55400469e6004ae842c3e7f059f759e92946fb95123418cad5d818
+  VC_SIZE: "70839448"
+  VOCOS_SHA256: df1f2ba9f7ac35c96832579421ee1ed913a68c3a1d2f8a6536739f902f194a93
+  VOCOS_SIZE: "33223674"
+  WAVLM_URL: https://github.com/microsoft/unilm/releases/download/wavlm/WavLM-Large.pt
+  WAVLM_FINETUNE_GDRIVE_ID: 1-aE1NfzpRCLxA4GUxX9ITI3F9LlbtEGP
+  PIP_NO_CACHE_DIR: "1"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  resource-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Freeze resource contract before external downloads
+        run: |
+          mkdir -p evidence
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          contract = {
+            "status": "resource-contract-frozen",
+            "science_authorized": False,
+            "render_authorized": False,
+            "device": "cpu",
+            "meanvc2_revision": "0d39c8ae416a37edb9884db67334e4b9d0c3e308",
+            "hf_revision": "4a73815c6b392bcb435769f69d7f5fdeccbc39dd",
+            "model": "120ms+40ms",
+            "future_science": {"chunk_size": 12, "steps": 3, "seed": 0},
+            "forbidden": ["cuda", "paid_gpu", "private_token", "manual_download", "user_supplied_file", "scientific_render"]
+          }
+          Path("evidence/contract.json").write_text(json.dumps(contract, indent=2), encoding="utf-8")
+          print(json.dumps(contract, indent=2))
+          PY
+
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          df -h /
+
+      - name: Fetch exact MeanVC2 source and verify declared license provenance
+        run: |
+          git init MeanVC2
+          git -C MeanVC2 remote add origin https://github.com/ASLP-lab/MeanVC2.git
+          git -C MeanVC2 fetch --depth=1 origin "$MEANVC2_REV"
+          git -C MeanVC2 checkout --detach FETCH_HEAD
+          test "$(git -C MeanVC2 rev-parse HEAD)" = "$MEANVC2_REV"
+          grep -q "License-Apache%202.0" MeanVC2/README.md
+          grep -q "released under the \[Apache License 2.0\]" MeanVC2/README.md
+          test ! -e MeanVC2/LICENSE
+          echo "LAB_LICENSE_PROVENANCE=README_AND_HF_MODEL_CARD_ONLY" | tee evidence/license.txt
+
+      - name: Install minimal pinned CPU inference runtime
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchaudio==2.5.1
+          python -m pip install --disable-pip-version-check \
+            'numpy>=1.26,<2.1' soundfile librosa soxr safetensors \
+            einops==0.8.0 x-transformers==2.2.11 torchdiffeq==0.2.5 \
+            huggingface-hub==0.36.0 gdown==5.2.0 omegaconf==2.3.0 \
+            s3prl==0.4.18
+          python - <<'PY'
+          import torch, torchaudio, numpy, soundfile, librosa, safetensors, s3prl
+          assert not torch.cuda.is_available()
+          print("CPU_RUNTIME_PASS", torch.__version__, torchaudio.__version__, numpy.__version__)
+          PY
+
+      - name: Download exact public MeanVC2 quality assets
+        run: |
+          mkdir -p MeanVC2/preprocess/ckpts MeanVC2/ckpts/pretrained_models MeanVC2/ckpts/vocos
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          from huggingface_hub import hf_hub_download
+          repo=os.environ['HF_REPO']; rev=os.environ['HF_REV']
+          mapping={
+            'meanvc2_120ms_40ms.safetensors':'MeanVC2/ckpts/pretrained_models/meanvc2_120ms_40ms.safetensors',
+            'fastu2pp_160ms.pt':'MeanVC2/preprocess/ckpts/fastu2pp_160ms.pt',
+            'vocos.pt':'MeanVC2/ckpts/vocos/vocos.pt',
+          }
+          for name,dst in mapping.items():
+            src=hf_hub_download(repo_id=repo, revision=rev, filename=name)
+            Path(dst).parent.mkdir(parents=True,exist_ok=True)
+            shutil.copy2(src,dst)
+            print(name, '->', dst)
+          PY
+          test "$(stat -c%s MeanVC2/ckpts/pretrained_models/meanvc2_120ms_40ms.safetensors)" = "$VC_SIZE"
+          test "$(sha256sum MeanVC2/ckpts/pretrained_models/meanvc2_120ms_40ms.safetensors | cut -d' ' -f1)" = "$VC_SHA256"
+          test "$(stat -c%s MeanVC2/ckpts/vocos/vocos.pt)" = "$VOCOS_SIZE"
+          test "$(sha256sum MeanVC2/ckpts/vocos/vocos.pt | cut -d' ' -f1)" = "$VOCOS_SHA256"
+
+      - name: Download public WavLM speaker assets without account or token
+        run: |
+          curl --fail --location --retry 3 --retry-delay 2 "$WAVLM_URL" -o MeanVC2/preprocess/ckpts/wavlm_large.pt
+          gdown --id "$WAVLM_FINETUNE_GDRIVE_ID" -O MeanVC2/preprocess/ckpts/wavlm_large_finetune.pth
+          test -s MeanVC2/preprocess/ckpts/wavlm_large.pt
+          test -s MeanVC2/preprocess/ckpts/wavlm_large_finetune.pth
+
+      - name: Freeze exact asset hashes and sizes before any scientific render
+        run: |
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          files={
+            'vc_model':'MeanVC2/ckpts/pretrained_models/meanvc2_120ms_40ms.safetensors',
+            'asr_160ms':'MeanVC2/preprocess/ckpts/fastu2pp_160ms.pt',
+            'vocos':'MeanVC2/ckpts/vocos/vocos.pt',
+            'wavlm_large':'MeanVC2/preprocess/ckpts/wavlm_large.pt',
+            'wavlm_finetuned':'MeanVC2/preprocess/ckpts/wavlm_large_finetune.pth',
+          }
+          out={}
+          for key,name in files.items():
+            p=Path(name); h=hashlib.sha256()
+            with p.open('rb') as f:
+              for block in iter(lambda:f.read(1024*1024),b''):h.update(block)
+            out[key]={'path':name,'bytes':p.stat().st_size,'sha256':h.hexdigest()}
+          assert out['vc_model']['sha256']==os.environ['VC_SHA256']
+          assert out['vocos']['sha256']==os.environ['VOCOS_SHA256']
+          Path('evidence/assets.json').write_text(json.dumps(out,indent=2),encoding='utf-8')
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Prove MeanVC2 components load on standard CPU runner
+        run: |
+          /usr/bin/time -v -o evidence/cpu-load-time.txt python - <<'PY'
+          import json, os, sys, torch
+          from pathlib import Path
+          root=Path('MeanVC2').resolve()
+          os.chdir(root)
+          sys.path.insert(0,str(root))
+          sys.path.insert(0,str(root/'src/infer'))
+          assert not torch.cuda.is_available()
+          asr=torch.jit.load('preprocess/ckpts/fastu2pp_160ms.pt',map_location='cpu').eval()
+          vocos=torch.jit.load('ckpts/vocos/vocos.pt',map_location='cpu').eval()
+          from preprocess.models.ecapa_tdnn import ECAPA_TDNN_SMALL
+          spk=ECAPA_TDNN_SMALL(feat_dim=1024,feat_type='wavlm_large')
+          state=torch.load('preprocess/ckpts/wavlm_large_finetune.pth',map_location='cpu')
+          missing,unexpected=spk.load_state_dict(state['model'],strict=False)
+          spk=spk.cpu().eval()
+          from dit_kvcache import DiT
+          from src.model.utils import load_checkpoint
+          cfg=json.loads(Path('src/config/config_120ms_40ms.json').read_text())
+          vc=DiT(**cfg['model']).cpu()
+          vc=load_checkpoint(vc,'ckpts/pretrained_models/meanvc2_120ms_40ms.safetensors',device='cpu',use_ema=True).float().eval()
+          report={
+            'status':'cpu-components-load-pass',
+            'cuda_available':torch.cuda.is_available(),
+            'asr_loaded':asr is not None,
+            'vocos_loaded':vocos is not None,
+            'speaker_loaded':spk is not None,
+            'vc_loaded':vc is not None,
+            'speaker_missing_keys':list(missing),
+            'speaker_unexpected_keys':list(unexpected),
+            'scientific_render':False,
+          }
+          Path('../evidence/cpu-load.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+          print(json.dumps(report,indent=2))
+          PY
+
+      - name: Record final resource verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          assets=Path('evidence/assets.json')
+          load=Path('evidence/cpu-load.json')
+          ok=assets.is_file() and load.is_file() and json.loads(load.read_text()).get('status')=='cpu-components-load-pass'
+          out={
+            'status':'resource-preflight-pass' if ok else 'resource-preflight-incomplete',
+            'scientific_render':False,
+            'science_authorized_next':bool(ok),
+            'next_gate':'one immutable panic--lucie MeanVC2 CPU smoke' if ok else 'none; diagnose infrastructure/resource only',
+          }
+          Path('evidence/final.json').write_text(json.dumps(out,indent=2),encoding='utf-8')
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Upload resource evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meanvc2-cpu-resource-preflight
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface resource verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          status=json.loads(Path('evidence/final.json').read_text())['status']
+          if status!='resource-preflight-pass': raise SystemExit(f'resource verdict: {status}')
+          print('MEANVC2_RESOURCE_PREFLIGHT_PASS')
+          PY
