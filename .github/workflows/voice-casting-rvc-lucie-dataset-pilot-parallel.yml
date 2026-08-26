@@ -1,0 +1,285 @@
+name: Voice Casting RVC Lucie Neutral Dataset Pilot Parallel Recovery
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-rvc-lucie-dataset-pilot-parallel.yml
+      - src/audio_engine/voice_lab_rvc_lucie_dataset_pilot.py
+      - tests/test_voice_lab_rvc_lucie_dataset_pilot.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  QWEN_REV: 022e286b98fbec7e1e916cb940cdf532cd9f488e
+  BASE_MODEL_ID: Qwen/Qwen3-TTS-12Hz-1.7B-Base
+  BASE_MODEL_REV: 74a6279626edc2d5a787d5b6467668eba0b86ef6
+  SELECTED_PAIR_RUN_ID: "32818950167"
+  SELECTED_PAIR_ARTIFACT: qwen3-contrast-selected-pair
+  LUCIE_ANCHOR_SHA256: 9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822
+  CLAIRE_ANCHOR_SHA256: 3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL: small
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  TOKENIZERS_PARALLELISM: "false"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Verify unchanged frozen pilot contract
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m unittest tests.test_voice_lab_rvc_lucie_dataset_pilot -v
+          python - <<'PY'
+          from audio_engine.voice_lab_rvc_lucie_dataset_pilot import CANDIDATES, pilot_spec
+          assert [cid for cid,_ in CANDIDATES] == [f'n{i:02d}' for i in range(1,11)]
+          spec=pilot_spec()
+          assert spec['candidate_count']==10
+          print('same 10 candidates, same seeds, same gates; only orchestration changes')
+          PY
+
+  render:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        shard: [0, 1, 2, 3, 4]
+    env:
+      SHARD: ${{ matrix.shard }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Free runner disk
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+      - name: Recover exact human-qualified contrasted anchors
+        run: |
+          mkdir -p selected-pair
+          gh run download "$SELECTED_PAIR_RUN_ID" --repo "${{ github.repository }}" -n "$SELECTED_PAIR_ARTIFACT" -D selected-pair
+          echo "$LUCIE_ANCHOR_SHA256  selected-pair/reference-lucie.wav" | sha256sum -c -
+          echo "$CLAIRE_ANCHOR_SHA256  selected-pair/reference-claire.wav" | sha256sum -c -
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('selected-pair/selection.json').read_text())
+          assert data['status']=='selected'
+          assert data['selected']['claire_id']=='claire-a'
+          assert data['selected']['lucie_id']=='lucie-b'
+          assert data['selected_anchor_sha256']['lucie']=='9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822'
+          PY
+      - name: Install pinned Qwen3 Base CPU environment
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
+          git -C qwen3-upstream checkout "$QWEN_REV"
+          test "$(git -C qwen3-upstream rev-parse HEAD)" = "$QWEN_REV"
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.13.0 torchaudio==2.11.0
+          python -m pip install --disable-pip-version-check -e ./qwen3-upstream
+          python -m pip check
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(repo_id=os.environ['BASE_MODEL_ID'],revision=os.environ['BASE_MODEL_REV'],local_dir='qwen3-base-model'))
+          PY
+          test -f qwen3-base-model/model.safetensors
+      - name: Render exactly two preregistered candidates
+        run: |
+          mkdir -p render/clips
+          python - <<'PY'
+          import hashlib, json, os, time
+          from pathlib import Path
+          import numpy as np
+          import soundfile as sf
+          from audio_engine.providers.qwen3_xvector_lab import Qwen3XVectorLabProvider
+          from audio_engine.voice_lab_rvc_lucie_dataset_pilot import CANDIDATES, pilot_spec, seed_for
+
+          shard=int(os.environ['SHARD']); start=2*shard; subset=CANDIDATES[start:start+2]
+          assert len(subset)==2
+          assert [cid for cid,_ in subset]==[f'n{start+1:02d}',f'n{start+2:02d}']
+          provider=Qwen3XVectorLabProvider(model_dir=Path('qwen3-base-model'),device='cpu')
+          prompt=provider.build_identity_prompt(Path('selected-pair/reference-lucie.wav'))
+          rows=[]
+          for cid,text in subset:
+              out=Path('render/clips')/f'{cid}.wav'; started=time.monotonic()
+              print(f'RENDER_START shard={shard} {cid}',flush=True)
+              provider.synthesize({'text':text,'language':'French','seed':seed_for(cid),'max_new_tokens':512},out,voice_clone_prompt=prompt)
+              y,sr=sf.read(out,dtype='float32',always_2d=False); y=np.asarray(y,dtype=np.float32)
+              if y.ndim==2:y=y.mean(axis=1)
+              duration=float(len(y)/sr); rms=float(np.sqrt(np.mean(y*y))) if len(y) else 0.0; peak=float(np.max(np.abs(y))) if len(y) else 0.0
+              technical=bool(len(y)>0 and np.isfinite(y).all() and rms>1e-5 and peak<1.0 and 1.5<=duration<=10.0)
+              row={'id':cid,'text':text,'seed':seed_for(cid),'file':f'clips/{cid}.wav','sha256':hashlib.sha256(out.read_bytes()).hexdigest(),'sample_rate':int(sr),'duration_seconds':duration,'rms':rms,'peak':peak,'technical_pass':technical,'render_seconds':time.monotonic()-started,'shard':shard}
+              rows.append(row); print(json.dumps(row,ensure_ascii=False),flush=True)
+          manifest=pilot_spec(); manifest.update({'status':'rendered-shard','shard':shard,'rows':rows,'rendered_count':2,'all_technical_pass':all(r['technical_pass'] for r in rows),'orchestration_only_recovery':True})
+          Path('render/render-manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rvc-lucie-neutral-pilot-shard-${{ matrix.shard }}
+          path: render/
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify:
+    needs: render
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rvc-lucie-neutral-pilot-shard-*
+          path: render-shards
+      - name: Verify complete fixed candidate set and recover anchors
+        run: |
+          mkdir -p selected-pair qualified/clips evidence
+          gh run download "$SELECTED_PAIR_RUN_ID" --repo "${{ github.repository }}" -n "$SELECTED_PAIR_ARTIFACT" -D selected-pair
+          echo "$LUCIE_ANCHOR_SHA256  selected-pair/reference-lucie.wav" | sha256sum -c -
+          echo "$CLAIRE_ANCHOR_SHA256  selected-pair/reference-claire.wav" | sha256sum -c -
+          python - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          manifests=list(Path('render-shards').rglob('render-manifest.json'))
+          assert len(manifests)==5, manifests
+          ids=[]
+          for p in manifests:
+              m=json.loads(p.read_text())
+              assert m['status']=='rendered-shard' and len(m['rows'])==2
+              for row in m['rows']:
+                  wav=p.parent/row['file']
+                  assert wav.is_file()
+                  assert hashlib.sha256(wav.read_bytes()).hexdigest()==row['sha256']
+                  ids.append(row['id'])
+          assert sorted(ids)==[f'n{i:02d}' for i in range(1,11)]
+          print('10/10 immutable shard WAVs recovered')
+          PY
+      - name: Install independent identity and French verifier stack
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchaudio==2.5.1
+          python -m pip install --disable-pip-version-check soundfile==0.12.1 onnxruntime==1.20.1 huggingface_hub==0.36.0 imageio-ffmpeg==0.6.0
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV"
+          git init WeSpeaker
+          git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git
+          git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV"
+          git -C WeSpeaker checkout --detach FETCH_HEAD
+          test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"
+          grep -qi "Apache License" WeSpeaker/LICENSE
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(repo_id=os.environ['WESPEAKER_MODEL_REPO'],revision=os.environ['WESPEAKER_MODEL_REV'],allow_patterns=['voxceleb_resnet34.onnx'],local_dir='weights/wespeaker'))
+          p=root/'voxceleb_resnet34.onnx'; got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest()); expected=(26534127,'9fea6516d7ad6bf0a76c7689f5a49b65d330fad6dde96c91bb4435ffbfe056a1')
+          if got!=expected: raise SystemExit(f'WeSpeaker mismatch {got}')
+          PY
+          FFMPEG_BIN="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"
+          mkdir -p "$HOME/.local/bin"; ln -sf "$FFMPEG_BIN" "$HOME/.local/bin/ffmpeg"; echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Machine-qualify immutable fixed candidate set
+        id: qualification
+        run: |
+          python - <<'PY'
+          import hashlib,importlib.util,json,os,re,shutil,unicodedata
+          from pathlib import Path
+          import numpy as np
+          import onnxruntime as ort
+          import whisper
+
+          manifests=list(Path('render-shards').rglob('render-manifest.json'))
+          rows_by_id={}; paths={}
+          for p in manifests:
+              m=json.loads(p.read_text())
+              for row in m['rows']:
+                  cid=row['id']
+                  if cid in rows_by_id: raise SystemExit(f'duplicate {cid}')
+                  rows_by_id[cid]=dict(row); paths[cid]=p.parent/row['file']
+          expected_ids={f'n{i:02d}' for i in range(1,11)}
+          if set(rows_by_id)!=expected_ids: raise SystemExit('candidate set mismatch')
+
+          spec=importlib.util.spec_from_file_location('ws','WeSpeaker/wespeaker/bin/infer_onnx.py'); mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+          session=ort.InferenceSession('weights/wespeaker/voxceleb_resnet34.onnx',providers=['CPUExecutionProvider'])
+          def emb(path):
+              feats=mod.compute_fbank(str(path)).unsqueeze(0).numpy(); e=np.asarray(session.run(['embs'],{'feats':feats})[0]).reshape(-1).astype(np.float64); return e/np.linalg.norm(e)
+          claire=emb(Path('selected-pair/reference-claire.wav')); lucie=emb(Path('selected-pair/reference-lucie.wav'))
+
+          model=whisper.load_model(os.environ['WHISPER_MODEL'],device='cpu')
+          mp=Path.home()/'.cache'/'whisper'/f"{os.environ['WHISPER_MODEL']}.pt"; sha=hashlib.sha256(mp.read_bytes()).hexdigest()
+          if sha!=os.environ['WHISPER_MODEL_SHA256']: raise SystemExit(f'Whisper model SHA mismatch {sha}')
+          def norm(text):
+              text=unicodedata.normalize('NFKC',text).lower().replace('’',"'"); text=re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+",' ',text); return ' '.join(text.split())
+          def edit(a,b):
+              p=list(range(len(b)+1))
+              for i,x in enumerate(a,1):
+                  c=[i]
+                  for j,y in enumerate(b,1): c.append(min(c[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+                  p=c
+              return p[-1]
+
+          accepted=[]; all_rows=[]; total_ref_words=0; total_errors=0
+          for cid in sorted(rows_by_id):
+              row=rows_by_id[cid]; path=paths[cid]
+              if hashlib.sha256(path.read_bytes()).hexdigest()!=row['sha256']: raise SystemExit(f'hash drift {cid}')
+              e=emb(path); sl=float(e@lucie); sc=float(e@claire); margin=sl-sc
+              tr=str(model.transcribe(str(path),language='fr',task='transcribe',fp16=False,temperature=0,condition_on_previous_text=False).get('text','')).strip()
+              ref=norm(row['text']).split(); hyp=norm(tr).split(); errors=edit(ref,hyp); wer=errors/max(1,len(ref))
+              identity_ok=margin>0.0; french_ok=wer<=0.20+1e-12; technical_ok=bool(row['technical_pass']); ok=technical_ok and identity_ok and french_ok
+              row.update({'sim_lucie':sl,'sim_claire':sc,'lucie_margin':margin,'identity_pass':identity_ok,'transcript':tr,'word_errors':errors,'reference_words':len(ref),'wer':wer,'french_pass':french_ok,'accepted':ok})
+              all_rows.append(row)
+              if ok:
+                  accepted.append(row); total_ref_words+=len(ref); total_errors+=errors; shutil.copy2(path,Path('qualified/clips')/f'{cid}.wav')
+              print(json.dumps(row,ensure_ascii=False),flush=True)
+          duration=sum(float(r['duration_seconds']) for r in accepted); agg_wer=total_errors/max(1,total_ref_words)
+          duration_ok=30.0<=duration<=60.0; aggregate_ok=agg_wer<=0.10+1e-12; pilot_ok=duration_ok and aggregate_ok
+          final={'schema':'rvc-lucie-neutral-dataset-pilot-qualified-v1','status':'pilot-pass' if pilot_ok else 'pilot-reject','candidate_count':10,'accepted_count':len(accepted),'accepted_ids':[r['id'] for r in accepted],'accepted_duration_seconds':duration,'aggregate_reference_words':total_ref_words,'aggregate_word_errors':total_errors,'aggregate_wer':agg_wer,'duration_gate_pass':duration_ok,'aggregate_french_pass':aggregate_ok,'rows':all_rows,'rules':{'clip':'technical AND WeSpeaker Lucie>Claire AND WER<=0.20','corpus':'30<=accepted seconds<=60 AND aggregate WER<=0.10','retry':False},'anchor_sha256':os.environ['LUCIE_ANCHOR_SHA256'],'training_authorized':False,'human_gate':False,'production_qualified':False,'parallel_recovery_only':True,'scientific_protocol_changed':False}
+          Path('qualified/manifest.json').write_text(json.dumps(final,ensure_ascii=False,indent=2),encoding='utf-8'); Path('evidence/final.json').write_text(json.dumps(final,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps({k:final[k] for k in ['status','accepted_count','accepted_duration_seconds','aggregate_wer','accepted_ids']},ensure_ascii=False,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f: f.write(f"eligible={'true' if pilot_ok else 'false'}\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rvc-lucie-neutral-dataset-pilot-qualified-parallel
+          path: |
+            qualified/
+            evidence/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Surface scientific verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('evidence/final.json')
+          if not p.is_file(): raise SystemExit('qualification produced no scientific evidence')
+          result=json.loads(p.read_text()); print('SCIENTIFIC_STATUS='+result['status'])
+          if result['status']!='pilot-pass': raise SystemExit(1)
+          PY
