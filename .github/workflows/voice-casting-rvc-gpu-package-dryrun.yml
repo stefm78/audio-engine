@@ -1,0 +1,115 @@
+name: Voice Casting RVC GPU Package Dry Run
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - src/audio_engine/voice_lab_rvc_gpu_package.py
+      - tests/test_voice_lab_rvc_gpu_package.py
+      - scripts/voice_lab_rvc_gpu_train.sh
+      - .github/workflows/voice-casting-rvc-gpu-package-dryrun.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  RVC_REV: 81eed5e8f68b6bed1789f682fe78cdd324495afc
+  PILOT_RUN_ID: "32939596171"
+  PILOT_ARTIFACT: rvc-lucie-neutral-dataset-pilot-qualified-parallel
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Validate package code and frozen contract
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m unittest tests.test_voice_lab_rvc_gpu_package -v
+          python -m py_compile src/audio_engine/voice_lab_rvc_gpu_package.py
+          bash -n scripts/voice_lab_rvc_gpu_train.sh
+          if command -v shellcheck >/dev/null; then shellcheck -x scripts/voice_lab_rvc_gpu_train.sh; fi
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from audio_engine.voice_lab_rvc_gpu_package import package_spec, expected_training_argv
+          Path('evidence').mkdir()
+          spec=package_spec()
+          assert spec['training']['batch_size']==4
+          assert spec['training']['total_epochs']==200
+          assert spec['training']['seed']==1234
+          assert spec['training']['parameter_tuning'] is False
+          assert spec['dataset_contract']['accepted_duration_seconds_min']==300.0
+          assert spec['dataset_contract']['aggregate_wer_max']==0.05
+          argv=expected_training_argv()
+          assert argv == ['train/train.py','-e','lucie_rvc_v2_32k','-sr','32k','-f0','1','-bs','4','-g','0','-te','200','-se','25','-pg','assets/pretrained_v2/f0G32k.pth','-pd','assets/pretrained_v2/f0D32k.pth','-l','1','-c','0','-sw','1','-v','v2']
+          Path('evidence/package-spec.json').write_text(json.dumps(spec,indent=2),encoding='utf-8')
+          print(json.dumps(spec,indent=2))
+          PY
+      - name: Verify exact pinned RVC source and CLI surface
+        run: |
+          git clone --filter=blob:none https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI.git RVC
+          git -C RVC checkout "$RVC_REV"
+          test "$(git -C RVC rev-parse HEAD)" = "$RVC_REV"
+          grep -qi "MIT License" RVC/LICENSE
+          python - <<'PY'
+          import subprocess
+          from audio_engine.voice_lab_rvc_gpu_package import RVC_CONFIG_BLOB,RVC_SOURCE_BLOBS
+          def blob(path): return subprocess.check_output(['git','-C','RVC','hash-object',path],text=True).strip()
+          assert blob('configs/v2/32k.json')==RVC_CONFIG_BLOB
+          for path,expected in RVC_SOURCE_BLOBS.items():
+              got=blob(path)
+              assert got==expected,(path,got,expected)
+          print('all pinned RVC source blobs PASS')
+          PY
+          grep -q 'train\\train.py -e "EXPERIMENT"' RVC/docs/en/cli.md
+          grep -q 'extract_f0.py cuda 1 0 0' RVC/docs/en/cli.md
+          grep -q 'extract_hubert_feature.py cuda:0 1 0 0' RVC/docs/en/cli.md
+          grep -q 'train\\train_index.py "EXPERIMENT" v2' RVC/docs/en/cli.md
+      - name: Prove pilot cannot accidentally authorize GPU training
+        run: |
+          mkdir -p pilot
+          gh run download "$PILOT_RUN_ID" --repo "${{ github.repository }}" -n "$PILOT_ARTIFACT" -D pilot
+          python - <<'PY'
+          import json, shutil, tempfile
+          from pathlib import Path
+          from audio_engine.voice_lab_rvc_gpu_package import validate_dataset_manifest
+          pilot=json.loads(Path('pilot/manifest.json').read_text())
+          assert pilot['status']=='pilot-pass'
+          assert abs(float(pilot['accepted_duration_seconds'])-51.12)<1e-6
+          try:
+              validate_dataset_manifest(Path('pilot/manifest.json'))
+          except ValueError as e:
+              print('EXPECTED_PILOT_REJECT_FOR_TRAINING',e)
+          else:
+              raise SystemExit('51-second pilot incorrectly authorized GPU training')
+          # Positive contract fixture proves the package can accept only the future qualified shape.
+          fixture={
+            'status':'dataset-pass','accepted_duration_seconds':305.0,
+            'aggregate_wer':0.01,'expansion_acceptance_rate':0.90,
+            'retries':0,'substitutions':0,
+          }
+          p=Path('evidence/dataset-contract-fixture.json');p.write_text(json.dumps(fixture,indent=2))
+          assert validate_dataset_manifest(p)['status']=='dataset-pass'
+          PY
+      - name: Verify GPU script has no hidden training knobs
+        run: |
+          grep -q -- '-bs 4 -g 0 -te 200 -se 25' scripts/voice_lab_rvc_gpu_train.sh
+          grep -q -- '-l 1 -c 0 -sw 1 -v v2' scripts/voice_lab_rvc_gpu_train.sh
+          grep -q 'GPU contract requires >=10 GiB VRAM' scripts/voice_lab_rvc_gpu_train.sh
+          grep -q 'extract_f0.py cuda 1 0 0' scripts/voice_lab_rvc_gpu_train.sh
+          grep -q 'extract_hubert_feature.py cuda:0 1 0 0' scripts/voice_lab_rvc_gpu_train.sh
+          grep -q 'machine_killer_evaluated.*False' scripts/voice_lab_rvc_gpu_train.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rvc-gpu-handover-package-dryrun
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
