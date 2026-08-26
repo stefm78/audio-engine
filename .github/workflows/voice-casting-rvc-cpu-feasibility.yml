@@ -1,0 +1,227 @@
+name: Voice Casting RVC CPU Learned Character Feasibility
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-rvc-cpu-feasibility.yml
+
+permissions:
+  contents: read
+
+env:
+  RVC_REV: 81eed5e8f68b6bed1789f682fe78cdd324495afc
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Preregister Steve/Linus feasibility contract
+        run: |
+          mkdir -p evidence
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          protocol={
+            "question":"Can the actual RVC v2/F0 generator+discriminator training core fit one learned character on the free CPU runner before any target dataset is generated?",
+            "rvc_revision":"81eed5e8f68b6bed1789f682fe78cdd324495afc",
+            "config":"configs/v2/32k.json",
+            "model":"SynthesizerTrnMs768NSFsid + MultiPeriodDiscriminator",
+            "benchmark_batches":[1,4],
+            "synthetic_frames":80,
+            "official_segment_samples":12800,
+            "training_core":"generator forward; discriminator forward/backward/update; generator adversarial+feature+KL backward/update",
+            "excluded_from_timing":["dataset IO","HuBERT extraction","F0 extraction","mel loss","checkpoint IO","index build"],
+            "dataset_budget_seconds":300,
+            "official_slice_seconds":3.7,
+            "quality_reference_epochs":200,
+            "max_core_training_hours":4.0,
+            "runner_total_budget_hours":6.0,
+            "decision":"cpu-feasible only if batch4 completes and projected 200-epoch core time for a 5-minute / 3.7-second-sliced dataset is <=4h; batch1 is diagnostic only",
+            "scientific_quality_claim":False,
+            "new_audio":False,
+            "training_dataset_generated":False,
+            "production_change":False,
+          }
+          Path('evidence/protocol.json').write_text(json.dumps(protocol,indent=2),encoding='utf-8')
+          print(json.dumps(protocol,indent=2))
+          PY
+
+      - name: Checkout exact RVC source and licenses
+        run: |
+          git init rvc
+          git -C rvc remote add origin https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI.git
+          git -C rvc fetch --depth=1 origin "$RVC_REV"
+          git -C rvc checkout --detach FETCH_HEAD
+          test "$(git -C rvc rev-parse HEAD)" = "$RVC_REV"
+          grep -qi "MIT License" rvc/LICENSE
+          test "$(git -C rvc hash-object configs/v2/32k.json)" = "09788b030b575bbc812319d18af15ec2815187be"
+          test "$(git -C rvc hash-object infer/module/models.py)" = "d0e612452671f7188e8a13431ac6a9eab29b4ee0"
+          test "$(git -C rvc hash-object train/losses.py)" = "aa7bd81cf596884a8b33e802ae49254d7810a860"
+
+      - name: Install minimal CPU runtime
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
+          python -m pip install --disable-pip-version-check numpy==1.26.4 scipy==1.14.1
+          python -m pip check
+
+      - name: Benchmark actual RVC v2 adversarial training core
+        id: bench
+        run: |
+          cd rvc
+          PYTHONPATH="$PWD" python - <<'PY'
+          import gc, json, math, os, resource, statistics, time, traceback
+          from pathlib import Path
+          import torch
+          from infer.module import commons
+          from infer.module.models import SynthesizerTrnMs768NSFsid, MultiPeriodDiscriminator
+          from train.losses import discriminator_loss, feature_loss, generator_loss, kl_loss
+
+          torch.set_num_threads(2)
+          torch.set_num_interop_threads(1)
+          torch.manual_seed(1234)
+          cfg=json.loads(Path('configs/v2/32k.json').read_text())
+          m=cfg['model']; tr=cfg['train']; data=cfg['data']
+
+          def rss_mb():
+              return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024.0
+
+          def build_models():
+              g=SynthesizerTrnMs768NSFsid(
+                  data['filter_length']//2+1,
+                  tr['segment_size']//data['hop_length'],
+                  **m,
+                  is_half=False,
+                  sr='32k',
+              )
+              d=MultiPeriodDiscriminator(m['use_spectral_norm'])
+              return g,d
+
+          def one_case(batch):
+              g,d=build_models();g.train();d.train()
+              opt_g=torch.optim.AdamW(g.parameters(),tr['learning_rate'],betas=tuple(tr['betas']),eps=tr['eps'])
+              opt_d=torch.optim.AdamW(d.parameters(),tr['learning_rate'],betas=tuple(tr['betas']),eps=tr['eps'])
+              T=80
+              phone=torch.randn(batch,T,768)
+              phone_lengths=torch.full((batch,),T,dtype=torch.long)
+              pitch=torch.randint(1,255,(batch,T),dtype=torch.long)
+              pitchf=torch.empty(batch,T).uniform_(90.0,320.0)
+              spec=torch.randn(batch,data['filter_length']//2+1,T)
+              spec_lengths=torch.full((batch,),T,dtype=torch.long)
+              wave=torch.randn(batch,1,T*data['hop_length'])*0.02
+              sid=torch.zeros(batch,dtype=torch.long)
+
+              def step(update=True):
+                  started=time.perf_counter()
+                  y_hat,ids_slice,x_mask,z_mask,(z,z_p,m_p,logs_p,m_q,logs_q)=g(phone,phone_lengths,pitch,pitchf,spec,spec_lengths,sid)
+                  real=commons.slice_segments(wave,ids_slice*data['hop_length'],tr['segment_size'])
+                  dr,dg,_,_=d(real,y_hat.detach())
+                  loss_d,*_=discriminator_loss(dr,dg)
+                  opt_d.zero_grad(set_to_none=True);loss_d.backward();opt_d.step()
+                  dr2,dg2,fmr,fmg=d(real,y_hat)
+                  loss_adv,_=generator_loss(dg2)
+                  loss_fm=feature_loss(fmr,fmg)
+                  loss_kl=kl_loss(z_p,logs_q,m_p,logs_p,z_mask)
+                  loss_g=loss_adv+loss_fm+loss_kl
+                  opt_g.zero_grad(set_to_none=True);loss_g.backward();opt_g.step()
+                  return time.perf_counter()-started,float(loss_d.detach()),float(loss_g.detach())
+
+              warm=step()
+              times=[];losses=[]
+              for _ in range(2):
+                  t,ld,lg=step();times.append(t);losses.append([ld,lg])
+              result={
+                  'batch_size':batch,
+                  'warmup_seconds':warm[0],
+                  'timed_seconds':times,
+                  'median_seconds_per_update':statistics.median(times),
+                  'seconds_per_sample_update':statistics.median(times)/batch,
+                  'losses':losses,
+                  'max_rss_mb':rss_mb(),
+                  'generator_parameters':sum(p.numel() for p in g.parameters()),
+                  'discriminator_parameters':sum(p.numel() for p in d.parameters()),
+                  'completed':True,
+              }
+              del g,d,opt_g,opt_d,phone,pitch,pitchf,spec,wave
+              gc.collect()
+              return result
+
+          results={}
+          for batch in (1,4):
+              try:
+                  print(f'BENCH_START batch={batch}',flush=True)
+                  results[str(batch)]=one_case(batch)
+                  print(json.dumps(results[str(batch)],indent=2),flush=True)
+              except Exception as exc:
+                  results[str(batch)]={'batch_size':batch,'completed':False,'error':repr(exc),'traceback':traceback.format_exc(),'max_rss_mb':rss_mb()}
+                  print(json.dumps(results[str(batch)],indent=2),flush=True)
+                  if batch==1:
+                      break
+
+          # Budget is derived from RVC's own high-quality minimum: 5 min, official ~3.7 s slicing, 200 epochs.
+          segments=math.ceil(300.0/3.7)
+          b4=results.get('4',{})
+          if b4.get('completed'):
+              steps_per_epoch=math.ceil(segments/4)
+              total_steps=steps_per_epoch*200
+              projected_seconds=total_steps*float(b4['median_seconds_per_update'])
+              feasible=projected_seconds<=4*3600
+          else:
+              steps_per_epoch=math.ceil(segments/4);total_steps=steps_per_epoch*200;projected_seconds=None;feasible=False
+          final={
+              'status':'cpu-feasible' if feasible else 'cpu-not-feasible',
+              'rvc_revision':os.environ.get('RVC_REV','81eed5e8f68b6bed1789f682fe78cdd324495afc'),
+              'config_sha':'09788b030b575bbc812319d18af15ec2815187be',
+              'benchmarks':results,
+              'projection':{
+                  'dataset_seconds':300.0,
+                  'slice_seconds':3.7,
+                  'estimated_segments':segments,
+                  'batch_size':4,
+                  'steps_per_epoch':steps_per_epoch,
+                  'epochs':200,
+                  'total_updates':total_steps,
+                  'projected_core_seconds':projected_seconds,
+                  'projected_core_hours':None if projected_seconds is None else projected_seconds/3600,
+                  'budget_core_hours':4.0,
+              },
+              'decision_rule':'batch4 actual G+D forward/backward must complete and projected 200-epoch core <=4h',
+              'quality_claim':False,
+              'next_if_pass':'authorize bounded neutral target-dataset generation for one character',
+              'next_if_fail':'stop CPU training path and prepare GPU compute handover or another structurally learned model',
+          }
+          Path('../evidence').mkdir(exist_ok=True)
+          Path('../evidence/benchmark.json').write_text(json.dumps(final,indent=2),encoding='utf-8')
+          print(json.dumps(final,indent=2),flush=True)
+          PY
+
+      - name: Upload feasibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rvc-cpu-learned-character-feasibility
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface Linus feasibility verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('evidence/benchmark.json')
+          if not p.is_file(): raise SystemExit('benchmark produced no evidence')
+          r=json.loads(p.read_text());print('SEMANTIC_STATUS='+r['status'])
+          if r['status']!='cpu-feasible': raise SystemExit(1)
+          PY
