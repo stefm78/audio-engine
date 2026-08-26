@@ -1,0 +1,280 @@
+name: Voice Casting CosyVoice3 CPU Resource Preflight
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-cosyvoice3-cpu-resource-preflight.yml
+
+permissions:
+  contents: read
+
+env:
+  COSYVOICE_REPO: https://github.com/QwenAudio/CosyVoice.git
+  COSYVOICE_REV: 074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc
+  MODEL_REPO: FunAudioLLM/Fun-CosyVoice3-0.5B-2512
+  MODEL_DIR: ${{ github.workspace }}/weights/Fun-CosyVoice3-0.5B-2512
+  TOKENIZERS_PARALLELISM: "false"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  resource-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Freeze resource-only contract before execution
+        run: |
+          mkdir -p evidence weights upstream
+          python - <<'PY'
+          import json, os, platform
+          from pathlib import Path
+          contract = {
+              "purpose": "resource-only-preflight",
+              "architecture": "Fun-CosyVoice3-0.5B-2512 instruct2 zero-shot clone",
+              "scientific_audio_render": False,
+              "scientific_source_audio_used": False,
+              "upstream_repo": os.environ["COSYVOICE_REPO"],
+              "upstream_revision": os.environ["COSYVOICE_REV"],
+              "model_repo": os.environ["MODEL_REPO"],
+              "model_revision_policy": "resolve HF main once inside this non-scientific preflight, record exact commit, freeze it for any later science",
+              "runtime": "GitHub-hosted ubuntu-24.04 CPU only",
+              "python": platform.python_version(),
+              "cpu_render_probe": {
+                  "text": "Bonjour.",
+                  "instruction": "You are a helpful assistant. Speak with calm, neutral delivery.<|endofprompt|>",
+                  "prompt_audio": "upstream asset/zero_shot_prompt.wav",
+                  "seed": 1986,
+                  "meaning": "execution/resource proof only; no identity, French-quality or emotion claim"
+              },
+              "science_authorized_next_rule": "only if exact model load and one full CPU instruct2 execution probe complete successfully"
+          }
+          Path("evidence/contract.json").write_text(json.dumps(contract, indent=2), encoding="utf-8")
+          PY
+
+      - name: Free runner disk
+        id: disk
+        continue-on-error: true
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          df -h /
+
+      - name: Checkout exact upstream and submodule
+        id: upstream
+        continue-on-error: true
+        run: |
+          git clone --filter=blob:none "$COSYVOICE_REPO" upstream/CosyVoice
+          git -C upstream/CosyVoice checkout --detach "$COSYVOICE_REV"
+          git -C upstream/CosyVoice submodule update --init --recursive
+          test "$(git -C upstream/CosyVoice rev-parse HEAD)" = "$COSYVOICE_REV"
+          git -C upstream/CosyVoice submodule status --recursive | tee evidence/submodules.txt
+          cp upstream/CosyVoice/LICENSE evidence/upstream-LICENSE
+
+      - name: Install inference-only CPU runtime
+        id: deps
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg sox libsox-dev
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.3.1 torchaudio==2.3.1
+          python - <<'PY'
+          from pathlib import Path
+          src = Path('upstream/CosyVoice/requirements.txt').read_text().splitlines()
+          blocked = (
+              '--extra-index-url', 'deepspeed==', 'onnxruntime-gpu==',
+              'tensorrt-cu12', 'torch==', 'torchaudio=='
+          )
+          kept = [line for line in src if line.strip() and not line.strip().startswith(blocked)]
+          Path('/tmp/cosyvoice-cpu-requirements.txt').write_text('\n'.join(kept) + '\n')
+          print('\n'.join(kept))
+          PY
+          python -m pip install --disable-pip-version-check -r /tmp/cosyvoice-cpu-requirements.txt
+          python -m pip install --disable-pip-version-check onnxruntime==1.18.0 huggingface-hub==0.36.2 psutil==6.1.1
+          python -m pip check
+          python - <<'PY'
+          import json, torch, torchaudio, onnxruntime, psutil
+          from pathlib import Path
+          r = {
+              'torch': torch.__version__,
+              'torchaudio': torchaudio.__version__,
+              'onnxruntime': onnxruntime.__version__,
+              'cuda_available': torch.cuda.is_available(),
+              'cpu_count': psutil.cpu_count(logical=True),
+              'ram_total_bytes': psutil.virtual_memory().total,
+          }
+          assert r['cuda_available'] is False
+          Path('evidence/runtime.json').write_text(json.dumps(r, indent=2))
+          print(json.dumps(r, indent=2))
+          PY
+
+      - name: Resolve and download exact public model snapshot
+        id: model
+        continue-on-error: true
+        run: |
+          MODEL_REV="$(git ls-remote "https://huggingface.co/$MODEL_REPO" HEAD | awk '{print $1}')"
+          test -n "$MODEL_REV"
+          echo "$MODEL_REV" | tee evidence/model_revision.txt
+          echo "MODEL_REV=$MODEL_REV" >> "$GITHUB_ENV"
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root = Path(snapshot_download(
+              repo_id=os.environ['MODEL_REPO'],
+              revision=os.environ['MODEL_REV'],
+              local_dir=os.environ['MODEL_DIR'],
+          ))
+          files=[]; total=0
+          for p in sorted(root.rglob('*')):
+              if not p.is_file() or '.cache' in p.parts:
+                  continue
+              h=hashlib.sha256()
+              with p.open('rb') as f:
+                  for chunk in iter(lambda:f.read(8*1024*1024), b''):
+                      h.update(chunk)
+              size=p.stat().st_size; total += size
+              files.append({'path':str(p.relative_to(root)), 'bytes':size, 'sha256':h.hexdigest()})
+          out={'repo':os.environ['MODEL_REPO'],'revision':os.environ['MODEL_REV'],'total_bytes':total,'files':files}
+          Path('evidence/model_manifest.json').write_text(json.dumps(out,indent=2))
+          print('MODEL_FILES',len(files),'TOTAL_BYTES',total,'REV',os.environ['MODEL_REV'])
+          PY
+
+      - name: Load complete CosyVoice3 stack on CPU
+        id: load
+        continue-on-error: true
+        working-directory: upstream/CosyVoice
+        run: |
+          export PYTHONPATH="$PWD/third_party/Matcha-TTS:$PWD"
+          python - <<'PY'
+          import json, os, resource, sys, time, torch
+          from pathlib import Path
+          from cosyvoice.cli.cosyvoice import AutoModel
+          t=time.time()
+          model=AutoModel(model_dir=os.environ['MODEL_DIR'], load_trt=False, load_vllm=False, fp16=False)
+          wall=time.time()-t
+          dev=str(model.model.device)
+          out={
+              'status':'pass',
+              'device':dev,
+              'sample_rate':model.sample_rate,
+              'load_wall_seconds':wall,
+              'max_rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+              'cuda_available':torch.cuda.is_available(),
+              'model_class':model.__class__.__name__,
+          }
+          assert out['cuda_available'] is False
+          assert dev.startswith('cpu')
+          assert model.sample_rate == 24000
+          Path('../../evidence/load.json').write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Full CPU instruct2 execution probe — non-scientific
+        id: smoke
+        continue-on-error: true
+        working-directory: upstream/CosyVoice
+        run: |
+          export PYTHONPATH="$PWD/third_party/Matcha-TTS:$PWD"
+          python - <<'PY'
+          import json, os, resource, time
+          from pathlib import Path
+          import numpy as np, soundfile as sf, torch
+          from cosyvoice.cli.cosyvoice import AutoModel
+          from cosyvoice.utils.common import set_all_random_seed
+          model=AutoModel(model_dir=os.environ['MODEL_DIR'], load_trt=False, load_vllm=False, fp16=False)
+          set_all_random_seed(1986)
+          text='Bonjour.'
+          instruction='You are a helpful assistant. Speak with calm, neutral delivery.<|endofprompt|>'
+          prompt='./asset/zero_shot_prompt.wav'
+          t=time.time(); pieces=[]
+          for item in model.inference_instruct2(text, instruction, prompt, stream=False, speed=1.0):
+              pieces.append(item['tts_speech'].detach().cpu())
+          wall=time.time()-t
+          if not pieces:
+              raise RuntimeError('CosyVoice3 produced no speech pieces')
+          wav=torch.cat(pieces,dim=1).squeeze(0).numpy().astype(np.float32)
+          sr=model.sample_rate
+          finite=bool(np.isfinite(wav).all()); rms=float(np.sqrt(np.mean(wav*wav))); duration=len(wav)/sr
+          ok=sr==24000 and finite and rms>1e-5 and duration>0
+          sf.write('../../evidence/resource-smoke.wav',wav,sr)
+          out={
+              'status':'pass' if ok else 'reject',
+              'resource_probe_only':True,
+              'scientific_claim':False,
+              'text':text,
+              'instruction':instruction,
+              'seed':1986,
+              'sample_rate':sr,
+              'duration_seconds':duration,
+              'rms':rms,
+              'finite':finite,
+              'render_wall_seconds':wall,
+              'max_rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+              'piece_count':len(pieces),
+          }
+          Path('../../evidence/smoke.json').write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          if not ok: raise SystemExit('resource probe technical reject')
+          PY
+
+      - name: Record authoritative resource verdict
+        if: always()
+        env:
+          UPSTREAM_OUTCOME: ${{ steps.upstream.outcome }}
+          DEPS_OUTCOME: ${{ steps.deps.outcome }}
+          MODEL_OUTCOME: ${{ steps.model.outcome }}
+          LOAD_OUTCOME: ${{ steps.load.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          outcomes={k.lower().replace('_outcome',''):os.environ[k] for k in ['UPSTREAM_OUTCOME','DEPS_OUTCOME','MODEL_OUTCOME','LOAD_OUTCOME','SMOKE_OUTCOME']}
+          smoke=None
+          if Path('evidence/smoke.json').exists(): smoke=json.loads(Path('evidence/smoke.json').read_text())
+          ok=all(v=='success' for v in outcomes.values()) and smoke is not None and smoke.get('status')=='pass'
+          rev=Path('evidence/model_revision.txt').read_text().strip() if Path('evidence/model_revision.txt').exists() else None
+          out={
+              'status':'resource-preflight-pass' if ok else 'resource-preflight-fail',
+              'architecture':'Fun-CosyVoice3-0.5B-2512 CPU instruct2 zero-shot clone',
+              'upstream_revision':os.environ['COSYVOICE_REV'],
+              'model_revision':rev,
+              'outcomes':outcomes,
+              'science_authorized_next':bool(ok),
+              'next_science_if_pass':'one immutable Claire-panic clone+instruct killer; no parameter search',
+              'production':False,
+          }
+          Path('evidence/final.json').write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Upload resource evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosyvoice3-cpu-resource-preflight
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface resource verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('evidence/final.json').read_text())['status']
+          if s!='resource-preflight-pass': raise SystemExit(f'verdict: {s}')
+          print('RESOURCE_PREFLIGHT_PASS_SCIENCE_AUTHORIZED_NEXT')
+          PY
