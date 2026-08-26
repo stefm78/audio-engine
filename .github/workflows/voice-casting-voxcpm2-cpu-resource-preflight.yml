@@ -1,0 +1,247 @@
+name: Voice Casting VoxCPM2 CPU Resource Preflight
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-voxcpm2-cpu-resource-preflight.yml
+  push:
+    branches:
+      - lab/voxcpm2-cpu-resource-preflight
+    paths:
+      - .github/workflows/voice-casting-voxcpm2-cpu-resource-preflight.yml
+
+permissions:
+  contents: read
+
+env:
+  VOXCPM_REPO: https://github.com/OpenBMB/VoxCPM.git
+  VOXCPM_REV: f5a1c6a6b901bc732e20f0d59a369f6829ad717a
+  MODEL_REPO: openbmb/VoxCPM2
+  MODEL_DIR: ${{ github.workspace }}/weights/VoxCPM2
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  resource-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Freeze resource-only contract before execution
+        run: |
+          mkdir -p evidence weights upstream
+          python - <<'PY'
+          import json, os, platform
+          from pathlib import Path
+          contract = {
+            'purpose': 'resource-only-preflight',
+            'architecture': 'VoxCPM2 Basic Controllable Cloning',
+            'scientific_audio_render': False,
+            'scientific_source_audio_used': False,
+            'upstream_repo': os.environ['VOXCPM_REPO'],
+            'upstream_revision': os.environ['VOXCPM_REV'],
+            'model_repo': os.environ['MODEL_REPO'],
+            'model_revision_rule': 'resolve HF main exactly once in this resource-only preflight, then download and hash that exact revision; later science must freeze it',
+            'runtime': 'GitHub-hosted ubuntu-24.04 CPU only',
+            'python': platform.python_version(),
+            'load': {'device':'cpu','load_denoiser':False,'optimize':False},
+            'execution_probe': {
+              'text': '(calm, neutral delivery)Hello.',
+              'reference_audio': 'exact upstream examples/reference_speaker.wav',
+              'cfg_value': 2.0,
+              'inference_timesteps': 10,
+              'normalize': False,
+              'denoise': False,
+              'retry_badcase': False,
+              'seed': 1986,
+              'meaning': 'execution/resource proof only; no identity, French-quality, or emotion claim'
+            },
+            'science_authorized_next_rule': 'only if exact model snapshot loads on CPU and one full Basic Controllable Cloning execution succeeds with finite non-silent audio'
+          }
+          Path('evidence/contract.json').write_text(json.dumps(contract, indent=2), encoding='utf-8')
+          print(json.dumps(contract, indent=2))
+          PY
+
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          df -h /
+
+      - name: Checkout exact upstream and verify public reference
+        id: upstream
+        continue-on-error: true
+        run: |
+          git clone --filter=blob:none "$VOXCPM_REPO" upstream/VoxCPM
+          git -C upstream/VoxCPM checkout --detach "$VOXCPM_REV"
+          test "$(git -C upstream/VoxCPM rev-parse HEAD)" = "$VOXCPM_REV"
+          test -s upstream/VoxCPM/examples/reference_speaker.wav
+          cp upstream/VoxCPM/LICENSE evidence/upstream-LICENSE
+          sha256sum upstream/VoxCPM/examples/reference_speaker.wav | tee evidence/reference_sha256.txt
+
+      - name: Install CPU inference runtime
+        id: deps
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg sox libsndfile1
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchaudio==2.7.1
+          python -m pip install --disable-pip-version-check -e upstream/VoxCPM
+          python -m pip check
+          python - <<'PY'
+          import json, platform, psutil, torch, torchaudio
+          from pathlib import Path
+          r = {
+            'python': platform.python_version(),
+            'torch': torch.__version__,
+            'torchaudio': torchaudio.__version__,
+            'cuda_available': torch.cuda.is_available(),
+            'cpu_count': psutil.cpu_count(logical=True),
+            'ram_total_bytes': psutil.virtual_memory().total,
+          }
+          assert not r['cuda_available']
+          Path('evidence/runtime.json').write_text(json.dumps(r, indent=2))
+          print(json.dumps(r, indent=2))
+          PY
+
+      - name: Resolve one exact public model revision and hash snapshot
+        id: model
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          from huggingface_hub import HfApi, snapshot_download
+          api = HfApi()
+          rev = api.model_info(os.environ['MODEL_REPO']).sha
+          if not rev or len(rev) != 40:
+              raise SystemExit(f'unexpected HF revision: {rev!r}')
+          Path('evidence/model_revision.txt').write_text(rev + '\n')
+          root = Path(snapshot_download(repo_id=os.environ['MODEL_REPO'], revision=rev, local_dir=os.environ['MODEL_DIR']))
+          files=[]; total=0
+          for p in sorted(root.rglob('*')):
+              if not p.is_file() or '.cache' in p.parts:
+                  continue
+              h=hashlib.sha256(); size=p.stat().st_size; total += size
+              with p.open('rb') as f:
+                  for chunk in iter(lambda:f.read(8*1024*1024), b''):
+                      h.update(chunk)
+              files.append({'path':str(p.relative_to(root)), 'bytes':size, 'sha256':h.hexdigest()})
+          out={'repo':os.environ['MODEL_REPO'],'revision':rev,'total_bytes':total,'files':files}
+          raw=json.dumps(out, indent=2).encode()
+          Path('evidence/model_manifest.json').write_bytes(raw)
+          Path('evidence/model_manifest_sha256.txt').write_text(hashlib.sha256(raw).hexdigest()+'\n')
+          print('MODEL_REV', rev, 'FILES', len(files), 'TOTAL_BYTES', total, 'MANIFEST_SHA256', hashlib.sha256(raw).hexdigest())
+          PY
+
+      - name: Load complete VoxCPM2 stack on CPU
+        id: load
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import json, os, resource, time, torch
+          from pathlib import Path
+          from voxcpm import VoxCPM
+          t=time.time()
+          model=VoxCPM(voxcpm_model_path=os.environ['MODEL_DIR'], enable_denoiser=False, optimize=False, device='cpu')
+          wall=time.time()-t
+          dev=str(model.tts_model.device) if hasattr(model.tts_model,'device') else 'cpu-explicit-constructor'
+          out={
+            'status':'pass', 'device':dev, 'load_wall_seconds':wall,
+            'max_rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            'cuda_available':torch.cuda.is_available(), 'model_class':model.tts_model.__class__.__name__
+          }
+          assert not out['cuda_available']
+          Path('evidence/load.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          PY
+
+      - name: Full CPU controllable-clone execution probe — non-scientific
+        id: smoke
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, resource, time
+          from pathlib import Path
+          import numpy as np, soundfile as sf, torch
+          from voxcpm import VoxCPM
+          model=VoxCPM(voxcpm_model_path=os.environ['MODEL_DIR'], enable_denoiser=False, optimize=False, device='cpu')
+          text='(calm, neutral delivery)Hello.'
+          ref='upstream/VoxCPM/examples/reference_speaker.wav'
+          started=time.time()
+          wav=model.generate(
+              text=text,
+              reference_wav_path=ref,
+              cfg_value=2.0,
+              inference_timesteps=10,
+              normalize=False,
+              denoise=False,
+              retry_badcase=False,
+              seed=1986,
+          )
+          wall=time.time()-started
+          y=np.asarray(wav,dtype=np.float32).reshape(-1)
+          sr=48000
+          finite=bool(np.isfinite(y).all()); rms=float(np.sqrt(np.mean(y*y))) if y.size else 0.0; duration=float(y.size/sr)
+          ok=y.size>0 and finite and rms>1e-5 and duration>0
+          outwav=Path('evidence/resource-smoke.wav'); sf.write(outwav,y,sr)
+          out={
+            'status':'pass' if ok else 'reject', 'resource_probe_only':True, 'scientific_claim':False,
+            'text':text, 'reference_audio':ref, 'cfg_value':2.0, 'inference_timesteps':10,
+            'normalize':False, 'denoise':False, 'retry_badcase':False, 'seed':1986,
+            'sample_rate':sr, 'samples':int(y.size), 'duration_seconds':duration, 'rms':rms, 'finite':finite,
+            'render_wall_seconds':wall, 'max_rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            'output_sha256':hashlib.sha256(outwav.read_bytes()).hexdigest(), 'cuda_available':torch.cuda.is_available()
+          }
+          Path('evidence/smoke.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          if not ok: raise SystemExit('resource smoke technical reject')
+          PY
+
+      - name: Record authoritative resource verdict
+        if: always()
+        env:
+          UPSTREAM_OUTCOME: ${{ steps.upstream.outcome }}
+          DEPS_OUTCOME: ${{ steps.deps.outcome }}
+          MODEL_OUTCOME: ${{ steps.model.outcome }}
+          LOAD_OUTCOME: ${{ steps.load.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          outcomes={k.lower().replace('_outcome',''):os.environ[k] for k in ['UPSTREAM_OUTCOME','DEPS_OUTCOME','MODEL_OUTCOME','LOAD_OUTCOME','SMOKE_OUTCOME']}
+          smoke=json.loads(Path('evidence/smoke.json').read_text()) if Path('evidence/smoke.json').exists() else None
+          ok=all(v=='success' for v in outcomes.values()) and smoke is not None and smoke.get('status')=='pass'
+          out={'status':'resource-preflight-pass' if ok else 'resource-preflight-fail','outcomes':outcomes,'science_authorized_next':bool(ok),'production':False}
+          Path('evidence/final.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          PY
+
+      - name: Upload resource evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voxcpm2-cpu-resource-preflight
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface resource verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          status=json.loads(Path('evidence/final.json').read_text())['status']
+          if status!='resource-preflight-pass':
+              raise SystemExit(f'verdict: {status}')
+          print('RESOURCE_PREFLIGHT_PASS')
+          PY
