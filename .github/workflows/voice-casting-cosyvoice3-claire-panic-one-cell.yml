@@ -1,0 +1,351 @@
+name: Voice Casting CosyVoice3 Claire Panic One-Cell
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-cosyvoice3-claire-panic-one-cell.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  COSYVOICE_REPO: https://github.com/QwenAudio/CosyVoice.git
+  COSYVOICE_REV: 074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc
+  MATCHA_REV: dd9105b34bf2be2230f4aa1e4769fb586a3c824e
+  MODEL_REPO: FunAudioLLM/Fun-CosyVoice3-0.5B-2512
+  MODEL_REV: 29e01c4e8d000f4bcd70751be16fa94bf3d85a18
+  MODEL_MANIFEST_SHA256: 7869bdfc4d50036c6a9a87dcd16fc979e1f37b9ffc007172264cea9c102282e8
+  MODEL_DIR: ${{ github.workspace }}/weights/Fun-CosyVoice3-0.5B-2512
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  SUPERB_REPO: superb/wav2vec2-base-superb-er
+  SUPERB_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  TTS_TEXT: "Vite ! Ils arrivent ! Fermez la porte !"
+  INSTRUCTION: "You are a helpful assistant. Please say this sentence with intense, urgent panic and fear.<|endofprompt|>"
+  SEED: "0"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  TOKENIZERS_PARALLELISM: "false"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  one-cell:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Freeze scientific contract before execution
+        run: |
+          mkdir -p evidence/clips source weights upstream
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          contract={
+            'architecture':'Fun-CosyVoice3-0.5B-2512 inference_instruct2 zero-shot clone',
+            'cell':'claire--panic',
+            'target_identity':'Claire',
+            'text':os.environ['TTS_TEXT'],
+            'instruction':os.environ['INSTRUCTION'],
+            'seed':int(os.environ['SEED']),
+            'speed':1.0,
+            'stream':False,
+            'device':'cpu',
+            'fp16':False,
+            'text_frontend':False,
+            'prompt_audio':'immutable source/reference-claire.wav',
+            'source_panic':'immutable source/clips/claire--panic.wav',
+            'source_sadness':'immutable source/clips/claire--sadness-contained.wav',
+            'upstream_revision':os.environ['COSYVOICE_REV'],
+            'model_revision':os.environ['MODEL_REV'],
+            'model_manifest_sha256':os.environ['MODEL_MANIFEST_SHA256'],
+            'training':False,'finetuning':False,'retry':False,'substitution':False,'reference_search':False,'parameter_search':False,'tuning':False,
+            'gate_order':['technical','independent WeSpeaker identity Claire > Lucie','Whisper Small French WER <= immutable source WER 0.5','source-relative SUPERB panic > contained sadness'],
+            'human_gate':'only after all machine gates pass',
+            'production':False
+          }
+          Path('evidence/contract.json').write_text(json.dumps(contract,indent=2),encoding='utf-8')
+          print(json.dumps(contract,indent=2))
+          PY
+
+      - name: Recover exact immutable source and references
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          sudo docker system prune -af || true
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          cat > source-hashes.txt <<'EOF'
+          3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe  source/reference-claire.wav
+          9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822  source/reference-lucie.wav
+          ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f  source/clips/claire--panic.wav
+          d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84  source/clips/claire--sadness-contained.wav
+          EOF
+          sha256sum -c source-hashes.txt
+
+      - name: Checkout exact CosyVoice upstream
+        run: |
+          git clone --filter=blob:none "$COSYVOICE_REPO" upstream/CosyVoice
+          git -C upstream/CosyVoice checkout --detach "$COSYVOICE_REV"
+          git -C upstream/CosyVoice submodule update --init --recursive
+          test "$(git -C upstream/CosyVoice rev-parse HEAD)" = "$COSYVOICE_REV"
+          test "$(git -C upstream/CosyVoice/third_party/Matcha-TTS rev-parse HEAD)" = "$MATCHA_REV"
+          cp upstream/CosyVoice/LICENSE evidence/upstream-LICENSE
+
+      - name: Install exact proven CPU inference runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg sox libsox-dev
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.3.1 torchaudio==2.3.1
+          python - <<'PY'
+          from pathlib import Path
+          src=Path('upstream/CosyVoice/requirements.txt').read_text().splitlines()
+          blocked=(
+            '--extra-index-url','deepspeed==','onnxruntime-gpu==','tensorrt-cu12',
+            'torch==','torchaudio==','openai-whisper=='
+          )
+          kept=[x for x in src if x.strip() and not x.strip().startswith(blocked)]
+          Path('/tmp/cosyvoice-cpu-requirements.txt').write_text('\n'.join(kept)+'\n')
+          PY
+          python -m pip install --disable-pip-version-check -r /tmp/cosyvoice-cpu-requirements.txt
+          python -m pip install --disable-pip-version-check onnxruntime==1.18.0 huggingface-hub==0.36.2 psutil==6.1.1 tqdm
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV"
+          python -m pip check
+          python - <<'PY'
+          import torch, torchaudio, onnxruntime, whisper
+          assert torch.__version__=='2.3.1+cpu'
+          assert torchaudio.__version__=='2.3.1+cpu'
+          assert onnxruntime.__version__=='1.18.0'
+          assert not torch.cuda.is_available()
+          print('CPU_RUNTIME_PROVEN')
+          PY
+
+      - name: Download and verify exact frozen model snapshot
+        run: |
+          python - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(repo_id=os.environ['MODEL_REPO'],revision=os.environ['MODEL_REV'],local_dir=os.environ['MODEL_DIR']))
+          files=[]; total=0
+          for p in sorted(root.rglob('*')):
+              if not p.is_file() or '.cache' in p.parts: continue
+              h=hashlib.sha256(); size=p.stat().st_size; total+=size
+              with p.open('rb') as f:
+                  for chunk in iter(lambda:f.read(8*1024*1024),b''): h.update(chunk)
+              files.append({'path':str(p.relative_to(root)),'bytes':size,'sha256':h.hexdigest()})
+          out={'repo':os.environ['MODEL_REPO'],'revision':os.environ['MODEL_REV'],'total_bytes':total,'files':files}
+          raw=json.dumps(out,indent=2).encode(); manifest_sha=hashlib.sha256(raw).hexdigest()
+          Path('evidence/model_manifest.json').write_bytes(raw)
+          if total!=9747516745 or len(files)!=20 or manifest_sha!=os.environ['MODEL_MANIFEST_SHA256']:
+              raise SystemExit({'files':len(files),'bytes':total,'manifest_sha256':manifest_sha})
+          print('MODEL_SNAPSHOT_EXACT',len(files),total,manifest_sha)
+          PY
+
+      - name: Render exactly one Claire panic cell
+        id: render
+        working-directory: upstream/CosyVoice
+        run: |
+          export PYTHONPATH="$PWD/third_party/Matcha-TTS:$PWD"
+          python - <<'PY'
+          import hashlib,json,os,random,resource,time
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from cosyvoice.cli.cosyvoice import AutoModel
+          from cosyvoice.utils.common import set_all_random_seed
+          seed=int(os.environ['SEED'])
+          random.seed(seed); np.random.seed(seed); torch.manual_seed(seed); set_all_random_seed(seed); torch.set_num_threads(2)
+          model=AutoModel(model_dir=os.environ['MODEL_DIR'],load_trt=False,load_vllm=False,fp16=False)
+          assert str(model.model.device).startswith('cpu') and model.sample_rate==24000 and not torch.cuda.is_available()
+          set_all_random_seed(seed)
+          prompt='../../source/reference-claire.wav'; pieces=[]; started=time.perf_counter()
+          for item in model.inference_instruct2(os.environ['TTS_TEXT'],os.environ['INSTRUCTION'],prompt,stream=False,speed=1.0,text_frontend=False):
+              pieces.append(item['tts_speech'].detach().cpu())
+          elapsed=time.perf_counter()-started
+          if not pieces: raise RuntimeError('no speech pieces')
+          wav=torch.cat(pieces,dim=1).squeeze(0).numpy().astype(np.float32)
+          out=Path('../../evidence/clips/claire--panic.wav'); sf.write(out,wav,model.sample_rate)
+          r={'status':'rendered','cell':'claire--panic','target_identity':'Claire','text':os.environ['TTS_TEXT'],'instruction':os.environ['INSTRUCTION'],
+             'seed':seed,'speed':1.0,'stream':False,'text_frontend':False,'device':'cpu','sample_rate':model.sample_rate,
+             'elapsed_seconds':elapsed,'max_rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,'piece_count':len(pieces),
+             'output_sha256':hashlib.sha256(out.read_bytes()).hexdigest(),'training':False,'finetuning':False,'retry':False,'substitution':False,'tuning':False}
+          Path('../../evidence/render.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          PY
+
+      - name: Technical integrity gate
+        id: technical
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf
+          y,sr=sf.read('evidence/clips/claire--panic.wav',dtype='float32'); s,ssr=sf.read('source/clips/claire--panic.wav',dtype='float32')
+          if y.ndim==2:y=y.mean(1)
+          if s.ndim==2:s=s.mean(1)
+          duration=len(y)/sr; source_duration=len(s)/ssr; ratio=duration/source_duration; rms=float(np.sqrt(np.mean(y*y))); finite=bool(np.isfinite(y).all())
+          ok=sr==24000 and finite and rms>1e-5 and .5<=ratio<=1.5
+          r={'status':'pass' if ok else 'reject','sr':sr,'duration':duration,'source_duration':source_duration,'duration_ratio':ratio,'rms':rms,'finite':finite,'rule':'24000Hz finite non-silent duration 0.5x..1.5x immutable source'}
+          Path('evidence/technical.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned independent WeSpeaker
+        if: steps.technical.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check onnxruntime==1.20.1
+          git init WeSpeaker
+          git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git
+          git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV"
+          git -C WeSpeaker checkout --detach FETCH_HEAD
+          test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"
+          mkdir -p weights/wespeaker
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          p=Path(snapshot_download(repo_id=os.environ['WESPEAKER_MODEL_REPO'],revision=os.environ['WESPEAKER_MODEL_REV'],allow_patterns=['voxceleb_resnet34.onnx'],local_dir='weights/wespeaker'))/'voxceleb_resnet34.onnx'
+          got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
+          if got!=(26534127,'9fea6516d7ad6bf0a76c7689f5a49b65d330fad6dde96c91bb4435ffbfe056a1'): raise SystemExit(got)
+          print('WESPEAKER_PROVENANCE_PASS',got)
+          PY
+
+      - name: Independent Claire identity gate
+        id: identity
+        if: steps.technical.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import importlib.util,json,os
+          from pathlib import Path
+          import numpy as np,onnxruntime as ort
+          spec=importlib.util.spec_from_file_location('ws','WeSpeaker/wespeaker/bin/infer_onnx.py'); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          sess=ort.InferenceSession('weights/wespeaker/voxceleb_resnet34.onnx',providers=['CPUExecutionProvider'])
+          def emb(p):
+              f=m.compute_fbank(p).unsqueeze(0).numpy(); e=np.asarray(sess.run(['embs'],{'feats':f})[0]).reshape(-1).astype(np.float64); return e/np.linalg.norm(e)
+          o,c,l=emb('evidence/clips/claire--panic.wav'),emb('source/reference-claire.wav'),emb('source/reference-lucie.wav')
+          a=float(o@c); b=float(o@l); margin=a-b; ok=margin>0
+          r={'status':'pass' if ok else 'reject','sim_claire':a,'sim_lucie':b,'target_margin':margin,'rule':'Claire > Lucie; no absolute threshold','verifier':'WeSpeaker ResNet34 ONNX'}
+          Path('evidence/identity.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: French content no-worse-than-source gate
+        id: french
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,re,unicodedata
+          from pathlib import Path
+          import whisper
+          expected=os.environ['TTS_TEXT']; source_wer=.5
+          def norm(t): return ' '.join(re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+",' ',unicodedata.normalize('NFKC',t).lower().replace('’',"'")).split())
+          def dist(a,b):
+              p=list(range(len(b)+1))
+              for i,x in enumerate(a,1):
+                  q=[i]
+                  for j,y in enumerate(b,1): q.append(min(q[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+                  p=q
+              return p[-1]
+          def wer(r,h):
+              a,b=norm(r).split(),norm(h).split(); return dist(a,b)/max(1,len(a))
+          model=whisper.load_model('small',device='cpu'); p=Path.home()/'.cache/whisper/small.pt'; sha=hashlib.sha256(p.read_bytes()).hexdigest()
+          if sha!=os.environ['WHISPER_MODEL_SHA256']: raise SystemExit(sha)
+          text=str(model.transcribe('evidence/clips/claire--panic.wav',language='fr',task='transcribe',fp16=False,temperature=0,condition_on_previous_text=False).get('text','')).strip()
+          value=wer(expected,text); ok=value<=source_wer+1e-12
+          r={'status':'pass' if ok else 'reject','expected':expected,'transcript':text,'wer':value,'immutable_source_wer':source_wer,'rule':'output WER <= immutable source WER'}
+          Path('evidence/french.json').write_text(json.dumps(r,ensure_ascii=False,indent=2)); print(json.dumps(r,ensure_ascii=False,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned source-valid SUPERB only after French PASS
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check transformers==4.40.1
+          mkdir -p weights/superb
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          p=Path(snapshot_download(repo_id=os.environ['SUPERB_REPO'],revision=os.environ['SUPERB_REV'],allow_patterns=['config.json','preprocessor_config.json','pytorch_model.bin'],local_dir='weights/superb'))/'pytorch_model.bin'
+          got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
+          if got!=(378361105,'dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b'): raise SystemExit(got)
+          print('SUPERB_PROVENANCE_PASS',got)
+          PY
+
+      - name: Source-relative panic preservation gate
+        id: emotion
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from scipy.signal import resample_poly
+          from transformers import AutoFeatureExtractor,AutoModelForAudioClassification
+          torch.set_num_threads(2)
+          ex=AutoFeatureExtractor.from_pretrained('weights/superb',local_files_only=True)
+          model=AutoModelForAudioClassification.from_pretrained('weights/superb',local_files_only=True).eval()
+          labels=[str(model.config.id2label[i]).lower() for i in range(4)]
+          y,sr=sf.read('evidence/clips/claire--panic.wav',dtype='float32'); y=np.asarray(y,dtype=np.float32); y=y.mean(1) if y.ndim==2 else y
+          if sr!=16000:
+              g=int(np.gcd(sr,16000)); y=resample_poly(y,16000//g,sr//g).astype(np.float32)
+          x=ex(y,sampling_rate=16000,return_tensors='pt',padding=False)
+          with torch.inference_mode(): raw=torch.softmax(model(**x).logits[0],dim=-1).cpu().numpy().astype(np.float64)
+          n=raw/np.linalg.norm(raw)
+          panic=np.array([.0415043309,.6996874809,.2587981224,.0000100258]); sad=np.array([.0128470538,.4423151910,.5446761847,.0001615520])
+          panic/=np.linalg.norm(panic); sad/=np.linalg.norm(sad)
+          a=float(n@panic); b=float(n@sad); margin=a-b; ok=margin>0
+          r={'status':'pass' if ok else 'reject','profile':{labels[i]:float(raw[i]) for i in range(4)},'similarity_panic':a,'similarity_sadness':b,'relative_margin':margin,'rule':'closer to immutable panic profile than immutable contained-sadness profile','source_preflight_cosine':.8600842882,'semantic_label_claim':False}
+          Path('evidence/emotion.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Record authoritative one-cell verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          def read(n):
+              p=Path('evidence')/f'{n}.json'; return json.loads(p.read_text()) if p.exists() else None
+          render,tech,ident,fr,emo=[read(x) for x in ['render','technical','identity','french','emotion']]
+          if render is None: status='infrastructure-incomplete'; decision='No scientific render evidence; infrastructure only.'
+          elif tech is None or tech.get('status')!='pass': status='cosyvoice3-technical-reject'; decision='Technical veto; retire direct one-cell path without tuning.'
+          elif ident is None or ident.get('status')!='pass': status='cosyvoice3-identity-reject'; decision='Identity veto; retire direct CosyVoice3 instruct2 path without tuning.'
+          elif fr is None or fr.get('status')!='pass': status='cosyvoice3-french-reject'; decision='French veto; retire direct CosyVoice3 instruct2 path without tuning.'
+          elif emo is None or emo.get('status')!='pass': status='cosyvoice3-emotion-reject'; decision='Emotion veto; retire direct CosyVoice3 instruct2 path without tuning.'
+          else: status='one-cell-machine-pass'; decision='Authorize blind human identity/acting/French gate; no parameter search and no matrix before human identity validation.'
+          final={'status':status,'decision':decision,'cell':'claire--panic','seed':0,'speed':1.0,'text_frontend':False,'resource':'GitHub CPU','training':False,'finetuning':False,'retry':False,'substitution':False,'tuning':False,'production':False}
+          Path('evidence/final.json').write_text(json.dumps(final,indent=2)); print(json.dumps(final,indent=2))
+          PY
+
+      - name: Upload one-cell evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosyvoice3-claire-panic-one-cell
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface one-cell verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('evidence/final.json').read_text())['status']
+          if s!='one-cell-machine-pass': raise SystemExit(f'verdict: {s}')
+          print('ONE_CELL_MACHINE_PASS_HUMAN_GATE_AUTHORIZED')
+          PY
