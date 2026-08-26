@@ -1,0 +1,404 @@
+name: Voice Casting MeanVC2 CPU One-Cell Killer
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-meanvc2-cpu-one-cell-killer.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  MEANVC2_REV: 0d39c8ae416a37edb9884db67334e4b9d0c3e308
+  HF_REPO: ASLP-lab/MeanVC2
+  HF_REV: 4a73815c6b392bcb435769f69d7f5fdeccbc39dd
+  VC_SHA256: 04ea21a4fb55400469e6004ae842c3e7f059f759e92946fb95123418cad5d818
+  VC_SIZE: "70839448"
+  ASR_SHA256: 9a372c1b7178f564a15da1cd36901d7d0c9081a2fabf53cb6cc0d971deca4928
+  ASR_SIZE: "246275643"
+  VOCOS_SHA256: df1f2ba9f7ac35c96832579421ee1ed913a68c3a1d2f8a6536739f902f194a93
+  VOCOS_SIZE: "33223674"
+  WAVLM_GDRIVE_ID: 12-cB34qCTvByWT-QtOcZaqwwO21FLSqU
+  WAVLM_SHA256: 6fb4b3c3e6aa567f0a997b30855859cb81528ee8078802af439f7b2da0bf100f
+  WAVLM_SIZE: "1261965425"
+  WAVLM_FINETUNE_GDRIVE_ID: 1-aE1NfzpRCLxA4GUxX9ITI3F9LlbtEGP
+  WAVLM_FINETUNE_SHA256: 51f07e3b94d9e0262a6a675ef5a087be3dd09e8c62e9d886827f44f82fe7f94b
+  WAVLM_FINETUNE_SIZE: "1301926579"
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  SUPERB_REPO: superb/wav2vec2-base-superb-er
+  SUPERB_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  PIP_NO_CACHE_DIR: "1"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  killer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Freeze scientific contract before render
+        run: |
+          mkdir -p evidence/clips
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          frozen={
+            'status':'science-contract-frozen',
+            'cell':'panic--lucie',
+            'architecture':'MeanVC2',
+            'model':'120ms+40ms',
+            'chunk_size':12,
+            'steps':3,
+            'seed':0,
+            'device':'cpu',
+            'training':False,
+            'finetuning':False,
+            'new_tts':False,
+            'retry':False,
+            'substitution':False,
+            'reference_search':False,
+            'tuning':False,
+            'gate_order':['technical','identity','french','emotion'],
+            'human_gate':False,
+            'production':False,
+          }
+          Path('evidence/contract.json').write_text(json.dumps(frozen,indent=2),encoding='utf-8')
+          print(json.dumps(frozen,indent=2))
+          PY
+
+      - name: Recover exact immutable audio
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          mkdir -p source
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          cat > source-hashes.txt <<'EOF'
+          3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe  source/reference-claire.wav
+          9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822  source/reference-lucie.wav
+          ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f  source/clips/claire--panic.wav
+          d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84  source/clips/claire--sadness-contained.wav
+          EOF
+          sha256sum -c source-hashes.txt
+
+      - name: Fetch exact MeanVC2 source and apply audited inference-only packaging patch
+        run: |
+          git init MeanVC2
+          git -C MeanVC2 remote add origin https://github.com/ASLP-lab/MeanVC2.git
+          git -C MeanVC2 fetch --depth=1 origin "$MEANVC2_REV"
+          git -C MeanVC2 checkout --detach FETCH_HEAD
+          test "$(git -C MeanVC2 rev-parse HEAD)" = "$MEANVC2_REV"
+          grep -q "License-Apache%202.0" MeanVC2/README.md
+          grep -q "released under the \[Apache License 2.0\]" MeanVC2/README.md
+          test ! -e MeanVC2/LICENSE
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          p=Path('MeanVC2/src/model/__init__.py')
+          raw=p.read_bytes()
+          assert hashlib.sha256(raw).hexdigest()=='8d2c553d08d4b44d8ad579e8da0555885bffbc86c0960fe2f86c197ac5bf06a3'
+          s=raw.decode()
+          s=s.replace('from src.model.trainer import Trainer\n','')
+          s=s.replace('__all__ = ["CFM", "UNetT", "DiT", "MMDiT", "Trainer"]','__all__ = ["CFM", "UNetT", "DiT", "MMDiT"]')
+          p.write_text(s)
+          got=hashlib.sha256(p.read_bytes()).hexdigest()
+          assert got=='6a2bdf9a11188869466998429c3df620d31ec499ac9c407946647567c1891ca1',got
+          print('INFERENCE_ONLY_PACKAGING_PATCH_PASS',got)
+          PY
+
+      - name: Install exact CPU inference runtime
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchaudio==2.5.1
+          python -m pip install --disable-pip-version-check \
+            'numpy>=1.26,<2.1' soundfile librosa soxr safetensors \
+            einops==0.8.0 x-transformers==2.2.11 torchdiffeq==0.2.5 \
+            huggingface-hub==0.36.0 gdown==5.2.0 omegaconf==2.3.0 \
+            s3prl==0.4.18 matplotlib==3.9.2
+          python - <<'PY'
+          import torch,torchaudio
+          assert not torch.cuda.is_available()
+          print('CPU_RUNTIME_PASS',torch.__version__,torchaudio.__version__)
+          PY
+
+      - name: Download and verify exact MeanVC2 assets
+        run: |
+          mkdir -p MeanVC2/preprocess/ckpts MeanVC2/ckpts/pretrained_models MeanVC2/ckpts/vocos
+          python - <<'PY'
+          import os,shutil
+          from pathlib import Path
+          from huggingface_hub import hf_hub_download
+          for name,dst in {
+            'meanvc2_120ms_40ms.safetensors':'MeanVC2/ckpts/pretrained_models/meanvc2_120ms_40ms.safetensors',
+            'fastu2pp_160ms.pt':'MeanVC2/preprocess/ckpts/fastu2pp_160ms.pt',
+            'vocos.pt':'MeanVC2/ckpts/vocos/vocos.pt',
+          }.items():
+              src=hf_hub_download(repo_id=os.environ['HF_REPO'],revision=os.environ['HF_REV'],filename=name)
+              Path(dst).parent.mkdir(parents=True,exist_ok=True); shutil.copy2(src,dst)
+          PY
+          gdown "$WAVLM_GDRIVE_ID" -O MeanVC2/preprocess/ckpts/wavlm_large.pt
+          gdown "$WAVLM_FINETUNE_GDRIVE_ID" -O MeanVC2/preprocess/ckpts/wavlm_large_finetune.pth
+          test "$(stat -c%s MeanVC2/ckpts/pretrained_models/meanvc2_120ms_40ms.safetensors)" = "$VC_SIZE"
+          test "$(sha256sum MeanVC2/ckpts/pretrained_models/meanvc2_120ms_40ms.safetensors | cut -d' ' -f1)" = "$VC_SHA256"
+          test "$(stat -c%s MeanVC2/preprocess/ckpts/fastu2pp_160ms.pt)" = "$ASR_SIZE"
+          test "$(sha256sum MeanVC2/preprocess/ckpts/fastu2pp_160ms.pt | cut -d' ' -f1)" = "$ASR_SHA256"
+          test "$(stat -c%s MeanVC2/ckpts/vocos/vocos.pt)" = "$VOCOS_SIZE"
+          test "$(sha256sum MeanVC2/ckpts/vocos/vocos.pt | cut -d' ' -f1)" = "$VOCOS_SHA256"
+          test "$(stat -c%s MeanVC2/preprocess/ckpts/wavlm_large.pt)" = "$WAVLM_SIZE"
+          test "$(sha256sum MeanVC2/preprocess/ckpts/wavlm_large.pt | cut -d' ' -f1)" = "$WAVLM_SHA256"
+          test "$(stat -c%s MeanVC2/preprocess/ckpts/wavlm_large_finetune.pth)" = "$WAVLM_FINETUNE_SIZE"
+          test "$(sha256sum MeanVC2/preprocess/ckpts/wavlm_large_finetune.pth | cut -d' ' -f1)" = "$WAVLM_FINETUNE_SHA256"
+
+      - name: Render exactly one MeanVC2 panic to Lucie cell
+        id: render
+        run: |
+          /usr/bin/time -v -o evidence/render-time.txt python - <<'PY'
+          import hashlib,json,os,runpy,sys,time
+          from pathlib import Path
+          import torch
+          torch.set_num_threads(2)
+          torch.manual_seed(0)
+          root=Path('MeanVC2').resolve()
+          src=Path('source/clips/claire--panic.wav').resolve()
+          tgt=Path('source/reference-lucie.wav').resolve()
+          out=Path('evidence/clips/panic--lucie.wav').resolve()
+          os.chdir(root)
+          sys.argv=[
+            'src/infer/infer_e2e.py',
+            '--model','120ms',
+            '--source-wav',str(src),
+            '--target-wav',str(tgt),
+            '--output-wav',str(out),
+            '--steps','3',
+            '--chunk-size','12',
+            '--device','cpu',
+          ]
+          started=time.perf_counter()
+          runpy.run_path('src/infer/infer_e2e.py',run_name='__main__')
+          elapsed=time.perf_counter()-started
+          os.chdir(root.parent)
+          r={
+            'status':'rendered','cell':'panic--lucie','architecture':'MeanVC2',
+            'model':'120ms+40ms','chunk_size':12,'steps':3,'seed':0,'device':'cpu',
+            'elapsed_seconds':elapsed,'output_sha256':hashlib.sha256(out.read_bytes()).hexdigest(),
+            'training':False,'finetuning':False,'new_tts':False,'retry':False,
+            'substitution':False,'reference_search':False,'tuning':False,
+          }
+          Path('evidence/render.json').write_text(json.dumps(r,indent=2),encoding='utf-8')
+          print(json.dumps(r,indent=2))
+          PY
+
+      - name: Technical integrity gate
+        id: technical
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf
+          y,sr=sf.read('evidence/clips/panic--lucie.wav',dtype='float32')
+          s,ssr=sf.read('source/clips/claire--panic.wav',dtype='float32')
+          if y.ndim==2:y=y.mean(1)
+          if s.ndim==2:s=s.mean(1)
+          duration=len(y)/sr; source_duration=len(s)/ssr; ratio=duration/source_duration
+          rms=float(np.sqrt(np.mean(y*y))); finite=bool(np.isfinite(y).all())
+          ok=sr==16000 and finite and rms>1e-5 and .5<=ratio<=1.5
+          r={'status':'pass' if ok else 'reject','sr':sr,'duration':duration,'source_duration':source_duration,'duration_ratio':ratio,'rms':rms,'finite':finite,'rule':'native 16000Hz finite non-silent duration 0.5x..1.5x source'}
+          Path('evidence/technical.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned independent WeSpeaker
+        if: steps.technical.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check onnxruntime==1.20.1
+          git init WeSpeaker
+          git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git
+          git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV"
+          git -C WeSpeaker checkout --detach FETCH_HEAD
+          test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"
+          mkdir -p weights/wespeaker
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          p=Path(snapshot_download(repo_id=os.environ['WESPEAKER_MODEL_REPO'],revision=os.environ['WESPEAKER_MODEL_REV'],allow_patterns=['voxceleb_resnet34.onnx'],local_dir='weights/wespeaker'))/'voxceleb_resnet34.onnx'
+          got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
+          if got!=(26534127,'9fea6516d7ad6bf0a76c7689f5a49b65d330fad6dde96c91bb4435ffbfe056a1'): raise SystemExit(got)
+          print('WESPEAKER_PROVENANCE_PASS',got)
+          PY
+
+      - name: Independent Lucie identity gate
+        id: identity
+        if: steps.technical.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import importlib.util,json,os
+          from pathlib import Path
+          import numpy as np,onnxruntime as ort
+          spec=importlib.util.spec_from_file_location('ws','WeSpeaker/wespeaker/bin/infer_onnx.py')
+          m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          sess=ort.InferenceSession('weights/wespeaker/voxceleb_resnet34.onnx',providers=['CPUExecutionProvider'])
+          def emb(p):
+              f=m.compute_fbank(p).unsqueeze(0).numpy()
+              e=np.asarray(sess.run(['embs'],{'feats':f})[0]).reshape(-1).astype(np.float64)
+              return e/np.linalg.norm(e)
+          o,l,c=emb('evidence/clips/panic--lucie.wav'),emb('source/reference-lucie.wav'),emb('source/reference-claire.wav')
+          a=float(o@l); b=float(o@c); margin=a-b; ok=margin>0
+          r={'status':'pass' if ok else 'reject','sim_lucie':a,'sim_claire':b,'target_margin':margin,'rule':'Lucie > Claire; no absolute threshold','verifier':'WeSpeaker ResNet34 ONNX'}
+          Path('evidence/identity.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned Whisper only after identity PASS
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV" imageio-ffmpeg==0.6.0
+          F="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$F" "$HOME/.local/bin/ffmpeg"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: French content no-worse-than-source gate
+        id: french
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,re,unicodedata
+          from pathlib import Path
+          import whisper
+          expected="Vite ! Ils arrivent ! Fermez la porte !"; source_wer=.5
+          def norm(t): return ' '.join(re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+",' ',unicodedata.normalize('NFKC',t).lower().replace('’',"'")).split())
+          def dist(a,b):
+              p=list(range(len(b)+1))
+              for i,x in enumerate(a,1):
+                  q=[i]
+                  for j,y in enumerate(b,1): q.append(min(q[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+                  p=q
+              return p[-1]
+          def wer(r,h):
+              a,b=norm(r).split(),norm(h).split(); return dist(a,b)/max(1,len(a))
+          model=whisper.load_model('small',device='cpu')
+          p=Path.home()/'.cache/whisper/small.pt'
+          sha=hashlib.sha256(p.read_bytes()).hexdigest()
+          if sha!=os.environ['WHISPER_MODEL_SHA256']: raise SystemExit(sha)
+          text=str(model.transcribe('evidence/clips/panic--lucie.wav',language='fr',task='transcribe',fp16=False,temperature=0,condition_on_previous_text=False).get('text','')).strip()
+          value=wer(expected,text); ok=value<=source_wer+1e-12
+          r={'status':'pass' if ok else 'reject','expected':expected,'transcript':text,'wer':value,'immutable_source_wer':source_wer,'rule':'output WER <= immutable source WER'}
+          Path('evidence/french.json').write_text(json.dumps(r,ensure_ascii=False,indent=2)); print(json.dumps(r,ensure_ascii=False,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned source-valid SUPERB only after French PASS
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check transformers==4.40.1
+          mkdir -p weights/superb
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          p=Path(snapshot_download(repo_id=os.environ['SUPERB_REPO'],revision=os.environ['SUPERB_REV'],allow_patterns=['config.json','preprocessor_config.json','pytorch_model.bin'],local_dir='weights/superb'))/'pytorch_model.bin'
+          got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
+          if got!=(378361105,'dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b'): raise SystemExit(got)
+          print('SUPERB_PROVENANCE_PASS',got)
+          PY
+
+      - name: Source-relative panic preservation gate
+        id: emotion
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from scipy.signal import resample_poly
+          from transformers import AutoFeatureExtractor,AutoModelForAudioClassification
+          torch.set_num_threads(2)
+          ex=AutoFeatureExtractor.from_pretrained('weights/superb',local_files_only=True)
+          model=AutoModelForAudioClassification.from_pretrained('weights/superb',local_files_only=True).eval()
+          labels=[str(model.config.id2label[i]).lower() for i in range(4)]
+          y,sr=sf.read('evidence/clips/panic--lucie.wav',dtype='float32')
+          y=np.asarray(y,dtype=np.float32); y=y.mean(1) if y.ndim==2 else y
+          if sr!=16000:
+              g=int(np.gcd(sr,16000)); y=resample_poly(y,16000//g,sr//g).astype(np.float32)
+          x=ex(y,sampling_rate=16000,return_tensors='pt',padding=False)
+          with torch.inference_mode(): raw=torch.softmax(model(**x).logits[0],dim=-1).cpu().numpy().astype(np.float64)
+          n=raw/np.linalg.norm(raw)
+          panic=np.array([.0415043309,.6996874809,.2587981224,.0000100258])
+          sad=np.array([.0128470538,.4423151910,.5446761847,.0001615520])
+          panic/=np.linalg.norm(panic); sad/=np.linalg.norm(sad)
+          a=float(n@panic); b=float(n@sad); margin=a-b; ok=margin>0
+          r={'status':'pass' if ok else 'reject','profile':{labels[i]:float(raw[i]) for i in range(4)},'similarity_panic':a,'similarity_sadness':b,'relative_margin':margin,'rule':'closer to immutable panic profile than immutable contained-sadness profile','source_preflight_cosine':.8600842882,'semantic_label_claim':False}
+          Path('evidence/emotion.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Record authoritative MeanVC2 verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          def read(n):
+              p=Path('evidence')/f'{n}.json'
+              return json.loads(p.read_text()) if p.exists() else None
+          render,tech,ident,fr,emo=[read(x) for x in ['render','technical','identity','french','emotion']]
+          if render is None:
+              status='infrastructure-incomplete'; decision='No scientific render evidence; diagnose infrastructure only.'
+          elif tech is None or tech.get('status')!='pass':
+              status='meanvc2-technical-reject'; decision='Technical reject; retire without tuning.'
+          elif ident is None or ident.get('status')!='pass':
+              status='meanvc2-identity-reject'; decision='Steve veto: Lucie identity failed; retire MeanVC2 without tuning.'
+          elif fr is None or fr.get('status')!='pass':
+              status='meanvc2-french-reject'; decision='French veto; retire MeanVC2 without tuning.'
+          elif emo is None or emo.get('status')!='pass':
+              status='meanvc2-emotion-reject'; decision='Emotion veto; retire MeanVC2 without tuning.'
+          else:
+              status='one-cell-machine-pass'; decision='Authorize exact fixed four-cell expansion; no human gate yet.'
+          final={
+            'status':status,'decision':decision,'cell':'panic--lucie',
+            'architecture':'MeanVC2','model':'120ms+40ms','chunk_size':12,'steps':3,
+            'seed':0,'resource':'GitHub CPU','training':False,'finetuning':False,
+            'retry':False,'substitution':False,'reference_search':False,'tuning':False,
+            'human_gate':False,'production':False
+          }
+          Path('evidence/final.json').write_text(json.dumps(final,indent=2)); print(json.dumps(final,indent=2))
+          PY
+
+      - name: Upload MeanVC2 one-cell evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meanvc2-cpu-one-cell-killer
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface scientific verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('evidence/final.json').read_text())['status']
+          if s!='one-cell-machine-pass': raise SystemExit(f'verdict: {s}')
+          print('ONE_CELL_MACHINE_PASS')
+          PY
