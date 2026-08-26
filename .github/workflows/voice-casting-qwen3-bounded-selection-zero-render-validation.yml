@@ -84,6 +84,8 @@ jobs:
       - name: Install pinned CPU audio runtime including TorchCodec
         id: technical
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg
           python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.13.0 torchaudio==2.11.0 torchcodec==0.15.0
           python -m pip install --disable-pip-version-check numpy soundfile scipy huggingface-hub
           python -m pip check
@@ -244,7 +246,7 @@ jobs:
           elif e.get('status')!='pass': status='emotion-reject'
           else: status='one-cell-machine-pass'
           sel=json.loads(Path('evidence/selection.json').read_text())
-          out={'status':status,'architecture':'native-qwen-bounded-identity-selection','cell':'claire--panic','recovery':'zero-render-torchcodec-only','source_selection_run':32962291146,'candidate_count':3,'selected_seed':sel['selected_seed'],'selected_sha256':sel['selected_sha256'],'selector_margin':sel['selected_margin'],'retry_count':0,'replacement_count':0,'new_render_count':0,'voice_conversion':False,'human_gate_authorized':status=='one-cell-machine-pass','production':False}
+          out={'status':status,'architecture':'native-qwen-bounded-identity-selection','cell':'claire--panic','recovery':'zero-render-torchcodec-ffmpeg','source_selection_run':32962291146,'candidate_count':3,'selected_seed':sel['selected_seed'],'selected_sha256':sel['selected_sha256'],'selector_margin':sel['selected_margin'],'retry_count':0,'replacement_count':0,'new_render_count':0,'voice_conversion':False,'human_gate_authorized':status=='one-cell-machine-pass','production':False}
           Path('evidence/final.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
           PY
 
