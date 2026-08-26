@@ -1,0 +1,166 @@
+name: Voice Casting RVC Lucie Dataset Zero-Render Aggregate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-casting-rvc-lucie-dataset-zero-render-aggregate.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  EXPANSION_RUN_ID: "32948235488"
+  PILOT_RUN_ID: "32939596171"
+  PILOT_ARTIFACT: rvc-lucie-neutral-dataset-pilot-qualified-parallel
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  aggregate-zero-render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Verify immutable artifact identities
+        run: |
+          mkdir -p provenance shards pilot dataset/clips evidence
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${EXPANSION_RUN_ID}/artifacts?per_page=100" > provenance/expansion-artifacts.json
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PILOT_RUN_ID}/artifacts?per_page=100" > provenance/pilot-artifacts.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          exp=json.loads(Path('provenance/expansion-artifacts.json').read_text())['artifacts']
+          got={a['name']:(a['id'],a.get('digest')) for a in exp}
+          expected={
+            'rvc-lucie-neutral-expansion-qualified-0':(9600727762,'sha256:e8ec5d0b1755378233a7e8611b4cda77e5d902acaaf06f17b5cb56248517e8b5'),
+            'rvc-lucie-neutral-expansion-qualified-1':(9600734334,'sha256:892588baf6ad0a7bb0de95969d91d292e2d01aa3096450591e49f99aafb2cda2'),
+            'rvc-lucie-neutral-expansion-qualified-2':(9600735519,'sha256:f66e2738b31f2864a26213bccae3b0a377af1b8bdd4d3345b6a4766b2a00a0cc'),
+            'rvc-lucie-neutral-expansion-qualified-3':(9600734831,'sha256:6970ff90537f546c72348b79b0bbb2bd667813afd897e5b70f41d44fe7fc7387'),
+            'rvc-lucie-neutral-expansion-qualified-4':(9600735427,'sha256:98b7c2d2d6fa723e5bfa48190e3b08d98cc7caec33aa34d7a43b878f00b9a74f'),
+            'rvc-lucie-neutral-expansion-qualified-5':(9600729856,'sha256:40c02e16720bbfb944c51974d963653b88eaa8719c21b6d94faa5cea84ab5949'),
+          }
+          assert {k:got.get(k) for k in expected}==expected,(got,expected)
+          pilot=json.loads(Path('provenance/pilot-artifacts.json').read_text())['artifacts']
+          pg={a['name']:(a['id'],a.get('digest')) for a in pilot}
+          assert pg.get('rvc-lucie-neutral-dataset-pilot-qualified-parallel')==(9596619508,'sha256:9b01cde4feeb251243add6934de0ef8bd4bbb1744e09f2dd8e21e9e26919ed90')
+          print('IMMUTABLE_ARTIFACT_PROVENANCE_PASS')
+          PY
+
+      - name: Download exact qualified artifacts only
+        run: |
+          for i in 0 1 2 3 4 5; do
+            gh run download "$EXPANSION_RUN_ID" --repo "$GITHUB_REPOSITORY" -n "rvc-lucie-neutral-expansion-qualified-$i" -D "shards/q$i"
+          done
+          gh run download "$PILOT_RUN_ID" --repo "$GITHUB_REPOSITORY" -n "$PILOT_ARTIFACT" -D pilot
+          test -f pilot/qualified/manifest.json
+          for i in 0 1 2 3 4 5; do test -f "shards/q$i/qualified/manifest.json"; done
+
+      - name: Aggregate under preregistered corpus gates
+        run: |
+          python - <<'PY'
+          import hashlib,json,shutil
+          from pathlib import Path
+          pilot=json.loads(Path('pilot/qualified/manifest.json').read_text())
+          assert pilot['status']=='pilot-pass' and pilot['accepted_count']==10
+          assert abs(float(pilot['accepted_duration_seconds'])-51.12)<1e-6
+          rows=[];shards=set()
+          for i in range(6):
+              p=Path(f'shards/q{i}/qualified/manifest.json')
+              m=json.loads(p.read_text())
+              assert m['status']=='qualified-shard' and m['shard']==i
+              assert m['generated_count']==10 and m['retries']==0 and m['substitutions']==0
+              shards.add(i);rows.extend(m['rows'])
+          assert shards==set(range(6)) and len(rows)==60
+          assert sorted(r['id'] for r in rows)==[f'n{i:02d}' for i in range(11,71)]
+          accepted=[r for r in rows if r['accepted']]
+          for r in accepted:
+              p=Path(f"shards/q{int(r['shard'])}/qualified/clips/{r['id']}.wav")
+              assert p.is_file(),p
+              assert hashlib.sha256(p.read_bytes()).hexdigest()==r['sha256'],r['id']
+          for p in Path('pilot/qualified/clips').glob('*.wav'):
+              shutil.copy2(p,Path('dataset/clips')/p.name)
+          for r in accepted:
+              src=Path(f"shards/q{int(r['shard'])}/qualified/clips/{r['id']}.wav")
+              dst=Path('dataset/clips')/src.name
+              if dst.exists():raise SystemExit(f'duplicate clip {dst.name}')
+              shutil.copy2(src,dst)
+          pilot_words=int(pilot['aggregate_reference_words']);pilot_errors=int(pilot['aggregate_word_errors']);pilot_duration=float(pilot['accepted_duration_seconds'])
+          exp_words=sum(int(r['reference_words']) for r in accepted);exp_errors=sum(int(r['word_errors']) for r in accepted);exp_duration=sum(float(r['duration_seconds']) for r in accepted)
+          rate=len(accepted)/60
+          total_words=pilot_words+exp_words;total_errors=pilot_errors+exp_errors;total_duration=pilot_duration+exp_duration;agg_wer=total_errors/max(1,total_words)
+          duration_ok=total_duration>=300.0
+          wer_ok=agg_wer<=0.05+1e-12
+          rate_ok=rate>=0.85-1e-12
+          ok=duration_ok and wer_ok and rate_ok
+          final={
+            'schema':'rvc-lucie-neutral-dataset-qualified-v1',
+            'status':'dataset-pass' if ok else 'dataset-reject',
+            'pilot_run_id':32939596171,
+            'expansion_run_id':32948235488,
+            'pilot_accepted_count':10,
+            'expansion_generated_count':60,
+            'expansion_accepted_count':len(accepted),
+            'expansion_acceptance_rate':rate,
+            'accepted_count':10+len(accepted),
+            'accepted_duration_seconds':total_duration,
+            'aggregate_reference_words':total_words,
+            'aggregate_word_errors':total_errors,
+            'aggregate_wer':agg_wer,
+            'duration_gate_pass':duration_ok,
+            'aggregate_french_pass':wer_ok,
+            'acceptance_rate_pass':rate_ok,
+            'retries':0,'substitutions':0,
+            'accepted_ids':[f'n{i:02d}' for i in range(1,11)]+[r['id'] for r in accepted],
+            'rejected_expansion_ids':[r['id'] for r in rows if not r['accepted']],
+            'expansion_rows':rows,
+            'training_authorized':False,
+            'human_gate':False,
+            'production_qualified':False,
+            'zero_render_continuation':True,
+            'rules':{
+              'every accepted clip':'technical AND WeSpeaker Lucie>Claire AND Whisper WER<=0.20',
+              'total accepted duration':'>=300 s',
+              'aggregate WER':'<=0.05',
+              'fixed expansion acceptance rate':'>=0.85',
+              'retry':False,'substitution':False,
+            },
+          }
+          Path('dataset/manifest.json').write_text(json.dumps(final,ensure_ascii=False,indent=2),encoding='utf-8')
+          Path('evidence/final.json').write_text(json.dumps(final,ensure_ascii=False,indent=2),encoding='utf-8')
+          hashes=[]
+          for p in sorted(Path('dataset/clips').glob('*.wav')):hashes.append(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  clips/{p.name}")
+          Path('dataset/SHA256SUMS').write_text('\n'.join(hashes)+'\n',encoding='utf-8')
+          assert len(hashes)==final['accepted_count']
+          print(json.dumps({k:final[k] for k in ['status','expansion_accepted_count','expansion_acceptance_rate','accepted_count','accepted_duration_seconds','aggregate_reference_words','aggregate_word_errors','aggregate_wer','rejected_expansion_ids']},ensure_ascii=False,indent=2))
+          if final['status']!='dataset-pass':raise SystemExit(1)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rvc-lucie-neutral-dataset-qualified-5min-zero-render
+          path: |
+            dataset/
+            evidence/
+            provenance/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface authoritative dataset verdict
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          r=json.loads(Path('evidence/final.json').read_text())
+          print('SCIENTIFIC_STATUS='+r['status'])
+          print('accepted_count='+str(r['accepted_count']))
+          print('accepted_duration_seconds='+str(r['accepted_duration_seconds']))
+          print('aggregate_wer='+str(r['aggregate_wer']))
+          print('expansion_acceptance_rate='+str(r['expansion_acceptance_rate']))
+          if r['status']!='dataset-pass':raise SystemExit(1)
+          PY
