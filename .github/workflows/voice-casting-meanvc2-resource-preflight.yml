@@ -28,6 +28,8 @@ env:
   WAVLM_FINETUNE_GDRIVE_ID: 1-aE1NfzpRCLxA4GUxX9ITI3F9LlbtEGP
   WAVLM_FINETUNE_SHA256: 51f07e3b94d9e0262a6a675ef5a087be3dd09e8c62e9d886827f44f82fe7f94b
   WAVLM_FINETUNE_SIZE: "1301926579"
+  MODEL_INIT_ORIGINAL_SHA256: 8d2c553d08d4b44d8ad579e8da0555885bffbc86c0960fe2f86c197ac5bf06a3
+  MODEL_INIT_INFERENCE_SHA256: 6a2bdf9a11188869466998429c3df620d31ec499ac9c407946647567c1891ca1
   PIP_NO_CACHE_DIR: "1"
   HF_HUB_DISABLE_TELEMETRY: "1"
   OMP_NUM_THREADS: "2"
@@ -81,6 +83,40 @@ jobs:
           grep -q "released under the \[Apache License 2.0\]" MeanVC2/README.md
           test ! -e MeanVC2/LICENSE
           echo "LAB_LICENSE_PROVENANCE=README_AND_HF_MODEL_CARD_ONLY" | tee evidence/license.txt
+
+      - name: Apply frozen inference-only packaging patch
+        run: |
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          p=Path('MeanVC2/src/model/__init__.py')
+          raw=p.read_bytes()
+          before=hashlib.sha256(raw).hexdigest()
+          if before != os.environ['MODEL_INIT_ORIGINAL_SHA256']:
+              raise SystemExit(f'unexpected upstream src/model/__init__.py SHA: {before}')
+          text=raw.decode('utf-8')
+          old='from src.model.trainer import Trainer\n\n__all__ = ["CFM", "UNetT", "DiT", "MMDiT", "Trainer"]\n'
+          new='\n__all__ = ["CFM", "UNetT", "DiT", "MMDiT"]\n'
+          if old not in text:
+              raise SystemExit('expected Trainer-only package import block not found')
+          text=text.replace(old,new,1)
+          p.write_text(text,encoding='utf-8')
+          after=hashlib.sha256(p.read_bytes()).hexdigest()
+          if after != os.environ['MODEL_INIT_INFERENCE_SHA256']:
+              raise SystemExit(f'unexpected patched src/model/__init__.py SHA: {after}')
+          report={
+            'status':'inference-packaging-patch-pass',
+            'upstream_file':'src/model/__init__.py',
+            'before_sha256':before,
+            'after_sha256':after,
+            'removed_only':'Trainer package import/export',
+            'model_math_changed':False,
+            'weights_changed':False,
+            'scientific_parameters_changed':False,
+          }
+          Path('evidence/inference-packaging-patch.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+          print(json.dumps(report,indent=2))
+          PY
 
       - name: Install minimal pinned CPU inference runtime
         run: |
@@ -206,11 +242,13 @@ jobs:
           from pathlib import Path
           assets=Path('evidence/assets.json')
           load=Path('evidence/cpu-load.json')
-          ok=assets.is_file() and load.is_file() and json.loads(load.read_text()).get('status')=='cpu-components-load-pass'
+          patch=Path('evidence/inference-packaging-patch.json')
+          ok=assets.is_file() and patch.is_file() and load.is_file() and json.loads(load.read_text()).get('status')=='cpu-components-load-pass'
           out={
             'status':'resource-preflight-pass' if ok else 'resource-preflight-incomplete',
             'scientific_render':False,
             'science_authorized_next':bool(ok),
+            'inference_packaging_patch':'Trainer import/export removed only',
             'next_gate':'one immutable panic--lucie MeanVC2 CPU smoke' if ok else 'none; diagnose infrastructure/resource only',
           }
           Path('evidence/final.json').write_text(json.dumps(out,indent=2),encoding='utf-8')
