@@ -1,0 +1,175 @@
+name: Voice Casting Chatterbox VC CPU Resource Preflight
+
+on:
+  push:
+    branches:
+      - lab/chatterbox-vc-cpu-resource-preflight
+    paths:
+      - .github/workflows/voice-casting-chatterbox-vc-cpu-resource-preflight.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CHATTERBOX_REPO: https://github.com/resemble-ai/chatterbox.git
+  CHATTERBOX_REV: 5de7a54aa4e5e2baadb0182dde554908b48b85c2
+  MODEL_REPO: ResembleAI/chatterbox
+  SOURCE_RUN_ID: "32723874223"
+  SOURCE_ARTIFACT: voice-casting-chatterbox-v3-stage2
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  resource-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Freeze resource-only contract
+        run: |
+          mkdir -p evidence upstream weights probe
+          python - <<'PY'
+          import json,platform
+          from pathlib import Path
+          c={
+            'purpose':'resource-only-preflight',
+            'architecture':'Resemble ChatterboxVC / S3Gen voice conversion',
+            'scientific_audio_used':False,
+            'upstream_revision':'5de7a54aa4e5e2baadb0182dde554908b48b85c2',
+            'model_repo':'ResembleAI/chatterbox',
+            'model_revision_rule':'resolve HF main exactly once, freeze revision and hash only VC-required files',
+            'runtime':'GitHub-hosted ubuntu-24.04 CPU only',
+            'python':platform.python_version(),
+            'probe_source':'historical synthetic Edge Vivienne panic from Chatterbox Stage2 artifact',
+            'probe_target':'historical synthetic Edge William reference from Chatterbox Stage2 artifact',
+            'claim':'execution/resource proof only; no identity/French/emotion scientific claim',
+            'science_authorized_next_rule':'only if exact VC files load on CPU and one complete conversion yields finite non-silent audio',
+          }
+          Path('evidence/contract.json').write_text(json.dumps(c,indent=2)); print(json.dumps(c,indent=2))
+          PY
+
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          df -h /
+
+      - name: Recover non-scientific synthetic probe audio
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D probe
+          test -s probe/clips/vivienne--panic--edge.wav
+          test -s probe/reference-william-edge-16k.wav
+          sha256sum probe/clips/vivienne--panic--edge.wav probe/reference-william-edge-16k.wav | tee evidence/probe-input-sha256.txt
+
+      - name: Install exact upstream on CPU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1
+          git clone --filter=blob:none "$CHATTERBOX_REPO" upstream/chatterbox
+          git -C upstream/chatterbox checkout --detach "$CHATTERBOX_REV"
+          test "$(git -C upstream/chatterbox rev-parse HEAD)" = "$CHATTERBOX_REV"
+          cp upstream/chatterbox/LICENSE evidence/upstream-LICENSE
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 torchaudio==2.6.0
+          python -m pip install --disable-pip-version-check -e upstream/chatterbox
+          python -m pip install --disable-pip-version-check psutil==6.1.1
+          python -m pip check
+          python - <<'PY'
+          import json,platform,psutil,torch,torchaudio
+          from pathlib import Path
+          r={'python':platform.python_version(),'torch':torch.__version__,'torchaudio':torchaudio.__version__,'cuda_available':torch.cuda.is_available(),'cpu_count':psutil.cpu_count(logical=True),'ram_total_bytes':psutil.virtual_memory().total}
+          assert not r['cuda_available']; Path('evidence/runtime.json').write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2))
+          PY
+
+      - name: Resolve exact public HF revision and hash VC-only snapshot
+        run: |
+          python - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          from huggingface_hub import HfApi,snapshot_download
+          rev=HfApi().model_info(os.environ['MODEL_REPO']).sha
+          root=Path(snapshot_download(repo_id=os.environ['MODEL_REPO'],revision=rev,allow_patterns=['s3gen.safetensors','conds.pt'],local_dir='weights/chatterbox-vc'))
+          files=[]; total=0
+          for p in sorted(root.rglob('*')):
+              if not p.is_file() or '.cache' in p.parts: continue
+              h=hashlib.sha256(); size=p.stat().st_size; total+=size
+              with p.open('rb') as f:
+                  for c in iter(lambda:f.read(8*1024*1024),b''): h.update(c)
+              files.append({'path':str(p.relative_to(root)),'bytes':size,'sha256':h.hexdigest()})
+          if sorted(x['path'] for x in files)!=['conds.pt','s3gen.safetensors']: raise SystemExit(files)
+          out={'repo':os.environ['MODEL_REPO'],'revision':rev,'total_bytes':total,'files':files}
+          raw=json.dumps(out,indent=2).encode(); Path('evidence/model.json').write_bytes(raw); Path('evidence/model-manifest-sha256.txt').write_text(hashlib.sha256(raw).hexdigest()+'\n')
+          print(json.dumps(out,indent=2)); print('MANIFEST_SHA256',hashlib.sha256(raw).hexdigest())
+          PY
+
+      - name: Load complete ChatterboxVC on CPU
+        run: |
+          /usr/bin/time -v -o evidence/load-time.txt python - <<'PY'
+          import json,resource,time,torch
+          from pathlib import Path
+          from chatterbox.vc import ChatterboxVC
+          t=time.time(); model=ChatterboxVC.from_local('weights/chatterbox-vc','cpu'); wall=time.time()-t
+          out={'status':'pass','device':model.device,'sample_rate':model.sr,'load_wall_seconds':wall,'max_rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,'cuda_available':torch.cuda.is_available()}
+          assert model.device=='cpu' and not out['cuda_available']; Path('evidence/load.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          PY
+
+      - name: Full CPU voice-conversion probe — non-scientific
+        id: smoke
+        continue-on-error: true
+        run: |
+          /usr/bin/time -v -o evidence/convert-time.txt python - <<'PY'
+          import hashlib,json,resource,time
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from chatterbox.vc import ChatterboxVC
+          model=ChatterboxVC.from_local('weights/chatterbox-vc','cpu')
+          started=time.time(); wav=model.generate(audio='probe/clips/vivienne--panic--edge.wav',target_voice_path='probe/reference-william-edge-16k.wav'); wall=time.time()-started
+          y=wav.squeeze(0).detach().cpu().numpy().astype(np.float32); sr=int(model.sr); outwav=Path('evidence/resource-smoke.wav'); sf.write(outwav,y,sr)
+          finite=bool(np.isfinite(y).all()) if y.size else False; rms=float(np.sqrt(np.mean(y*y))) if y.size else 0.; duration=float(y.size/sr) if sr else 0.; ok=y.size>0 and finite and rms>1e-5 and duration>0
+          out={'status':'pass' if ok else 'reject','resource_probe_only':True,'scientific_claim':False,'sample_rate':sr,'samples':int(y.size),'duration_seconds':duration,'rms':rms,'finite':finite,'convert_wall_seconds':wall,'max_rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,'output_sha256':hashlib.sha256(outwav.read_bytes()).hexdigest(),'cuda_available':torch.cuda.is_available()}
+          Path('evidence/smoke.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          if not ok: raise SystemExit('resource smoke reject')
+          PY
+
+      - name: Record authoritative resource verdict
+        if: always()
+        env:
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          smoke=json.loads(Path('evidence/smoke.json').read_text()) if Path('evidence/smoke.json').exists() else None
+          ok=os.environ['SMOKE_OUTCOME']=='success' and smoke is not None and smoke.get('status')=='pass'
+          out={'status':'resource-preflight-pass' if ok else 'resource-preflight-fail','science_authorized_next':bool(ok),'production':False}
+          Path('evidence/final.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          PY
+
+      - name: Upload resource evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatterbox-vc-cpu-resource-preflight
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface resource verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('evidence/final.json').read_text())['status']
+          if s!='resource-preflight-pass': raise SystemExit(f'verdict: {s}')
+          print('RESOURCE_PREFLIGHT_PASS')
+          PY
