@@ -1,0 +1,239 @@
+name: Voice Casting Fish S2 Pro CPU Resource Preflight
+
+on:
+  push:
+    branches:
+      - lab/fish-s2-pro-cpu-resource-preflight
+    paths:
+      - .github/workflows/voice-casting-fish-s2-pro-cpu-resource-preflight.yml
+
+permissions:
+  contents: read
+
+env:
+  ENGINE_REPO: https://github.com/fishaudio/fish-speech.git
+  ENGINE_REV: befe4001745417f8c42131739d862b8a6fdbd15a
+  MODEL_REPO: fishaudio/s2-pro
+  MODEL_REV: 1de9996b6be38b745688de084d87a5633f714e4e
+  MODEL_SHARD1_SHA256: c4218e8ac93be83b35eee30b4f94cb2e9b5ecff40f3e21611438d2f4f8804aad
+  MODEL_SHARD1_BYTES: "4986872984"
+  MODEL_SHARD2_SHA256: 76738d23465deaac431433232c0762908cc99a6eddc3d49f67307d92680827be
+  MODEL_SHARD2_BYTES: "4136876104"
+  CODEC_SHA256: 74fc41c5a7151c6f350af8bd7e5d6e3accfcc7f3dfbfac23afd35af07052bb2f
+  CODEC_BYTES: "1871099728"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Freeze resource-only contract
+        run: |
+          mkdir -p evidence checkpoints/s2-pro engine
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          contract = {
+            "schema": "fish-s2-pro-cpu-resource-preflight-v1",
+            "purpose": "resource/access/reproducibility proof only; no Claire/Lucie scientific audio",
+            "production": False,
+            "engine_repo": os.environ["ENGINE_REPO"],
+            "engine_revision": os.environ["ENGINE_REV"],
+            "model_repo": os.environ["MODEL_REPO"],
+            "model_revision": os.environ["MODEL_REV"],
+            "model_precision": "official BF16",
+            "model_weight_bytes": {
+              "shard1": int(os.environ["MODEL_SHARD1_BYTES"]),
+              "shard2": int(os.environ["MODEL_SHARD2_BYTES"]),
+              "codec": int(os.environ["CODEC_BYTES"])
+            },
+            "license": "Fish Audio Research License; research/non-commercial evaluation only; commercial use requires separate written license",
+            "architecture_probe": "same-generation voice cloning from prompt audio plus inline free-form emotion/prosody instruction",
+            "reference": "locally generated espeak-ng French synthetic probe; explicitly not Claire/Lucie",
+            "reference_text": "Bonjour, ceci est une voix de référence.",
+            "probe_text": "[screaming in panic] Attention ! Sortez immédiatement !",
+            "device": "cpu",
+            "compile": False,
+            "seed": 42,
+            "sampling": {"top_p": 0.9, "top_k": 30, "temperature": 1.0},
+            "max_new_tokens": 160,
+            "render_count_exact": 1,
+            "pass_rule": "exact code checkout; exact official weights accessible and hash-valid; CPU-only package installs; one clone+inline-emotion smoke completes within 30 minutes and yields finite non-silent WAV",
+            "scientific_claims": [],
+            "science_authorized_next": "only after resource-preflight-pass may a separately preregistered single Claire-panic killer be created"
+          }
+          Path("evidence/contract.json").write_text(json.dumps(contract, indent=2, ensure_ascii=False))
+          print(json.dumps(contract, indent=2, ensure_ascii=False))
+          PY
+
+      - name: Record runner resources and free disk
+        run: |
+          {
+            echo "=== uname ==="
+            uname -a
+            echo "=== cpu ==="
+            lscpu
+            echo "=== memory ==="
+            free -b
+            echo "=== disk before ==="
+            df -B1 /
+          } | tee evidence/runner-before.txt
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          {
+            echo "=== disk after ==="
+            df -B1 /
+          } | tee -a evidence/runner-before.txt
+
+      - name: Exact Fish S2 Pro CPU clone plus inline-emotion smoke
+        id: probe
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euxo pipefail
+          exec > >(tee -a evidence/probe.log) 2>&1
+
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends             ffmpeg espeak-ng portaudio19-dev libsox-dev libsndfile1-dev git curl
+
+          git clone --filter=blob:none "$ENGINE_REPO" engine/fish-speech
+          git -C engine/fish-speech checkout --detach "$ENGINE_REV"
+          test "$(git -C engine/fish-speech rev-parse HEAD)" = "$ENGINE_REV"
+          cp engine/fish-speech/LICENSE evidence/engine-LICENSE
+
+          BASE="https://huggingface.co/$MODEL_REPO/resolve/$MODEL_REV"
+          for F in config.json model.safetensors.index.json tokenizer.json tokenizer_config.json special_tokens_map.json chat_template.jinja LICENSE.md; do
+            curl --fail --location --retry 4 --retry-all-errors "$BASE/$F?download=true" -o "checkpoints/s2-pro/$F"
+          done
+
+          curl --fail --location --retry 4 --retry-all-errors             "$BASE/model-00001-of-00002.safetensors?download=true"             -o checkpoints/s2-pro/model-00001-of-00002.safetensors
+          curl --fail --location --retry 4 --retry-all-errors             "$BASE/model-00002-of-00002.safetensors?download=true"             -o checkpoints/s2-pro/model-00002-of-00002.safetensors
+          curl --fail --location --retry 4 --retry-all-errors             "$BASE/codec.pth?download=true"             -o checkpoints/s2-pro/codec.pth
+
+          test "$(stat -c %s checkpoints/s2-pro/model-00001-of-00002.safetensors)" = "$MODEL_SHARD1_BYTES"
+          test "$(sha256sum checkpoints/s2-pro/model-00001-of-00002.safetensors | cut -d' ' -f1)" = "$MODEL_SHARD1_SHA256"
+          test "$(stat -c %s checkpoints/s2-pro/model-00002-of-00002.safetensors)" = "$MODEL_SHARD2_BYTES"
+          test "$(sha256sum checkpoints/s2-pro/model-00002-of-00002.safetensors | cut -d' ' -f1)" = "$MODEL_SHARD2_SHA256"
+          test "$(stat -c %s checkpoints/s2-pro/codec.pth)" = "$CODEC_BYTES"
+          test "$(sha256sum checkpoints/s2-pro/codec.pth | cut -d' ' -f1)" = "$CODEC_SHA256"
+          cp checkpoints/s2-pro/LICENSE.md evidence/model-LICENSE.md
+
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          rows=[]
+          for name in [
+            "model-00001-of-00002.safetensors",
+            "model-00002-of-00002.safetensors",
+            "codec.pth",
+          ]:
+              p=Path("checkpoints/s2-pro")/name
+              h=hashlib.sha256()
+              with p.open("rb") as f:
+                  for chunk in iter(lambda:f.read(8*1024*1024), b""):
+                      h.update(chunk)
+              rows.append({"path":name,"bytes":p.stat().st_size,"sha256":h.hexdigest()})
+          Path("evidence/model-files.json").write_text(json.dumps(rows,indent=2))
+          print(json.dumps(rows,indent=2))
+          PY
+
+          cd engine/fish-speech
+          python -m pip install --disable-pip-version-check -e '.[cpu]'
+          cd ../..
+
+          espeak-ng -v fr-fr -s 145 -w evidence/reference.wav             "Bonjour, ceci est une voix de référence."
+          test -s evidence/reference.wav
+          ffprobe -v error -show_entries stream=sample_rate,channels,duration -of json             evidence/reference.wav | tee evidence/reference.json
+
+          /usr/bin/time -v -o evidence/inference-time.txt             timeout 1800s python engine/fish-speech/fish_speech/models/text2semantic/inference.py               --checkpoint-path checkpoints/s2-pro               --device cpu               --no-compile               --seed 42               --top-p 0.9               --top-k 30               --temperature 1.0               --max-new-tokens 160               --chunk-length 100               --prompt-text "Bonjour, ceci est une voix de référence."               --prompt-audio evidence/reference.wav               --text "[screaming in panic] Attention ! Sortez immédiatement !"               --output evidence/smoke.wav               --output-dir evidence/codes
+
+          test -s evidence/smoke.wav
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          import numpy as np
+          import soundfile as sf
+          p=Path("evidence/smoke.wav")
+          y,sr=sf.read(p,dtype="float32")
+          y=np.asarray(y,dtype=np.float32)
+          if y.ndim==2: y=y.mean(axis=1)
+          finite=bool(y.size and np.isfinite(y).all())
+          rms=float(np.sqrt(np.mean(y*y))) if y.size else 0.0
+          out={
+            "status":"pass" if finite and rms>1e-5 else "reject",
+            "sample_rate":int(sr),
+            "samples":int(y.size),
+            "duration_seconds":float(len(y)/sr) if sr else 0.0,
+            "finite":finite,
+            "rms":rms,
+            "sha256":hashlib.sha256(p.read_bytes()).hexdigest(),
+            "render_count":1,
+            "retry_count":0,
+            "replacement_count":0
+          }
+          Path("evidence/smoke.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          if out["status"]!="pass": raise SystemExit("technical smoke reject")
+          PY
+
+      - name: Record authoritative resource verdict
+        if: always()
+        env:
+          PROBE_OUTCOME: ${{ steps.probe.outcome }}
+        run: |
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          smoke_path=Path("evidence/smoke.json")
+          smoke=json.loads(smoke_path.read_text()) if smoke_path.exists() else None
+          time_path=Path("evidence/inference-time.txt")
+          time_text=time_path.read_text(errors="replace") if time_path.exists() else ""
+          m=re.search(r"Maximum resident set size \(kbytes\):\s*(\d+)",time_text)
+          rss_kib=int(m.group(1)) if m else None
+          ok=(os.environ.get("PROBE_OUTCOME")=="success" and smoke is not None and smoke.get("status")=="pass")
+          out={
+            "schema":"fish-s2-pro-cpu-resource-preflight-result-v1",
+            "status":"resource-preflight-pass" if ok else "resource-preflight-reject",
+            "probe_outcome":os.environ.get("PROBE_OUTCOME"),
+            "smoke":smoke,
+            "max_rss_kib":rss_kib,
+            "science_authorized_next":bool(ok),
+            "human_gate_authorized":False,
+            "production":False,
+            "commercial_license_required_for_production":True
+          }
+          Path("evidence/final.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+          free -b | tee evidence/runner-after.txt
+          df -B1 / | tee -a evidence/runner-after.txt
+
+      - name: Upload resource evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fish-s2-pro-cpu-resource-preflight
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface resource verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/final.json").read_text())["status"]
+          if s!="resource-preflight-pass":
+              raise SystemExit(f"verdict: {s}")
+          print("FISH_S2_PRO_CPU_RESOURCE_PASS")
+          PY
