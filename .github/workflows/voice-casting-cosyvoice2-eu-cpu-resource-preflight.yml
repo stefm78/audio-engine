@@ -106,7 +106,7 @@ jobs:
           test -n "$WHEEL"
           test "$(sha256sum "$WHEEL" | cut -d' ' -f1)" = "$PACKAGE_WHEEL_SHA256"
           sha256sum "$WHEEL" | tee evidence/package-wheel-sha256.txt
-          cp "$WHEEL" wheels/frozen.whl
+          echo "$WHEEL" > evidence/package-wheel-path.txt
 
       - name: Install inference-only CPU runtime
         id: deps
@@ -115,12 +115,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends             ffmpeg espeak-ng sox libsox-dev libsndfile1-dev build-essential
           python -m pip install --disable-pip-version-check             --index-url https://download.pytorch.org/whl/cpu             torch==2.3.1 torchaudio==2.3.1
-          python -m pip install --disable-pip-version-check --no-deps wheels/frozen.whl
+          WHEEL="$(find wheels -maxdepth 1 -name 'cosyvoice2_eu-*.whl' -print -quit)"
+          test -n "$WHEEL"
+          python -m pip install --disable-pip-version-check --no-deps "$WHEEL"
           python - <<'PY'
           import email, zipfile
           from pathlib import Path
           from packaging.requirements import Requirement
-          wheel=Path("wheels/frozen.whl")
+          wheel=next(Path("wheels").glob("cosyvoice2_eu-*.whl"))
           blocked={"torch","torchaudio","onnxruntime-gpu","onnxruntime","deepspeed","openai-whisper"}
           with zipfile.ZipFile(wheel) as z:
               meta=next(n for n in z.namelist() if n.endswith(".dist-info/METADATA"))
