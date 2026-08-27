@@ -1,0 +1,238 @@
+name: Voice Casting Wren 0.5B Expressive CPU Resource Preflight
+
+on:
+  push:
+    branches:
+      - lab/wren-05b-expressive-cpu-resource-preflight
+    paths:
+      - .github/workflows/voice-casting-wren-05b-expressive-cpu-resource-preflight.yml
+
+permissions:
+  contents: read
+
+env:
+  MODEL_REPO: shangeth/Wren-TTS-0.5B-multi-expressive
+  MODEL_REV: 8d91322d4ca6861f48ae35131406bf176bfe9e82
+  MODEL_SHA256: 19ce19dd3e1e81126b8554db0ceb584a4bb4951241834b1588334d5e40e01f88
+  MODEL_BYTES: "1105100256"
+  QWEN_CONFIG_REPO: Qwen/Qwen2.5-0.5B
+  MIMI_REPO: kyutai/mimi
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Freeze resource-only contract
+        run: |
+          mkdir -p evidence models
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          c={
+            "schema":"wren-05b-expressive-cpu-resource-preflight-v1",
+            "purpose":"resource/access/reproducibility proof only; no Claire/Lucie scientific audio",
+            "model_repo":os.environ["MODEL_REPO"],
+            "model_revision":os.environ["MODEL_REV"],
+            "model_sha256":os.environ["MODEL_SHA256"],
+            "architecture":"0.5B multilingual voice-cloning TTS; reference Mimi codes + in-generation style token",
+            "french_supported":True,
+            "style_probe":"<fearful>",
+            "known_risk":"style tags were trained only with English text; French style behaviour is undefined",
+            "reference":"locally generated espeak-ng French synthetic probe",
+            "probe_text":"<fearful> Attention ! Sortez immédiatement !",
+            "device":"cpu",
+            "seed":42,
+            "sampling":{"temperature":0.8,"top_k":50,"top_p":0.9},
+            "max_audio_frames":160,
+            "render_count_exact":1,
+            "license":"CC-BY-NC-4.0; Lab non-commercial research only",
+            "pass_rule":"exact checkpoint hash; exact dependency revisions recorded; CPU encode+tagged generate+decode yields one finite non-silent 24kHz WAV",
+            "science_authorized_next":"only after PASS: separately preregistered one-cell Claire-panic killer",
+            "production":False
+          }
+          Path("evidence/contract.json").write_text(json.dumps(c,indent=2,ensure_ascii=False))
+          print(json.dumps(c,indent=2,ensure_ascii=False))
+          PY
+
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          free -b | tee evidence/runner-before.txt
+          df -B1 / | tee -a evidence/runner-before.txt
+
+      - name: Install pinned CPU runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends espeak-ng libsndfile1 ffmpeg
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchaudio==2.7.1
+          python -m pip install --disable-pip-version-check transformers==4.57.6 huggingface-hub==0.36.0 safetensors soundfile numpy sentencepiece
+
+      - name: Download exact Wren and freeze dependency snapshots
+        run: |
+          python - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          from huggingface_hub import HfApi,snapshot_download
+
+          model=Path(snapshot_download(
+              repo_id=os.environ["MODEL_REPO"],
+              revision=os.environ["MODEL_REV"],
+              local_dir="models/wren",
+          ))
+          p=model/"model.safetensors"
+          h=hashlib.sha256()
+          with p.open("rb") as f:
+              for c in iter(lambda:f.read(8*1024*1024),b""): h.update(c)
+          got=(p.stat().st_size,h.hexdigest())
+          exp=(int(os.environ["MODEL_BYTES"]),os.environ["MODEL_SHA256"])
+          if got!=exp: raise SystemExit(("wren hash mismatch",got,exp))
+
+          api=HfApi()
+          qrev=api.model_info(os.environ["QWEN_CONFIG_REPO"]).sha
+          mrev=api.model_info(os.environ["MIMI_REPO"]).sha
+          qdir=Path(snapshot_download(
+              repo_id=os.environ["QWEN_CONFIG_REPO"],revision=qrev,
+              allow_patterns=["config.json"],local_dir="models/qwen-config"))
+          mdir=Path(snapshot_download(
+              repo_id=os.environ["MIMI_REPO"],revision=mrev,
+              local_dir="models/mimi"))
+
+          cfg=json.loads((model/"config.json").read_text())
+          cfg["llm_name"]=str(qdir.resolve())
+          cfg["mimi_model_name"]=str(mdir.resolve())
+          (model/"config.json").write_text(json.dumps(cfg,indent=2))
+
+          def rows(root):
+              out=[]
+              for x in sorted(root.rglob("*")):
+                  if not x.is_file() or ".cache" in x.parts: continue
+                  hh=hashlib.sha256()
+                  with x.open("rb") as f:
+                      for c in iter(lambda:f.read(8*1024*1024),b""): hh.update(c)
+                  out.append({"path":str(x.relative_to(root)),"bytes":x.stat().st_size,"sha256":hh.hexdigest()})
+              return out
+          evidence={
+              "wren_revision":os.environ["MODEL_REV"],
+              "qwen_config_revision":qrev,
+              "mimi_revision":mrev,
+              "wren_files":rows(model),
+              "qwen_config_files":rows(qdir),
+              "mimi_files":rows(mdir)
+          }
+          Path("evidence/models.json").write_text(json.dumps(evidence,indent=2))
+          print(json.dumps({"wren_revision":os.environ["MODEL_REV"],"qwen_config_revision":qrev,"mimi_revision":mrev},indent=2))
+          PY
+
+      - name: One CPU French fearful clone smoke
+        id: smoke
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          espeak-ng -v fr-fr -s 145 -w evidence/reference.wav "Bonjour, ceci est une voix de référence."
+          /usr/bin/time -v -o evidence/inference-time.txt timeout 1200s python - <<'PY' 2>&1 | tee evidence/inference.log
+          import json,hashlib,random
+          from pathlib import Path
+          import numpy as np
+          import soundfile as sf
+          import torch
+          from transformers import AutoModel,AutoProcessor
+
+          seed=42
+          random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+          root="models/wren"
+          processor=AutoProcessor.from_pretrained(root,trust_remote_code=True,local_files_only=True)
+          model=AutoModel.from_pretrained(root,trust_remote_code=True,local_files_only=True).to("cpu").eval()
+
+          y,sr=sf.read("evidence/reference.wav",dtype="float32")
+          if y.ndim==2: y=y.mean(axis=1)
+          ref=torch.from_numpy(np.asarray(y,dtype=np.float32)).unsqueeze(0)
+          ref_codes=model.encode_audio(ref,sr)[:,:100]
+
+          inputs=processor("<fearful> Attention ! Sortez immédiatement !")
+          inputs={k:v.to("cpu") for k,v in inputs.items()}
+          wav=model.generate(
+              **inputs,ref_codes=ref_codes,
+              max_audio_frames=160,min_audio_frames=2,
+              temperature=0.8,top_k=50,top_p=0.9,
+              output_audio=True,
+          )
+          processor.save_audio(wav,"evidence/smoke.wav")
+          z,zsr=sf.read("evidence/smoke.wav",dtype="float32")
+          z=np.asarray(z,dtype=np.float32)
+          if z.ndim==2: z=z.mean(axis=1)
+          finite=bool(z.size and np.isfinite(z).all())
+          rms=float(np.sqrt(np.mean(z*z))) if z.size else 0.0
+          p=Path("evidence/smoke.wav")
+          out={
+              "status":"pass" if zsr==24000 and finite and rms>1e-5 else "reject",
+              "sample_rate":int(zsr),"samples":int(z.size),
+              "duration_seconds":float(len(z)/zsr) if zsr else 0.0,
+              "rms":rms,"finite":finite,
+              "sha256":hashlib.sha256(p.read_bytes()).hexdigest(),
+              "render_count":1,"retry_count":0,"replacement_count":0
+          }
+          Path("evidence/smoke.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          if out["status"]!="pass": raise SystemExit("smoke reject")
+          PY
+
+      - name: Record authoritative preflight verdict
+        if: always()
+        env:
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          python - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          p=Path("evidence/smoke.json")
+          smoke=json.loads(p.read_text()) if p.exists() else None
+          t=Path("evidence/inference-time.txt")
+          txt=t.read_text(errors="replace") if t.exists() else ""
+          m=re.search(r"Maximum resident set size \(kbytes\):\s*(\d+)",txt)
+          ok=os.environ.get("SMOKE_OUTCOME")=="success" and smoke and smoke.get("status")=="pass"
+          out={
+              "schema":"wren-05b-expressive-cpu-resource-preflight-result-v1",
+              "status":"resource-preflight-pass" if ok else "resource-preflight-reject",
+              "smoke_outcome":os.environ.get("SMOKE_OUTCOME"),
+              "smoke":smoke,
+              "max_rss_kib":int(m.group(1)) if m else None,
+              "science_authorized_next":bool(ok),
+              "human_gate_authorized":False,
+              "production":False
+          }
+          Path("evidence/final.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+          free -b | tee evidence/runner-after.txt
+          df -B1 / | tee -a evidence/runner-after.txt
+
+      - name: Upload resource evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wren-05b-expressive-cpu-resource-preflight
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface resource verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/final.json").read_text())["status"]
+          if s!="resource-preflight-pass": raise SystemExit(f"verdict: {s}")
+          print("WREN_05B_EXPRESSIVE_CPU_RESOURCE_PASS")
+          PY
