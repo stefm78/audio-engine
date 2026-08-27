@@ -1,0 +1,308 @@
+name: Voice Casting CosyVoice2 EU CPU Resource Preflight
+
+on:
+  push:
+    branches:
+      - lab/cosyvoice2-eu-cpu-resource-preflight
+    paths:
+      - .github/workflows/voice-casting-cosyvoice2-eu-cpu-resource-preflight.yml
+
+permissions:
+  contents: read
+
+env:
+  PACKAGE_VERSION: "0.2.8"
+  PACKAGE_WHEEL_SHA256: "155792a31b6f17e45582411a6cd0f5057da7ff9b3aa7508a16d54c5b63ecf511"
+  MODEL_REPO: hi-paris/CosyVoice2-0.5B-EU
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Freeze resource-only contract
+        run: |
+          mkdir -p evidence weights wheels
+          python - <<'PY'
+          import json, os, platform
+          from pathlib import Path
+          c={
+            "schema":"cosyvoice2-eu-cpu-resource-preflight-v1",
+            "purpose":"resource/access/topology proof only; no Claire/Lucie scientific audio",
+            "production":False,
+            "package":{"name":"cosyvoice2-eu","version":os.environ["PACKAGE_VERSION"],"wheel_sha256":os.environ["PACKAGE_WHEEL_SHA256"]},
+            "model_repo":os.environ["MODEL_REPO"],
+            "model_revision":"resolve exact Hugging Face main SHA before payload download, then freeze for this run",
+            "runtime":"GitHub ubuntu-24.04 CPU only",
+            "python":platform.python_version(),
+            "reference":"disposable French espeak-ng synthetic voice only",
+            "reference_text":"Bonjour, ceci est une voix de référence.",
+            "probe_text":"Speak with intense, urgent panic and fear. <|endofprompt|> Attention ! Sortez immédiatement !",
+            "topology":"same inference call: reference WAV conditions speaker; textual prefix before <|endofprompt|> conditions style; French target follows",
+            "speed":1.0,
+            "text_frontend":False,
+            "render_count_exact":1,
+            "scientific_claims":[],
+            "pass_rule":"Apache-2.0 model metadata; exact package wheel; CPU-only runtime; exact resolved model snapshot; full load; one finite non-silent 24 kHz reference+style French smoke",
+            "science_authorized_next":"only RESOURCE_PREFLIGHT_PASS may authorize one separately preregistered Claire-panic killer"
+          }
+          Path("evidence/contract.json").write_text(json.dumps(c,indent=2,ensure_ascii=False),encoding="utf-8")
+          print(json.dumps(c,indent=2,ensure_ascii=False))
+          PY
+
+      - name: Free runner disk
+        run: |
+          {
+            uname -a
+            lscpu
+            free -b
+            df -B1 /
+          } | tee evidence/runner-before.txt
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          df -B1 / | tee -a evidence/runner-before.txt
+
+      - name: Resolve and freeze exact model revision before payload
+        id: resolve
+        continue-on-error: true
+        run: |
+          python -m pip install --disable-pip-version-check "huggingface-hub==0.36.2"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from huggingface_hub import HfApi
+          info=HfApi().model_info(os.environ["MODEL_REPO"])
+          rev=str(info.sha)
+          if not rev or len(rev)!=40:
+              raise SystemExit(f"bad model revision: {rev!r}")
+          card=getattr(info,"card_data",None)
+          lic=getattr(card,"license",None) if card is not None else None
+          if str(lic).lower()!="apache-2.0":
+              raise SystemExit(f"unexpected model license: {lic!r}")
+          out={"repo":os.environ["MODEL_REPO"],"revision":rev,"license":lic}
+          Path("evidence/model-info.json").write_text(json.dumps(out,indent=2))
+          with Path(os.environ["GITHUB_ENV"]).open("a") as f:
+              f.write(f"MODEL_REV={rev}\n")
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Download and verify exact PyPI package wheel
+        id: package
+        continue-on-error: true
+        run: |
+          python -m pip download --disable-pip-version-check --no-deps --only-binary=:all:             "cosyvoice2-eu==$PACKAGE_VERSION" -d wheels
+          WHEEL="$(find wheels -maxdepth 1 -name 'cosyvoice2_eu-*.whl' -print -quit)"
+          test -n "$WHEEL"
+          test "$(sha256sum "$WHEEL" | cut -d' ' -f1)" = "$PACKAGE_WHEEL_SHA256"
+          sha256sum "$WHEEL" | tee evidence/package-wheel-sha256.txt
+          cp "$WHEEL" wheels/frozen.whl
+
+      - name: Install inference-only CPU runtime
+        id: deps
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends             ffmpeg espeak-ng sox libsox-dev libsndfile1-dev build-essential
+          python -m pip install --disable-pip-version-check             --index-url https://download.pytorch.org/whl/cpu             torch==2.3.1 torchaudio==2.3.1
+          python -m pip install --disable-pip-version-check --no-deps wheels/frozen.whl
+          python - <<'PY'
+          import email, zipfile
+          from pathlib import Path
+          from packaging.requirements import Requirement
+          wheel=Path("wheels/frozen.whl")
+          blocked={"torch","torchaudio","onnxruntime-gpu","onnxruntime","deepspeed","openai-whisper"}
+          with zipfile.ZipFile(wheel) as z:
+              meta=next(n for n in z.namelist() if n.endswith(".dist-info/METADATA"))
+              msg=email.message_from_bytes(z.read(meta))
+          kept=[]
+          for raw in msg.get_all("Requires-Dist",[]):
+              req=Requirement(raw)
+              if req.name.lower() in blocked:
+                  continue
+              if req.marker and not req.marker.evaluate():
+                  continue
+              kept.append(raw)
+          Path("/tmp/cosy2eu-cpu-req.txt").write_text("\n".join(kept)+"\n")
+          print("\n".join(kept))
+          PY
+          python -m pip install --disable-pip-version-check -r /tmp/cosy2eu-cpu-req.txt
+          python -m pip install --disable-pip-version-check             onnxruntime==1.18.0 psutil==6.1.1
+          python -m pip install --disable-pip-version-check             "git+https://github.com/openai/whisper.git@$WHISPER_REV"
+          python - <<'PY'
+          import json, torch, torchaudio, onnxruntime, psutil
+          from pathlib import Path
+          providers=onnxruntime.get_available_providers()
+          out={
+            "torch":torch.__version__,
+            "torchaudio":torchaudio.__version__,
+            "cuda_available":torch.cuda.is_available(),
+            "onnxruntime":onnxruntime.__version__,
+            "onnxruntime_providers":providers,
+            "cpu_count":psutil.cpu_count(logical=True),
+            "ram_total_bytes":psutil.virtual_memory().total
+          }
+          if out["cuda_available"]:
+              raise SystemExit("CUDA unexpectedly available")
+          if "CPUExecutionProvider" not in providers:
+              raise SystemExit(providers)
+          Path("evidence/runtime.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Download exact frozen model snapshot and hash manifest
+        id: model
+        continue-on-error: true
+        run: |
+          test -n "$MODEL_REV"
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(
+              repo_id=os.environ["MODEL_REPO"],
+              revision=os.environ["MODEL_REV"],
+              local_dir="weights/CosyVoice2-0.5B-EU"
+          ))
+          files=[]; total=0
+          for p in sorted(root.rglob("*")):
+              if not p.is_file() or ".cache" in p.parts:
+                  continue
+              h=hashlib.sha256(); size=p.stat().st_size; total+=size
+              with p.open("rb") as f:
+                  for chunk in iter(lambda:f.read(8*1024*1024),b""):
+                      h.update(chunk)
+              files.append({"path":str(p.relative_to(root)),"bytes":size,"sha256":h.hexdigest()})
+          out={"repo":os.environ["MODEL_REPO"],"revision":os.environ["MODEL_REV"],"files":files,"total_bytes":total}
+          Path("evidence/model-manifest.json").write_text(json.dumps(out,indent=2))
+          print("MODEL_FILES",len(files),"TOTAL_BYTES",total,"REV",os.environ["MODEL_REV"])
+          PY
+
+      - name: Create disposable French reference
+        run: |
+          espeak-ng -v fr-fr -s 145 -w evidence/reference.wav             "Bonjour, ceci est une voix de référence."
+          test -s evidence/reference.wav
+          ffprobe -v error -show_entries stream=sample_rate,channels,duration             -of json evidence/reference.wav | tee evidence/reference.json
+
+      - name: Full CPU reference plus style smoke
+        id: smoke
+        continue-on-error: true
+        run: |
+          /usr/bin/time -v -o evidence/inference-time.txt python - <<'PY'
+          import hashlib, json, os, random, resource
+          from pathlib import Path
+          import numpy as np, soundfile as sf, torch
+          from cosyvoice2_eu import load
+
+          random.seed(1986); np.random.seed(1986); torch.manual_seed(1986)
+          if torch.cuda.is_available():
+              raise SystemExit("CPU resource probe unexpectedly sees CUDA")
+
+          cosy=load(
+              model_dir=str(Path("weights/CosyVoice2-0.5B-EU").resolve()),
+              repo_id=os.environ["MODEL_REPO"],
+              download=False
+          )
+          text="Speak with intense, urgent panic and fear. <|endofprompt|> Attention ! Sortez immédiatement !"
+          wav,sr=cosy.tts(
+              text=text,
+              prompt=str(Path("evidence/reference.wav").resolve()),
+              speed=1.0,
+              text_frontend=False
+          )
+          x=wav.detach().cpu().float().numpy()
+          if x.ndim==2: x=x.mean(axis=0)
+          x=np.asarray(x,dtype=np.float32).reshape(-1)
+          finite=bool(x.size and np.isfinite(x).all())
+          rms=float(np.sqrt(np.mean(x*x))) if x.size else 0.0
+          duration=float(len(x)/sr) if sr else 0.0
+          outpath=Path("evidence/smoke.wav")
+          sf.write(outpath,x,sr)
+          ok=(sr==24000 and finite and rms>1e-5 and 0.2<duration<30.0)
+          out={
+            "status":"pass" if ok else "reject",
+            "resource_probe_only":True,
+            "scientific_claim":False,
+            "sample_rate":int(sr),
+            "duration_seconds":duration,
+            "rms":rms,
+            "finite":finite,
+            "output_sha256":hashlib.sha256(outpath.read_bytes()).hexdigest(),
+            "reference_plus_style_same_call":True,
+            "style_prefix":"Speak with intense, urgent panic and fear. <|endofprompt|>",
+            "target_text":"Attention ! Sortez immédiatement !",
+            "seed":1986,
+            "render_count":1,
+            "retry_count":0,
+            "replacement_count":0,
+            "max_rss_kib":resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+          }
+          Path("evidence/smoke.json").write_text(json.dumps(out,indent=2,ensure_ascii=False))
+          print(json.dumps(out,indent=2,ensure_ascii=False))
+          if not ok:
+              raise SystemExit("resource smoke technical reject")
+          PY
+
+      - name: Record authoritative resource verdict
+        if: always()
+        env:
+          RESOLVE_OUTCOME: ${{ steps.resolve.outcome }}
+          PACKAGE_OUTCOME: ${{ steps.package.outcome }}
+          DEPS_OUTCOME: ${{ steps.deps.outcome }}
+          MODEL_OUTCOME: ${{ steps.model.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          keys=["RESOLVE_OUTCOME","PACKAGE_OUTCOME","DEPS_OUTCOME","MODEL_OUTCOME","SMOKE_OUTCOME"]
+          outcomes={k.lower().replace("_outcome",""):os.environ.get(k) for k in keys}
+          smoke=json.loads(Path("evidence/smoke.json").read_text()) if Path("evidence/smoke.json").exists() else None
+          model_info=json.loads(Path("evidence/model-info.json").read_text()) if Path("evidence/model-info.json").exists() else None
+          ok=all(v=="success" for v in outcomes.values()) and smoke is not None and smoke.get("status")=="pass"
+          out={
+            "schema":"cosyvoice2-eu-cpu-resource-preflight-result-v1",
+            "status":"resource-preflight-pass" if ok else "resource-preflight-fail",
+            "model_info":model_info,
+            "outcomes":outcomes,
+            "smoke":smoke,
+            "science_authorized_next":bool(ok),
+            "human_gate_authorized":False,
+            "production":False
+          }
+          Path("evidence/final.json").write_text(json.dumps(out,indent=2,ensure_ascii=False))
+          print(json.dumps(out,indent=2,ensure_ascii=False))
+          PY
+          free -b | tee evidence/runner-after.txt
+          df -B1 / | tee -a evidence/runner-after.txt
+
+      - name: Upload resource evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosyvoice2-eu-cpu-resource-preflight
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface resource verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/final.json").read_text())["status"]
+          if s!="resource-preflight-pass":
+              raise SystemExit(f"verdict: {s}")
+          print("COSYVOICE2_EU_RESOURCE_PREFLIGHT_PASS")
+          PY
