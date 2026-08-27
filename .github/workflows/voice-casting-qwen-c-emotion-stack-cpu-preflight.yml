@@ -1,0 +1,248 @@
+name: Voice Casting Qwen C Emotion Stack CPU Preflight
+
+on:
+  push:
+    branches:
+      - lab/qwen-c-emotion-stack-cpu-preflight
+    paths:
+      - .github/workflows/voice-casting-qwen-c-emotion-stack-cpu-preflight.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  ENGINE_REPO: https://github.com/gabriele-mastrapasqua/qwen3-tts.git
+  ENGINE_REV: 328ab9cb241774572bb59917af199bdf64a17227
+  BASE_REPO: Qwen/Qwen3-TTS-12Hz-1.7B-Base
+  CUSTOM_REPO: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+  EXPR_URL: https://huggingface.co/gabrione/qwen3-tts-italian-expr/resolve/main/expr/french_csp_k6.expr
+  EXPR_SHA256: eff743ea6cae4ab2d26931b77cff4ce1ab1621978f45eda00af1f34197470ce2
+  VOICE_URL: https://huggingface.co/gabrione/qwen3-tts-voices/resolve/main/hugo_graft.qvoice
+  VOICE_SHA256: 5d2f352c578e42823fa62b5f2043338f7b0c07921aca73b43c4928f7eb7000cc
+  SOURCE_RUN_ID: "32723874223"
+  SOURCE_ARTIFACT: voice-casting-chatterbox-v3-stage2
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Freeze resource-only architecture contract
+        run: |
+          mkdir -p evidence probe engine models voices
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          c={
+            "schema":"qwen-c-emotion-stack-cpu-preflight-v1",
+            "purpose":"resource/reproducibility proof only; no Claire/Lucie scientific audio",
+            "architecture":"Pure-C Qwen3-TTS clone x-vector + CustomVoice French expr + fear steering",
+            "engine_revision":os.environ["ENGINE_REV"],
+            "base_repo":os.environ["BASE_REPO"],
+            "custom_repo":os.environ["CUSTOM_REPO"],
+            "french_expr_sha256":os.environ["EXPR_SHA256"],
+            "public_hugo_graft_sha256":os.environ["VOICE_SHA256"],
+            "probe_a":"extract 1.7B x-vector from historical synthetic Vivienne reference; no target speech required",
+            "probe_b":"generate one short French utterance on public-domain Hugo clone x-vector using --emotion fear",
+            "emotion_recipe":"engine built-in clone COMBINE path: French .expr + committed fear steer + default instruct; seed 42",
+            "pass_rule":"engine builds/self-tests; Base 1.7B x-vector extraction succeeds on CPU; CustomVoice 1.7B fear generation succeeds on CPU and outputs finite non-silent native-rate audio",
+            "science_authorized_next":"only after PASS: one Claire-panic killer using Claire x-vector + same frozen fear recipe",
+            "production":False
+          }
+          Path("evidence/contract.json").write_text(json.dumps(c,indent=2))
+          print(json.dumps(c,indent=2))
+          PY
+
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          df -h /
+
+      - name: Recover non-scientific synthetic speaker probe
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D probe
+          test -s probe/reference-vivienne-edge-16k.wav
+          ffmpeg -hide_banner -loglevel error -y -i probe/reference-vivienne-edge-16k.wav -ar 24000 -ac 1 probe/reference-vivienne-24k.wav
+          sha256sum probe/reference-vivienne-edge-16k.wav probe/reference-vivienne-24k.wav | tee evidence/probe-sha256.txt
+
+      - name: Checkout exact engine and build portable CPU binary
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends build-essential libopenblas-dev ffmpeg libsndfile1 curl
+          git clone --filter=blob:none "$ENGINE_REPO" engine/qwen-c
+          git -C engine/qwen-c checkout --detach "$ENGINE_REV"
+          test "$(git -C engine/qwen-c rev-parse HEAD)" = "$ENGINE_REV"
+          cp engine/qwen-c/LICENSE evidence/engine-LICENSE
+          make -C engine/qwen-c blas
+          engine/qwen-c/qwen_tts --caps | tee evidence/caps.txt
+          engine/qwen-c/qwen_tts --self-test | tee evidence/self-test.txt
+          test "${PIPESTATUS[0]}" = "0"
+
+      - name: Install snapshot tooling
+        run: |
+          python -m pip install --disable-pip-version-check "huggingface-hub>=0.30,<1.0" soundfile psutil
+
+      - name: Resolve exact Base 1.7B revision and download/hash required files
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,time
+          from pathlib import Path
+          from huggingface_hub import HfApi,snapshot_download
+          repo=os.environ["BASE_REPO"]
+          api=HfApi()
+          last=None
+          for i in range(6):
+              try:
+                  rev=api.model_info(repo).sha; break
+              except Exception as e:
+                  last=e; time.sleep(5*(i+1))
+          else: raise last
+          pats=["config.json","generation_config.json","tokenizer_config.json","preprocessor_config.json","model.safetensors","vocab.json","merges.txt","speech_tokenizer/*"]
+          root=Path(snapshot_download(repo_id=repo,revision=rev,allow_patterns=pats,local_dir="models/base-large"))
+          rows=[]; total=0
+          for p in sorted(root.rglob("*")):
+              if not p.is_file() or ".cache" in p.parts: continue
+              h=hashlib.sha256()
+              with p.open("rb") as f:
+                  for c in iter(lambda:f.read(8*1024*1024),b""): h.update(c)
+              rows.append({"path":str(p.relative_to(root)),"bytes":p.stat().st_size,"sha256":h.hexdigest()}); total+=p.stat().st_size
+          required=["config.json","model.safetensors","speech_tokenizer/model.safetensors"]
+          for n in required:
+              if not (root/n).is_file(): raise SystemExit(("missing",n))
+          out={"repo":repo,"revision":rev,"total_bytes":total,"files":rows}
+          Path("evidence/base-model.json").write_text(json.dumps(out,indent=2)); print(json.dumps({"revision":rev,"total_bytes":total,"file_count":len(rows)},indent=2))
+          PY
+
+      - name: Base 1.7B CPU x-vector extraction probe
+        run: |
+          /usr/bin/time -v -o evidence/base-extract-time.txt engine/qwen-c/qwen_tts             -d models/base-large             --ref-audio probe/reference-vivienne-24k.wav             -l French             --xvector-only             --save-voice evidence/vivienne-probe.bin             2>&1 | tee evidence/base-extract.log
+          test "${PIPESTATUS[0]}" = "0"
+          test -s evidence/vivienne-probe.bin
+          python - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          p=Path("evidence/vivienne-probe.bin")
+          out={"status":"pass","bytes":p.stat().st_size,"sha256":hashlib.sha256(p.read_bytes()).hexdigest()}
+          Path("evidence/base-extract.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          PY
+          rm -rf models/base-large
+          sync
+          df -h /
+
+      - name: Resolve exact CustomVoice 1.7B revision and download/hash required files
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,time
+          from pathlib import Path
+          from huggingface_hub import HfApi,snapshot_download
+          repo=os.environ["CUSTOM_REPO"]; api=HfApi(); last=None
+          for i in range(6):
+              try:
+                  rev=api.model_info(repo).sha; break
+              except Exception as e:
+                  last=e; time.sleep(5*(i+1))
+          else: raise last
+          pats=["config.json","generation_config.json","tokenizer_config.json","preprocessor_config.json","model.safetensors","vocab.json","merges.txt","speech_tokenizer/*"]
+          root=Path(snapshot_download(repo_id=repo,revision=rev,allow_patterns=pats,local_dir="models/custom-large"))
+          rows=[]; total=0
+          for p in sorted(root.rglob("*")):
+              if not p.is_file() or ".cache" in p.parts: continue
+              h=hashlib.sha256()
+              with p.open("rb") as f:
+                  for c in iter(lambda:f.read(8*1024*1024),b""): h.update(c)
+              rows.append({"path":str(p.relative_to(root)),"bytes":p.stat().st_size,"sha256":h.hexdigest()}); total+=p.stat().st_size
+          for n in ["config.json","model.safetensors","speech_tokenizer/model.safetensors"]:
+              if not (root/n).is_file(): raise SystemExit(("missing",n))
+          out={"repo":repo,"revision":rev,"total_bytes":total,"files":rows}
+          Path("evidence/custom-model.json").write_text(json.dumps(out,indent=2)); print(json.dumps({"revision":rev,"total_bytes":total,"file_count":len(rows)},indent=2))
+          PY
+
+      - name: Recover and verify public clone + French expression pack
+        run: |
+          mkdir -p engine/qwen-c/presets/expr voices
+          curl --fail --location --retry 6 --retry-all-errors "$EXPR_URL?download=true" -o engine/qwen-c/presets/expr/french_csp_k6.expr
+          curl --fail --location --retry 6 --retry-all-errors "$VOICE_URL?download=true" -o voices/hugo_graft.qvoice
+          test "$(sha256sum engine/qwen-c/presets/expr/french_csp_k6.expr | cut -d' ' -f1)" = "$EXPR_SHA256"
+          test "$(sha256sum voices/hugo_graft.qvoice | cut -d' ' -f1)" = "$VOICE_SHA256"
+          python engine/qwen-c/tests/qvoice_to_xvec.py voices/hugo_graft.qvoice
+          test -s voices/hugo_graft.bin
+          sha256sum engine/qwen-c/presets/expr/french_csp_k6.expr voices/hugo_graft.qvoice voices/hugo_graft.bin | tee evidence/public-assets-sha256.txt
+
+      - name: CustomVoice 1.7B French fear generation probe
+        id: smoke
+        continue-on-error: true
+        working-directory: engine/qwen-c
+        run: |
+          /usr/bin/time -v -o ../../evidence/custom-fear-time.txt ./qwen_tts             -d ../../models/custom-large             --load-voice ../../voices/hugo_graft.bin             --xvector-only             -l French             --emotion fear             --seed 42             --text "Bonjour. Ceci est un test."             -o ../../evidence/fear-smoke.wav             2>&1 | tee ../../evidence/custom-fear.log
+          test "${PIPESTATUS[0]}" = "0"
+          python - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          import numpy as np,soundfile as sf
+          p=Path("../../evidence/fear-smoke.wav")
+          y,sr=sf.read(p,dtype="float32"); y=np.asarray(y,dtype=np.float32); y=y.mean(1) if y.ndim==2 else y
+          finite=bool(np.isfinite(y).all()) if y.size else False
+          rms=float(np.sqrt(np.mean(y*y))) if y.size else 0.0
+          out={"status":"pass" if (sr==24000 and y.size>0 and finite and rms>1e-5) else "reject","sample_rate":sr,"samples":int(y.size),"duration_seconds":float(len(y)/sr),"rms":rms,"finite":finite,"sha256":hashlib.sha256(p.read_bytes()).hexdigest()}
+          Path("../../evidence/custom-fear.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          if out["status"]!="pass": raise SystemExit("fear smoke reject")
+          PY
+
+      - name: Record authoritative preflight verdict
+        if: always()
+        env:
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          python - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          base=Path("evidence/base-extract.json")
+          custom=Path("evidence/custom-fear.json")
+          log=Path("evidence/custom-fear.log").read_text(errors="ignore") if Path("evidence/custom-fear.log").exists() else ""
+          recipe_signals={
+            "fear_mentioned":"fear" in log.lower(),
+            "expr_mentioned":"french_csp_k6.expr" in log or ".expr" in log,
+            "steer_mentioned":"steer" in log.lower(),
+          }
+          ok=(
+            base.exists() and json.loads(base.read_text()).get("status")=="pass" and
+            custom.exists() and json.loads(custom.read_text()).get("status")=="pass" and
+            os.environ["SMOKE_OUTCOME"]=="success" and
+            recipe_signals["fear_mentioned"]
+          )
+          out={"status":"resource-preflight-pass" if ok else "resource-preflight-reject","base_xvector_pass":base.exists() and json.loads(base.read_text()).get("status")=="pass","custom_fear_pass":custom.exists() and json.loads(custom.read_text()).get("status")=="pass","recipe_log_signals":recipe_signals,"science_authorized_next":bool(ok),"production":False}
+          Path("evidence/final.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          PY
+
+      - name: Upload resource evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen-c-emotion-stack-cpu-preflight
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface resource verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/final.json").read_text())["status"]
+          if s!="resource-preflight-pass": raise SystemExit(f"verdict: {s}")
+          print("QWEN_C_EMOTION_STACK_RESOURCE_PASS")
+          PY
