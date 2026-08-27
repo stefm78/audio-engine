@@ -1,0 +1,272 @@
+name: Voice Casting Zonos v0.1 CPU Resource Preflight
+
+on:
+  push:
+    branches:
+      - lab/zonos-v01-cpu-resource-preflight
+    paths:
+      - .github/workflows/voice-casting-zonos-v01-cpu-resource-preflight.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  ZONOS_REPO: https://github.com/Zyphra/Zonos.git
+  ZONOS_REV: bc40d98e1e1ab54fc65c483be127a90e3c7c0645
+  MODEL_REPO: Zyphra/Zonos-v0.1-transformer
+  SPEAKER_REPO: Zyphra/Zonos-v0.1-speaker-embedding
+  DAC_REPO: descript/dac_44khz
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Freeze resource-only contract
+        run: |
+          mkdir -p evidence upstream weights
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          c={
+            "schema":"zonos-v01-cpu-resource-preflight-v1",
+            "purpose":"prove official Zonos v0.1 transformer + DAC + speaker encoder can execute zero-shot French on standard GitHub CPU before any Claire/Lucie science",
+            "scientific_audio_used":False,
+            "upstream_revision":os.environ["ZONOS_REV"],
+            "model_repos":[os.environ["MODEL_REPO"],os.environ["SPEAKER_REPO"],os.environ["DAC_REPO"]],
+            "resource_probe":{
+              "speaker_prompt":"upstream assets/exampleaudio.mp3",
+              "text":"Bonjour.",
+              "language":"fr-fr",
+              "emotion":"official neutral/default vector",
+              "seed":1986,
+              "max_new_tokens":120,
+              "cfg_scale":2.0,
+              "min_p":0.1,
+              "disable_torch_compile":True
+            },
+            "pass_rule":"exact repo revisions resolved and hashed; CPU model load + speaker embedding + finite non-silent 44.1kHz decode",
+            "next_if_pass":"authorize one separate Claire-panic killer with a preregistered Fear vector; no parameter search",
+            "production":False
+          }
+          Path("evidence/contract.json").write_text(json.dumps(c,indent=2))
+          print(json.dumps(c,indent=2))
+          PY
+
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          df -h /
+
+      - name: Checkout exact official Zonos source
+        run: |
+          git clone --filter=blob:none "$ZONOS_REPO" upstream/zonos
+          git -C upstream/zonos checkout --detach "$ZONOS_REV"
+          test "$(git -C upstream/zonos rev-parse HEAD)" = "$ZONOS_REV"
+          cp upstream/zonos/LICENSE evidence/upstream-LICENSE
+          sha256sum upstream/zonos/assets/exampleaudio.mp3 | tee evidence/probe-input-sha256.txt
+
+      - name: Install exact CPU runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends espeak-ng ffmpeg libsndfile1
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 torchaudio==2.6.0
+          python -m pip install --disable-pip-version-check -e upstream/zonos
+          python -m pip install --disable-pip-version-check psutil==6.1.1
+          python -m pip check
+          python - <<'PY'
+          import json,platform,psutil,torch,torchaudio
+          from pathlib import Path
+          r={
+            "python":platform.python_version(),
+            "torch":torch.__version__,
+            "torchaudio":torchaudio.__version__,
+            "cuda_available":torch.cuda.is_available(),
+            "cpu_count":psutil.cpu_count(),
+            "ram_total_bytes":psutil.virtual_memory().total
+          }
+          assert not r["cuda_available"]
+          Path("evidence/runtime.json").write_text(json.dumps(r,indent=2))
+          print(json.dumps(r,indent=2))
+          PY
+
+      - name: Resolve exact model revisions and snapshot all required weights
+        run: |
+          python - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          from huggingface_hub import HfApi,snapshot_download
+
+          specs=[
+            (os.environ["MODEL_REPO"],["config.json","model.safetensors"],"weights/model"),
+            (os.environ["SPEAKER_REPO"],["ResNet293_SimAM_ASP_base.pt","ResNet293_SimAM_ASP_base_LDA-128.pt"],"weights/speaker"),
+            (os.environ["DAC_REPO"],["config.json","model.safetensors"],"weights/dac"),
+          ]
+          api=HfApi(); repos=[]; grand_total=0
+          for repo,patterns,local in specs:
+              rev=api.model_info(repo).sha
+              root=Path(snapshot_download(repo_id=repo,revision=rev,allow_patterns=patterns,local_dir=local))
+              files=[]; total=0
+              for p in sorted(root.rglob("*")):
+                  if not p.is_file() or ".cache" in p.parts: continue
+                  h=hashlib.sha256()
+                  with p.open("rb") as f:
+                      for c in iter(lambda:f.read(8*1024*1024),b""): h.update(c)
+                  size=p.stat().st_size; total+=size
+                  files.append({"path":str(p.relative_to(root)),"bytes":size,"sha256":h.hexdigest()})
+              missing=[x for x in patterns if not (root/x).is_file()]
+              if missing: raise SystemExit((repo,"missing",missing))
+              repos.append({"repo":repo,"revision":rev,"total_bytes":total,"files":files})
+              grand_total+=total
+          out={"repos":repos,"grand_total_bytes":grand_total}
+          Path("evidence/model-manifest.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Full CPU load, speaker embedding and French-path synthesis
+        id: smoke
+        continue-on-error: true
+        run: |
+          /usr/bin/time -v -o evidence/smoke-time.txt python - <<'PY'
+          import hashlib,json,resource,time
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch,torchaudio
+
+          # Infrastructure-only local asset pinning: redirect Zonos' hard-coded DAC/speaker
+          # downloads to the exact snapshots already resolved and hashed above.
+          from transformers.models.dac import DacModel
+          _orig_dac = DacModel.from_pretrained
+          DacModel.from_pretrained = classmethod(lambda cls,*a,**kw: _orig_dac("weights/dac",local_files_only=True))
+
+          import zonos.speaker_cloning as zsc
+          def _local_hf(repo_id,filename,*args,**kwargs):
+              if repo_id != "Zyphra/Zonos-v0.1-speaker-embedding":
+                  raise RuntimeError((repo_id,filename))
+              p=Path("weights/speaker")/filename
+              if not p.is_file(): raise FileNotFoundError(p)
+              return str(p)
+          zsc.hf_hub_download=_local_hf
+
+          from zonos.model import Zonos
+          from zonos.conditioning import make_cond_dict
+
+          started=time.time()
+          model=Zonos.from_local("weights/model/config.json","weights/model/model.safetensors",device="cpu")
+          load_wall=time.time()-started
+
+          wav,sr=torchaudio.load("upstream/zonos/assets/exampleaudio.mp3")
+          spk_started=time.time()
+          speaker=model.make_speaker_embedding(wav,sr)
+          speaker_wall=time.time()-spk_started
+
+          cond=make_cond_dict(
+              text="Bonjour.",
+              language="fr-fr",
+              speaker=speaker,
+              device="cpu",
+          )
+          conditioning=model.prepare_conditioning(cond)
+          torch.manual_seed(1986)
+          gen_started=time.time()
+          codes=model.generate(
+              conditioning,
+              max_new_tokens=120,
+              cfg_scale=2.0,
+              sampling_params={"min_p":0.1},
+              progress_bar=False,
+              disable_torch_compile=True,
+          )
+          generate_wall=time.time()-gen_started
+          dec_started=time.time()
+          audio=model.autoencoder.decode(codes).cpu()[0]
+          decode_wall=time.time()-dec_started
+
+          y=audio.squeeze().numpy().astype(np.float32)
+          outwav=Path("evidence/resource-smoke.wav")
+          sf.write(outwav,y,int(model.autoencoder.sampling_rate))
+          finite=bool(np.isfinite(y).all()) if y.size else False
+          rms=float(np.sqrt(np.mean(y*y))) if y.size else 0.0
+          duration=float(y.size/model.autoencoder.sampling_rate) if y.size else 0.0
+          ok=(
+              y.size>0 and finite and rms>1e-5 and
+              int(model.autoencoder.sampling_rate)==44100 and
+              speaker.numel()>0 and bool(torch.isfinite(speaker).all())
+          )
+          out={
+            "status":"pass" if ok else "reject",
+            "device":str(model.device),
+            "model_dtype":str(next(model.parameters()).dtype),
+            "sample_rate":int(model.autoencoder.sampling_rate),
+            "samples":int(y.size),
+            "duration_seconds":duration,
+            "rms":rms,
+            "finite":finite,
+            "speaker_shape":list(speaker.shape),
+            "speaker_finite":bool(torch.isfinite(speaker).all()),
+            "load_wall_seconds":load_wall,
+            "speaker_wall_seconds":speaker_wall,
+            "generate_wall_seconds":generate_wall,
+            "decode_wall_seconds":decode_wall,
+            "max_rss_kib":resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            "output_sha256":hashlib.sha256(outwav.read_bytes()).hexdigest(),
+            "cuda_available":torch.cuda.is_available(),
+            "scientific_claim":False
+          }
+          Path("evidence/smoke.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          if not ok: raise SystemExit("Zonos CPU smoke reject")
+          PY
+
+      - name: Record authoritative resource verdict
+        if: always()
+        env:
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          smoke=json.loads(Path("evidence/smoke.json").read_text()) if Path("evidence/smoke.json").exists() else {}
+          req=all(Path("evidence",p).exists() for p in ["runtime.json","model-manifest.json","smoke.json"])
+          ok=req and os.environ["SMOKE_OUTCOME"]=="success" and smoke.get("status")=="pass"
+          out={
+            "status":"resource-preflight-pass" if ok else "resource-preflight-reject",
+            "architecture":"Zyphra Zonos-v0.1 transformer CPU speaker+emotion conditioning",
+            "science_authorized_next":bool(ok),
+            "production":False
+          }
+          Path("evidence/final.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Upload Zonos resource evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zonos-v01-cpu-resource-preflight
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface resource verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/final.json").read_text())["status"]
+          if s!="resource-preflight-pass": raise SystemExit(f"verdict: {s}")
+          print("ZONOS_RESOURCE_PASS")
+          PY
