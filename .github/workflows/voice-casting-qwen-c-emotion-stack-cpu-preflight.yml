@@ -73,6 +73,8 @@ jobs:
 
       - name: Recover non-scientific synthetic speaker probe
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg
           gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D probe
           test -s probe/reference-vivienne-edge-16k.wav
           ffmpeg -hide_banner -loglevel error -y -i probe/reference-vivienne-edge-16k.wav -ar 24000 -ac 1 probe/reference-vivienne-24k.wav
