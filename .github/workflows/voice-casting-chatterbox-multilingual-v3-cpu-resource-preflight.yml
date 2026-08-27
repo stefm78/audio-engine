@@ -1,0 +1,212 @@
+name: Voice Casting Chatterbox Multilingual V3 CPU Resource Preflight
+
+on:
+  push:
+    branches:
+      - lab/chatterbox-multilingual-v3-cpu-resource-preflight
+    paths:
+      - .github/workflows/voice-casting-chatterbox-multilingual-v3-cpu-resource-preflight.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CHATTERBOX_REPO: https://github.com/resemble-ai/chatterbox.git
+  CHATTERBOX_REV: 5de7a54aa4e5e2baadb0182dde554908b48b85c2
+  PERTH_REV: ce86c49d029f42272c1902eccb675556b9ed2330
+  MODEL_REPO: ResembleAI/chatterbox
+  MODEL_REV: 5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18
+  T3_MODEL: t3_mtl23ls_v3.safetensors
+  SOURCE_RUN_ID: "32723874223"
+  SOURCE_ARTIFACT: voice-casting-chatterbox-v3-stage2
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Freeze resource-only contract
+        run: |
+          mkdir -p evidence probe weights upstream
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          c={
+            "schema":"chatterbox-multilingual-v3-cpu-resource-preflight-v1",
+            "purpose":"prove exact current V3 multilingual stack executes on standard GitHub CPU before Claire science",
+            "scientific_audio_used":False,
+            "upstream_revision":os.environ["CHATTERBOX_REV"],
+            "perth_revision":os.environ["PERTH_REV"],
+            "model_repo":os.environ["MODEL_REPO"],
+            "model_revision":os.environ["MODEL_REV"],
+            "t3_model":os.environ["T3_MODEL"],
+            "smoke":{
+              "text":"Bonjour.","language_id":"fr",
+              "prompt":"historical synthetic Vivienne reference",
+              "exaggeration":0.8,"cfg_weight":0.3,"temperature":0.8,"seed":20260824
+            },
+            "pass_rule":"exact model files downloaded+hashed; full CPU load; one finite non-silent native-rate French synthesis",
+            "next_if_pass":"authorize exactly one Claire-panic V3 killer using the previously human-winning 0.8/0.3/0.8/20260824 bundle",
+            "production":False
+          }
+          Path("evidence/contract.json").write_text(json.dumps(c,indent=2))
+          print(json.dumps(c,indent=2))
+          PY
+
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+
+      - name: Recover non-scientific synthetic prompt
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D probe
+          test -s probe/reference-vivienne-edge-16k.wav
+          sha256sum probe/reference-vivienne-edge-16k.wav | tee evidence/probe-sha256.txt
+
+      - name: Install exact CPU runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1
+          git clone --filter=blob:none "$CHATTERBOX_REPO" upstream/chatterbox
+          git -C upstream/chatterbox checkout --detach "$CHATTERBOX_REV"
+          test "$(git -C upstream/chatterbox rev-parse HEAD)" = "$CHATTERBOX_REV"
+          cp upstream/chatterbox/LICENSE evidence/upstream-LICENSE
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          p=Path("upstream/chatterbox/pyproject.toml"); raw=p.read_bytes(); s=raw.decode()
+          old="resemble-perth @ git+https://github.com/resemble-ai/Perth.git@master"
+          new=f"resemble-perth @ git+https://github.com/resemble-ai/Perth.git@{os.environ['PERTH_REV']}"
+          if s.count(old)!=1: raise SystemExit("unexpected Perth dependency form")
+          before=hashlib.sha256(raw).hexdigest()
+          p.write_text(s.replace(old,new),encoding="utf-8")
+          after=hashlib.sha256(p.read_bytes()).hexdigest()
+          Path("evidence/packaging-patch.txt").write_text(
+            f"original_pyproject_sha256={before}\npatched_pyproject_sha256={after}\nchange=Perth master -> {os.environ['PERTH_REV']}\nscience_code_changed=false\n")
+          PY
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 torchaudio==2.6.0
+          python -m pip install --disable-pip-version-check -e upstream/chatterbox
+          python -m pip install --disable-pip-version-check psutil==6.1.1
+          python -m pip check
+          python - <<'PY'
+          import json,platform,psutil,torch
+          from pathlib import Path
+          r={"python":platform.python_version(),"torch":torch.__version__,"cuda_available":torch.cuda.is_available(),"cpu_count":psutil.cpu_count(),"ram_total_bytes":psutil.virtual_memory().total}
+          assert not r["cuda_available"]
+          Path("evidence/runtime.json").write_text(json.dumps(r,indent=2))
+          print(json.dumps(r,indent=2))
+          PY
+
+      - name: Download exact V3 snapshot and hash manifest
+        run: |
+          python - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(
+            repo_id=os.environ["MODEL_REPO"],revision=os.environ["MODEL_REV"],
+            allow_patterns=["ve.pt",os.environ["T3_MODEL"],"s3gen.pt","grapheme_mtl_merged_expanded_v1.json","conds.pt","Cangjie5_TC.json"],
+            local_dir="weights/chatterbox-mtl-v3"))
+          required=["ve.pt",os.environ["T3_MODEL"],"s3gen.pt","grapheme_mtl_merged_expanded_v1.json"]
+          for n in required:
+              if not (root/n).is_file(): raise SystemExit(f"missing {n}")
+          rows=[]; total=0
+          for p in sorted(x for x in root.iterdir() if x.is_file()):
+              h=hashlib.sha256()
+              with p.open("rb") as f:
+                  for c in iter(lambda:f.read(8*1024*1024),b""): h.update(c)
+              rows.append({"name":p.name,"bytes":p.stat().st_size,"sha256":h.hexdigest()})
+              total+=p.stat().st_size
+          out={"repo":os.environ["MODEL_REPO"],"revision":os.environ["MODEL_REV"],"files":rows,"file_count":len(rows),"total_bytes":total}
+          Path("evidence/model-manifest.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Full V3 CPU model load
+        run: |
+          /usr/bin/time -v -o evidence/load-time.txt python - <<'PY'
+          import json,resource,time,torch
+          from pathlib import Path
+          from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+          started=time.time()
+          m=ChatterboxMultilingualTTS.from_local("weights/chatterbox-mtl-v3","cpu",t3_model="t3_mtl23ls_v3.safetensors")
+          out={"status":"pass","device":str(m.device),"sample_rate":int(m.sr),"model_class":type(m).__name__,"load_wall_seconds":time.time()-started,"max_rss_kib":resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,"cuda_available":torch.cuda.is_available()}
+          Path("evidence/load.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: One non-scientific V3 French synthesis
+        id: smoke
+        continue-on-error: true
+        run: |
+          /usr/bin/time -v -o evidence/smoke-time.txt python - <<'PY'
+          import hashlib,json,resource,time,torch
+          from pathlib import Path
+          import numpy as np,soundfile as sf
+          from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+          m=ChatterboxMultilingualTTS.from_local("weights/chatterbox-mtl-v3","cpu",t3_model="t3_mtl23ls_v3.safetensors")
+          torch.manual_seed(20260824)
+          started=time.time()
+          wav=m.generate("Bonjour.",language_id="fr",audio_prompt_path="probe/reference-vivienne-edge-16k.wav",exaggeration=0.8,cfg_weight=0.3,temperature=0.8)
+          wall=time.time()-started
+          y=wav.squeeze(0).detach().cpu().numpy().astype(np.float32)
+          p=Path("evidence/resource-smoke.wav"); sf.write(p,y,int(m.sr))
+          finite=bool(np.isfinite(y).all()) if y.size else False
+          rms=float(np.sqrt(np.mean(y*y))) if y.size else 0.0
+          ok=y.size>0 and finite and rms>1e-5 and int(m.sr)==24000
+          out={"status":"pass" if ok else "reject","sample_rate":int(m.sr),"duration_seconds":float(y.size/m.sr),"rms":rms,"finite":finite,"render_wall_seconds":wall,"max_rss_kib":resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,"sha256":hashlib.sha256(p.read_bytes()).hexdigest(),"cuda_available":torch.cuda.is_available()}
+          Path("evidence/smoke.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          if not ok: raise SystemExit("V3 smoke reject")
+          PY
+
+      - name: Record authoritative resource verdict
+        if: always()
+        env:
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          req=["runtime.json","model-manifest.json","load.json","smoke.json"]
+          exists=all((Path("evidence")/p).exists() for p in req)
+          smoke=json.loads(Path("evidence/smoke.json").read_text()) if (Path("evidence")/"smoke.json").exists() else {}
+          ok=exists and os.environ["SMOKE_OUTCOME"]=="success" and smoke.get("status")=="pass"
+          out={"status":"resource-preflight-pass" if ok else "resource-preflight-reject","architecture":"ChatterboxMultilingualTTS v3 CPU zero-shot French","science_authorized_next":bool(ok),"production":False}
+          Path("evidence/final.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Upload V3 preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatterbox-multilingual-v3-cpu-resource-preflight
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface resource verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/final.json").read_text())["status"]
+          if s!="resource-preflight-pass": raise SystemExit(f"verdict: {s}")
+          print("CHATTERBOX_MULTILINGUAL_V3_RESOURCE_PASS")
+          PY
