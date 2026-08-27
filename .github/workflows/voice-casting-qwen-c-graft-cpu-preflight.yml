@@ -1,0 +1,213 @@
+name: Voice Casting Qwen C Graft CPU Preflight
+
+on:
+  push:
+    branches:
+      - lab/qwen-c-graft-cpu-preflight
+    paths:
+      - .github/workflows/voice-casting-qwen-c-graft-cpu-preflight.yml
+
+permissions:
+  contents: read
+
+env:
+  ENGINE_REPO: https://github.com/gabriele-mastrapasqua/qwen3-tts.git
+  ENGINE_REV: 328ab9cb241774572bb59917af199bdf64a17227
+  CUSTOM_REPO: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+  CUSTOM_REV: 0c0e3051f131929182e2c023b9537f8b1c68adfe
+  EXPR_URL: https://huggingface.co/gabrione/qwen3-tts-italian-expr/resolve/main/expr/french_csp_k6.expr
+  EXPR_SHA256: eff743ea6cae4ab2d26931b77cff4ce1ab1621978f45eda00af1f34197470ce2
+  VOICE_URL: https://huggingface.co/gabrione/qwen3-tts-voices/resolve/main/hugo_graft.qvoice
+  VOICE_SHA256: 5d2f352c578e42823fa62b5f2043338f7b0c07921aca73b43c4928f7eb7000cc
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Freeze resource-only graft contract
+        run: |
+          mkdir -p evidence engine models voices
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          c={
+            "schema":"qwen-c-graft-cpu-preflight-v1",
+            "purpose":"resource and topology proof only; no Claire/Lucie audio",
+            "engine_revision":os.environ["ENGINE_REV"],
+            "custom_repo":os.environ["CUSTOM_REPO"],
+            "custom_revision":os.environ["CUSTOM_REV"],
+            "public_voice":"Hugo CC0/Public-Domain graft only",
+            "public_voice_sha256":os.environ["VOICE_SHA256"],
+            "speaker_condition":"qvoice graft: x-vector + META + TPAD + WOVR; zero ref_codes; zero WDELTA; loaded with --icl-only",
+            "emotion":"fear via exact engine built-in clone COMBINE recipe",
+            "language":"French",
+            "text":"Bonjour. Ceci est un test.",
+            "seed":42,
+            "render_count_exact":1,
+            "scientific_claim":False,
+            "pass_rule":"exact engine builds on CPU; exact CustomVoice files verify; public graft structure verifies; one finite non-silent 24k French fear smoke with graft path and natural EOS",
+            "science_authorized_next":"only PASS may authorize one Claire-panic graft killer",
+            "production":False
+          }
+          Path("evidence/contract.json").write_text(json.dumps(c,indent=2),encoding="utf-8")
+          print(json.dumps(c,indent=2))
+          PY
+
+      - name: Free runner disk and build exact CPU engine
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends build-essential libopenblas-dev ffmpeg libsndfile1 curl
+          git clone --filter=blob:none "$ENGINE_REPO" engine/qwen-c
+          git -C engine/qwen-c checkout --detach "$ENGINE_REV"
+          test "$(git -C engine/qwen-c rev-parse HEAD)" = "$ENGINE_REV"
+          cp engine/qwen-c/LICENSE evidence/engine-LICENSE
+          make -C engine/qwen-c blas
+          engine/qwen-c/qwen_tts --self-test | tee evidence/engine-self-test.txt
+          test "${PIPESTATUS[0]}" = "0"
+          df -h /
+
+      - name: Download and verify exact CustomVoice snapshot
+        run: |
+          python3 - <<'PY'
+          import hashlib,os,subprocess
+          from pathlib import Path
+          root=Path("models/custom-large")
+          files={
+            "config.json":(4908,"17a07f527a1c25ea30b4e023a184482a23d3e279d697b1dc81b1bde498d29cf9"),
+            "generation_config.json":(245,"f1b90b4513f3b34c62851049e2492d7b4c5940daf1276f89c82b8ef04127f3aa"),
+            "merges.txt":(1671839,"599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3"),
+            "model.safetensors":(3833402552,"38b1d5971bdbd982b561cccec982669a53b0537c3cf5e9bd4778ed07bb2f5137"),
+            "preprocessor_config.json":(127,"efdde1022ea9d76928bf7a9cd53139138f5ba2e466e837f08f6105ab1af1c119"),
+            "speech_tokenizer/config.json":(2336,"ee65bb901c876664ab8707c487157aa1a6ee57c65969b28fb5ec9dc211e68167"),
+            "speech_tokenizer/configuration.json":(76,"6bc26d64eb5024b4d1dab5a52371958b429256d6c9d59787f1f5294a54e0cebd"),
+            "speech_tokenizer/model.safetensors":(682293092,"836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258"),
+            "speech_tokenizer/preprocessor_config.json":(234,"fcb3805e597e786d4067706e602f6688524640f8d3396790e2e09b5942fcbdfb"),
+            "tokenizer_config.json":(7344,"dc3c31c3bdaedd5016382bb3cbe07323026775ad51f5a4fb564505992ae4a670"),
+            "vocab.json":(2776833,"ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910")
+          }
+          base=f"https://huggingface.co/{os.environ['CUSTOM_REPO']}/resolve/{os.environ['CUSTOM_REV']}"
+          total=0
+          for name,(size,sha) in files.items():
+              p=root/name; p.parent.mkdir(parents=True,exist_ok=True)
+              subprocess.run(["curl","--fail","--location","--retry","6","--retry-all-errors",f"{base}/{name}?download=true","-o",str(p)],check=True)
+              h=hashlib.sha256()
+              with p.open("rb") as f:
+                  for chunk in iter(lambda:f.read(8*1024*1024),b""): h.update(chunk)
+              got=(p.stat().st_size,h.hexdigest()); total+=got[0]
+              if got!=(size,sha): raise SystemExit((name,got,(size,sha)))
+              print("CUSTOM_PASS",name,got)
+          if total!=4520159586: raise SystemExit(total)
+          print("CUSTOM_SNAPSHOT_PASS",total)
+          PY
+
+      - name: Recover and verify public graft plus French emotion assets
+        run: |
+          mkdir -p engine/qwen-c/presets/expr
+          curl --fail --location --retry 6 --retry-all-errors "$VOICE_URL?download=true" -o voices/hugo_graft.qvoice
+          curl --fail --location --retry 6 --retry-all-errors "$EXPR_URL?download=true" -o engine/qwen-c/presets/expr/french_csp_k6.expr
+          test "$(sha256sum voices/hugo_graft.qvoice | cut -d' ' -f1)" = "$VOICE_SHA256"
+          test "$(sha256sum engine/qwen-c/presets/expr/french_csp_k6.expr | cut -d' ' -f1)" = "$EXPR_SHA256"
+          test -s engine/qwen-c/presets/steer/emotion/ryan_fear.qlsteer
+          python3 engine/qwen-c/tests/qvoice_anatomy.py voices/hugo_graft.qvoice | tee evidence/graft-anatomy.txt
+          python3 - <<'PY'
+          import importlib.util,json
+          from pathlib import Path
+          spec=importlib.util.spec_from_file_location("qa","engine/qwen-c/tests/qvoice_anatomy.py")
+          m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          o=m.parse("voices/hugo_graft.qvoice")
+          checks={
+            "speaker_embedding_8192":o["spk_emb_bytes"]==8192,
+            "zero_ref_text":o["ref_text_len"]==0,
+            "zero_ref_codes":o["n_ref_frames"]==0,
+            "meta_present":o["meta_bytes"]>0,
+            "tpad_present":o["tpad_bytes"]>0,
+            "wovr_present":o["wovr_bytes"]>0,
+            "zero_wdelta":o["wdelta_bulk_bytes"]==0
+          }
+          out={"status":"pass" if all(checks.values()) else "reject","checks":checks,"anatomy":o}
+          Path("evidence/graft.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          if out["status"]!="pass": raise SystemExit(out)
+          PY
+          sha256sum voices/hugo_graft.qvoice engine/qwen-c/presets/expr/french_csp_k6.expr engine/qwen-c/presets/steer/emotion/ryan_fear.qlsteer | tee evidence/assets-sha256.txt
+
+      - name: One non-scientific graft French fear smoke
+        run: |
+          cd engine/qwen-c
+          /usr/bin/time -v -o ../../evidence/smoke-time.txt ./qwen_tts             -d ../../models/custom-large             --load-voice ../../voices/hugo_graft.qvoice             --icl-only             -l French             --emotion fear             --seed 42             --max-duration 8             --text "Bonjour. Ceci est un test."             -o ../../evidence/smoke.wav             2>&1 | tee ../../evidence/smoke.log
+          test "${PIPESTATUS[0]}" = "0"
+          cd ../..
+          python3 - <<'PY'
+          import hashlib,json,re,wave,struct
+          from pathlib import Path
+          p=Path("evidence/smoke.wav")
+          with wave.open(str(p),"rb") as w:
+              sr=w.getframerate(); ch=w.getnchannels(); n=w.getnframes(); samp=w.getsampwidth(); raw=w.readframes(n)
+          if samp!=2: raise SystemExit(samp)
+          vals=struct.unpack("<"+"h"*(len(raw)//2),raw)
+          if ch>1: vals=vals[::ch]
+          rms=(sum((v/32768.0)**2 for v in vals)/max(1,len(vals)))**0.5
+          log=Path("evidence/smoke.log").read_text(errors="replace")
+          signals={
+            "fear_flag":"Emotion 'fear'" in log,
+            "french_expr":"applied 58/58 tensors from presets/expr/french_csp_k6.expr" in log,
+            "fear_steer":"ryan_fear.qlsteer" in log and "weight 12.0" in log,
+            "combine":"mode=COMBINE" in log,
+            "natural_eos":bool(re.search(r"EOS at frame\s+\d+",log))
+          }
+          out={
+            "status":"pass" if sr==24000 and ch==1 and .2<n/sr<8 and rms>1e-5 and all(signals.values()) else "reject",
+            "sample_rate":sr,"channels":ch,"duration_seconds":n/sr,"rms":rms,
+            "sha256":hashlib.sha256(p.read_bytes()).hexdigest(),
+            "signals":signals,"render_count":1,"scientific_claim":False
+          }
+          Path("evidence/smoke.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          if out["status"]!="pass": raise SystemExit(out)
+          PY
+
+      - name: Record resource verdict
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          smoke=json.loads(Path("evidence/smoke.json").read_text()) if Path("evidence/smoke.json").exists() else None
+          graft=json.loads(Path("evidence/graft.json").read_text()) if Path("evidence/graft.json").exists() else None
+          ok=smoke and graft and smoke["status"]=="pass" and graft["status"]=="pass"
+          out={
+            "schema":"qwen-c-graft-cpu-preflight-result-v1",
+            "status":"resource-preflight-pass" if ok else "resource-preflight-fail",
+            "science_authorized_next":bool(ok),
+            "scientific_audio":False,
+            "production":False
+          }
+          Path("evidence/final.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          PY
+
+      - name: Upload resource evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen-c-graft-cpu-preflight
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface verdict
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/final.json").read_text())["status"]
+          if s!="resource-preflight-pass": raise SystemExit(s)
+          print("QWEN_C_GRAFT_RESOURCE_PREFLIGHT_PASS")
+          PY
