@@ -1,0 +1,443 @@
+name: Voice Casting Chatterbox VC Bounded Claire Panic
+
+on:
+  push:
+    branches:
+      - lab/chatterbox-vc-bounded-claire-panic
+    paths:
+      - .github/workflows/voice-casting-chatterbox-vc-bounded-claire-panic.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CHATTERBOX_REPO: https://github.com/resemble-ai/chatterbox.git
+  CHATTERBOX_REV: 5de7a54aa4e5e2baadb0182dde554908b48b85c2
+  PERTH_REV: ce86c49d029f42272c1902eccb675556b9ed2330
+  MODEL_REPO: ResembleAI/chatterbox
+  MODEL_REV: 5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18
+  CONDS_SHA256: 6552d70568833628ba019c6b03459e77fe71ca197d5c560cef9411bee9d87f4e
+  S3GEN_SHA256: 2b78103c654207393955e4900aac14a12de8ef25f4b09424f1ef91941f161d4e
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  PANIC_SHA256: ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f
+  CLAIRE_REF_SHA256: 3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe
+  LUCIE_REF_SHA256: 9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  SUPERB_REPO: superb/wav2vec2-base-superb-er
+  SUPERB_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  HUMAN_BLIND_SEED: "2026082702"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Freeze bounded-selection contract before any scientific candidate
+        run: |
+          mkdir -p render/candidates source weights upstream
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          c={
+            "schema":"chatterbox-vc-bounded-claire-panic-v1",
+            "status":"contract-frozen",
+            "architecture":"bounded 3-candidate ChatterboxVC selection",
+            "killer_cell":"claire--panic",
+            "source":"immutable direct-Qwen Claire panic",
+            "target":"immutable Claire neutral reference",
+            "source_sha256":os.environ["PANIC_SHA256"],
+            "target_sha256":os.environ["CLAIRE_REF_SHA256"],
+            "seeds":[0,1,2],
+            "seed_application":"reset Python/NumPy/Torch RNG immediately before each conversion, after model load",
+            "candidate_count_exact":3,
+            "retry_count":0,
+            "replacement_count":0,
+            "upstream_revision":os.environ["CHATTERBOX_REV"],
+            "perth_revision":os.environ["PERTH_REV"],
+            "model_revision":os.environ["MODEL_REV"],
+            "candidate_vetos":{
+              "technical":"native 24 kHz; finite non-silent; duration 0.5x..1.5x immutable source",
+              "identity":"independent WeSpeaker Claire > Lucie; no absolute threshold",
+              "french":"Whisper Small French WER <= immutable historical source WER 0.5",
+              "emotion":"SUPERB profile similarity to frozen panic profile > frozen contained-sadness profile"
+            },
+            "selection_rule":"among candidates passing all four vetos, maximize WeSpeaker Claire-minus-Lucie margin; tie -> lower seed",
+            "machine_reject_rule":"if no candidate passes all four vetos",
+            "human_gate":"selected candidate only; blind identity must map to Claire, acting yes, French good",
+            "forbidden":[
+              "fourth candidate","alternate seed list","rerender","retry","alternate reference",
+              "parameter tuning","threshold shifting","DSP output transform","training","finetuning","Production"
+            ],
+            "authorization":"#146 SEED_CONTROL_PASS",
+          }
+          Path("render/contract.json").write_text(json.dumps(c,indent=2,ensure_ascii=False),encoding="utf-8")
+          print(json.dumps(c,indent=2,ensure_ascii=False))
+          PY
+
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          df -h /
+
+      - name: Recover and verify immutable scientific source material
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          test "$(sha256sum source/clips/claire--panic.wav | cut -d' ' -f1)" = "$PANIC_SHA256"
+          test "$(sha256sum source/reference-claire.wav | cut -d' ' -f1)" = "$CLAIRE_REF_SHA256"
+          test "$(sha256sum source/reference-lucie.wav | cut -d' ' -f1)" = "$LUCIE_REF_SHA256"
+
+      - name: Install exact CPU ChatterboxVC runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1
+          git clone --filter=blob:none "$CHATTERBOX_REPO" upstream/chatterbox
+          git -C upstream/chatterbox checkout --detach "$CHATTERBOX_REV"
+          test "$(git -C upstream/chatterbox rev-parse HEAD)" = "$CHATTERBOX_REV"
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          p=Path("upstream/chatterbox/pyproject.toml"); raw=p.read_bytes()
+          s=raw.decode(); old="resemble-perth @ git+https://github.com/resemble-ai/Perth.git@master"; new=f"resemble-perth @ git+https://github.com/resemble-ai/Perth.git@{os.environ['PERTH_REV']}"
+          if s.count(old)!=1: raise SystemExit("unexpected Perth dependency form")
+          before=hashlib.sha256(raw).hexdigest(); p.write_text(s.replace(old,new),encoding="utf-8"); after=hashlib.sha256(p.read_bytes()).hexdigest()
+          Path("render/packaging-patch.txt").write_text(f"original_pyproject_sha256={before}\npatched_pyproject_sha256={after}\nchange=Perth master -> {os.environ['PERTH_REV']}\nscience_code_changed=false\n")
+          PY
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 torchaudio==2.6.0
+          python -m pip install --disable-pip-version-check -e upstream/chatterbox
+          python -m pip install --disable-pip-version-check psutil==6.1.1
+          python -m pip check
+          python - <<'PY'
+          import torch
+          assert not torch.cuda.is_available()
+          print("CPU_ONLY_PASS",torch.__version__)
+          PY
+
+      - name: Download and verify exact approved VC weights
+        run: |
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(repo_id=os.environ["MODEL_REPO"],revision=os.environ["MODEL_REV"],allow_patterns=["s3gen.safetensors","conds.pt"],local_dir="weights/chatterbox-vc"))
+          expected={"conds.pt":(107374,os.environ["CONDS_SHA256"]),"s3gen.safetensors":(1056484620,os.environ["S3GEN_SHA256"])}
+          for name,(size,sha) in expected.items():
+              p=root/name; h=hashlib.sha256()
+              with p.open("rb") as f:
+                  for chunk in iter(lambda:f.read(8*1024*1024),b""): h.update(chunk)
+              got=(p.stat().st_size,h.hexdigest())
+              if got!=(size,sha): raise SystemExit((name,got))
+          print("VC_WEIGHTS_PASS")
+          PY
+
+      - name: Render exactly three preregistered candidates
+        run: |
+          /usr/bin/time -v -o render/convert-time.txt python - <<'PY'
+          import hashlib,json,random,resource,time
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from chatterbox.vc import ChatterboxVC
+          model=ChatterboxVC.from_local("weights/chatterbox-vc","cpu")
+          rows=[]
+          for seed in [0,1,2]:
+              random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+              started=time.time()
+              wav=model.generate(audio="source/clips/claire--panic.wav",target_voice_path="source/reference-claire.wav")
+              wall=time.time()-started
+              y=wav.squeeze(0).detach().cpu().numpy().astype(np.float32); sr=int(model.sr)
+              p=Path(f"render/candidates/seed-{seed}.wav"); sf.write(p,y,sr)
+              row={
+                "seed":seed,"sample_rate":sr,"samples":int(y.size),"duration_seconds":float(y.size/sr),
+                "rms":float(np.sqrt(np.mean(y*y))) if y.size else 0.0,
+                "finite":bool(np.isfinite(y).all()) if y.size else False,
+                "wall_seconds":wall,"sha256":hashlib.sha256(p.read_bytes()).hexdigest()
+              }
+              rows.append(row); print(json.dumps(row))
+          out={"status":"render-complete","candidate_count":3,"seeds":[0,1,2],"retry_count":0,"replacement_count":0,"max_rss_kib":resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,"cuda_available":torch.cuda.is_available(),"candidates":rows}
+          Path("render/render.json").write_text(json.dumps(out,indent=2))
+          if len(list(Path("render/candidates").glob("*.wav")))!=3: raise SystemExit("candidate count mismatch")
+          PY
+
+      - name: Frozen per-candidate technical measurements
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import numpy as np,soundfile as sf
+          s,ssr=sf.read("source/clips/claire--panic.wav",dtype="float32"); s=np.asarray(s,dtype=np.float32); s=s.mean(1) if s.ndim==2 else s
+          source_duration=len(s)/ssr
+          rows=[]
+          for seed in [0,1,2]:
+              y,sr=sf.read(f"render/candidates/seed-{seed}.wav",dtype="float32"); y=np.asarray(y,dtype=np.float32); y=y.mean(1) if y.ndim==2 else y
+              duration=len(y)/sr; ratio=duration/source_duration
+              rms=float(np.sqrt(np.mean(y*y))) if y.size else 0.0; finite=bool(np.isfinite(y).all()) if y.size else False
+              ok=sr==24000 and y.size>0 and finite and rms>1e-5 and .5<=ratio<=1.5
+              rows.append({"seed":seed,"status":"pass" if ok else "reject","sr":sr,"duration":duration,"source_duration":source_duration,"duration_ratio":ratio,"rms":rms,"finite":finite})
+          Path("render/technical.json").write_text(json.dumps({"rule":"per candidate: native 24 kHz; finite non-silent; duration 0.5x..1.5x source","candidates":rows},indent=2))
+          print(json.dumps(rows,indent=2))
+          PY
+
+      - name: Upload immutable candidate set
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatterbox-vc-bounded-claire-panic-render
+          path: render/
+          if-no-files-found: error
+          retention-days: 14
+
+  validate:
+    needs: render
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - uses: actions/download-artifact@v4
+        with:
+          name: chatterbox-vc-bounded-claire-panic-render
+          path: render
+
+      - name: Recover immutable source and references
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          mkdir -p source evidence human weights
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          test "$(sha256sum source/clips/claire--panic.wav | cut -d' ' -f1)" = "$PANIC_SHA256"
+          test "$(sha256sum source/reference-claire.wav | cut -d' ' -f1)" = "$CLAIRE_REF_SHA256"
+          test "$(sha256sum source/reference-lucie.wav | cut -d' ' -f1)" = "$LUCIE_REF_SHA256"
+          cp render/contract.json render/render.json render/technical.json render/packaging-patch.txt evidence/
+
+      - name: Install pinned independent validators
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchaudio==2.7.1
+          python -m pip install --disable-pip-version-check numpy scipy soundfile huggingface-hub onnxruntime==1.20.1 transformers==4.40.1
+          git init WeSpeaker
+          git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git
+          git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV"
+          git -C WeSpeaker checkout --detach FETCH_HEAD
+          test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV" imageio-ffmpeg==0.6.0
+          F="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"
+          mkdir -p "$HOME/.local/bin"; ln -sf "$F" "$HOME/.local/bin/ffmpeg"; echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Download and verify validator weights
+        run: |
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          w=Path(snapshot_download(repo_id=os.environ["WESPEAKER_MODEL_REPO"],revision=os.environ["WESPEAKER_MODEL_REV"],allow_patterns=["voxceleb_resnet34.onnx"],local_dir="weights/wespeaker"))/"voxceleb_resnet34.onnx"
+          h=hashlib.sha256(w.read_bytes()).hexdigest()
+          if (w.stat().st_size,h)!=(26534127,"9fea6516d7ad6bf0a76c7689f5a49b65d330fad6dde96c91bb4435ffbfe056a1"): raise SystemExit((w.stat().st_size,h))
+          s=Path(snapshot_download(repo_id=os.environ["SUPERB_REPO"],revision=os.environ["SUPERB_REV"],allow_patterns=["config.json","preprocessor_config.json","pytorch_model.bin"],local_dir="weights/superb"))/"pytorch_model.bin"
+          h=hashlib.sha256()
+          with s.open("rb") as f:
+              for c in iter(lambda:f.read(8*1024*1024),b""): h.update(c)
+          if (s.stat().st_size,h.hexdigest())!=(378361105,"dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b"): raise SystemExit("SUPERB weight mismatch")
+          PY
+
+      - name: Score all three candidates and apply frozen selector
+        id: select
+        run: |
+          python - <<'PY'
+          import hashlib,importlib.util,json,os,re,unicodedata
+          from pathlib import Path
+          import numpy as np,onnxruntime as ort,soundfile as sf,torch,whisper
+          from scipy.signal import resample_poly
+          from transformers import AutoFeatureExtractor,AutoModelForAudioClassification
+
+          technical={r["seed"]:r for r in json.loads(Path("render/technical.json").read_text())["candidates"]}
+
+          spec=importlib.util.spec_from_file_location("ws","WeSpeaker/wespeaker/bin/infer_onnx.py")
+          wm=importlib.util.module_from_spec(spec); spec.loader.exec_module(wm)
+          sess=ort.InferenceSession("weights/wespeaker/voxceleb_resnet34.onnx",providers=["CPUExecutionProvider"])
+          def emb(p):
+              f=wm.compute_fbank(p).unsqueeze(0).numpy()
+              e=np.asarray(sess.run(["embs"],{"feats":f})[0]).reshape(-1).astype(np.float64)
+              n=np.linalg.norm(e)
+              if not np.isfinite(e).all() or n<=0: raise SystemExit(f"bad embedding {p}")
+              return e/n
+          claire=emb("source/reference-claire.wav"); lucie=emb("source/reference-lucie.wav")
+
+          expected="Vite ! Ils arrivent ! Fermez la porte !"
+          def norm(t): return " ".join(re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+"," ",unicodedata.normalize("NFKC",t).lower().replace("’","'")).split())
+          def dist(a,b):
+              p=list(range(len(b)+1))
+              for i,x in enumerate(a,1):
+                  q=[i]
+                  for j,y in enumerate(b,1): q.append(min(q[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+                  p=q
+              return p[-1]
+          def wer(ref,hyp):
+              a,b=norm(ref).split(),norm(hyp).split(); return dist(a,b)/max(1,len(a))
+
+          wh=whisper.load_model("small",device="cpu")
+          wp=Path.home()/".cache/whisper/small.pt"; wsha=hashlib.sha256(wp.read_bytes()).hexdigest()
+          if wsha!=os.environ["WHISPER_MODEL_SHA256"]: raise SystemExit(wsha)
+          source_text=str(wh.transcribe("source/clips/claire--panic.wav",language="fr",task="transcribe",fp16=False,temperature=0,condition_on_previous_text=False).get("text","")).strip()
+          source_wer=wer(expected,source_text)
+          if abs(source_wer-0.5)>1e-12: raise SystemExit(("immutable source WER drift",source_text,source_wer))
+
+          torch.set_num_threads(2)
+          ex=AutoFeatureExtractor.from_pretrained("weights/superb",local_files_only=True)
+          er=AutoModelForAudioClassification.from_pretrained("weights/superb",local_files_only=True).eval()
+          panic=np.array([.0415043309,.6996874809,.2587981224,.0000100258],dtype=np.float64); panic/=np.linalg.norm(panic)
+          sad=np.array([.0128470538,.4423151910,.5446761847,.0001615520],dtype=np.float64); sad/=np.linalg.norm(sad)
+          def emotion(path):
+              y,sr=sf.read(path,dtype="float32"); y=np.asarray(y,dtype=np.float32); y=y.mean(1) if y.ndim==2 else y
+              if sr!=16000:
+                  g=int(np.gcd(sr,16000)); y=resample_poly(y,16000//g,sr//g).astype(np.float32)
+              x=ex(y,sampling_rate=16000,return_tensors="pt",padding=False)
+              with torch.inference_mode(): raw=torch.softmax(er(**x).logits[0],dim=-1).cpu().numpy().astype(np.float64)
+              n=raw/np.linalg.norm(raw)
+              return raw,float(n@panic),float(n@sad)
+
+          rows=[]
+          for seed in [0,1,2]:
+              path=f"render/candidates/seed-{seed}.wav"
+              o=emb(path); sim_c=float(o@claire); sim_l=float(o@lucie); identity_margin=sim_c-sim_l
+              text=str(wh.transcribe(path,language="fr",task="transcribe",fp16=False,temperature=0,condition_on_previous_text=False).get("text","")).strip()
+              value=wer(expected,text)
+              raw,ep,es=emotion(path); emotion_margin=ep-es
+              gates={
+                "technical":technical[seed]["status"]=="pass",
+                "identity":identity_margin>0,
+                "french":value<=0.5+1e-12,
+                "emotion":emotion_margin>0,
+              }
+              eligible=all(gates.values())
+              rows.append({
+                "seed":seed,"eligible":eligible,"gates":gates,
+                "identity":{"sim_claire":sim_c,"sim_lucie":sim_l,"margin":identity_margin},
+                "french":{"expected":expected,"transcript":text,"wer":value,"immutable_source_transcript":source_text,"immutable_source_wer":source_wer},
+                "emotion":{"profile":[float(v) for v in raw],"similarity_panic":ep,"similarity_sadness":es,"margin":emotion_margin,"semantic_label_claim":False},
+                "technical":technical[seed],
+                "sha256":hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+              })
+
+          eligible=[r for r in rows if r["eligible"]]
+          selected=sorted(eligible,key=lambda r:(-r["identity"]["margin"],r["seed"]))[0] if eligible else None
+          result={
+            "schema":"chatterbox-vc-bounded-claire-panic-machine-v1",
+            "status":"machine-pass" if selected else "machine-reject",
+            "selector":"all four vetos, then max Claire-minus-Lucie identity margin, tie lower seed",
+            "candidate_count":3,"seeds":[0,1,2],"candidates":rows,
+            "selected_seed":selected["seed"] if selected else None,
+            "selected_sha256":selected["sha256"] if selected else None,
+            "human_gate_authorized":bool(selected),
+            "retry_count":0,"replacement_count":0,"production":False
+          }
+          Path("evidence/selection.json").write_text(json.dumps(result,indent=2,ensure_ascii=False),encoding="utf-8")
+          print(json.dumps(result,indent=2,ensure_ascii=False))
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:f.write(f"eligible={'true' if selected else 'false'}\n")
+
+          if selected:
+              import random,shutil
+              rng=random.Random(int(os.environ["HUMAN_BLIND_SEED"]))
+              refs=["claire","lucie"]; rng.shuffle(refs)
+              shutil.copy2(f"source/reference-{refs[0]}.wav","human/reference-1.wav")
+              shutil.copy2(f"source/reference-{refs[1]}.wav","human/reference-2.wav")
+              shutil.copy2(f"render/candidates/seed-{selected['seed']}.wav","human/candidate-A.wav")
+              mapping={"reference-1":refs[0],"reference-2":refs[1],"selected_seed":selected["seed"],"selected_sha256":selected["sha256"],"blind_seed":int(os.environ["HUMAN_BLIND_SEED"])}
+              Path("evidence/human-mapping.json").write_text(json.dumps(mapping,indent=2))
+              Path("human/manifest.json").write_text(json.dumps({"schema":"chatterbox-vc-bounded-claire-panic-human-v1","candidate":"candidate-A.wav","references":["reference-1.wav","reference-2.wav"]},indent=2))
+          PY
+
+      - name: Create blind human listening page
+        if: steps.select.outputs.eligible == 'true'
+        run: |
+          cat > human/index.html <<'HTML'
+          <!doctype html><html lang="fr"><meta charset="utf-8">
+          <title>ChatterboxVC bounded — gate humain aveugle</title>
+          <style>
+          body{font-family:system-ui;max-width:850px;margin:30px auto;padding:0 18px;line-height:1.45}
+          .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.card{border:1px solid #bbb;border-radius:12px;padding:16px;margin:16px 0}
+          audio{width:100%}label{display:block;margin:14px 0}select{width:100%;padding:8px}button{padding:12px 18px;font-size:1rem}
+          @media(max-width:650px){.grid{grid-template-columns:1fr}}
+          </style>
+          <h1>Gate humain aveugle — Claire panique</h1>
+          <p>Écoutez les deux références puis le candidat A. Ne consultez pas les métriques machine avant de répondre.</p>
+          <div class="grid">
+            <div class="card"><h2>Référence 1</h2><audio controls src="reference-1.wav"></audio></div>
+            <div class="card"><h2>Référence 2</h2><audio controls src="reference-2.wav"></audio></div>
+          </div>
+          <div class="card"><h2>Candidat A</h2><p>« Vite ! Ils arrivent ! Fermez la porte ! »</p><audio controls src="candidate-A.wav"></audio>
+            <label>À quelle référence appartient le même personnage ?
+              <select id="identity"><option value="">— choisir —</option><option>Référence 1</option><option>Référence 2</option><option>Impossible</option></select>
+            </label>
+            <label>La panique est-elle urgente et crédible ?
+              <select id="acting"><option value="">— choisir —</option><option value="yes">yes</option><option value="no">no</option></select>
+            </label>
+            <label>Le français est-il naturel et intact ?
+              <select id="french"><option value="">— choisir —</option><option value="good">good</option><option value="no">no</option></select>
+            </label>
+          </div>
+          <button id="export">Exporter le JSON</button><p id="msg"></p>
+          <script>
+          document.getElementById('export').onclick=()=>{
+            const identity=document.getElementById('identity').value,acting=document.getElementById('acting').value,french=document.getElementById('french').value;
+            if(!identity||!acting||!french){document.getElementById('msg').textContent='Complétez les trois réponses.';return}
+            const out={schema:'chatterbox-vc-bounded-claire-panic-human-v1',identity,acting,french};
+            const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(out,null,2)],{type:'application/json'}));a.download='chatterbox-vc-bounded-claire-panic-human.json';a.click();URL.revokeObjectURL(a.href);
+            document.getElementById('msg').textContent='JSON exporté.';
+          };
+          </script></html>
+          HTML
+
+      - name: Upload machine evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatterbox-vc-bounded-claire-panic-machine-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload blind human gate only after selected machine PASS
+        if: steps.select.outputs.eligible == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatterbox-vc-bounded-claire-panic-human-gate
+          path: human/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface frozen selector verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/selection.json").read_text())["status"]
+          if s!="machine-pass": raise SystemExit(f"verdict: {s}")
+          print("BOUNDED_MACHINE_PASS")
+          PY
