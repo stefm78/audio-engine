@@ -112,6 +112,7 @@ jobs:
           test "$(sha256sum "$WHEEL" | cut -d' ' -f1)" = "$PACKAGE_WHEEL_SHA256"
           python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.3.1 torchaudio==2.3.1
           python -m pip install --disable-pip-version-check --no-deps "$WHEEL"
+          python -m pip install --disable-pip-version-check packaging==24.2
           python - <<'PY'
           import email, zipfile
           from pathlib import Path
