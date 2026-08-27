@@ -1,0 +1,456 @@
+name: Voice Casting Wren 0.5B Expressive Claire Panic One Cell
+
+on:
+  push:
+    branches:
+      - lab/wren-05b-expressive-claire-panic-one-cell
+    paths:
+      - .github/workflows/voice-casting-wren-05b-expressive-claire-panic-one-cell.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  MODEL_REPO: shangeth/Wren-TTS-0.5B-multi-expressive
+  MODEL_REV: 8d91322d4ca6861f48ae35131406bf176bfe9e82
+  MODEL_SHA256: 19ce19dd3e1e81126b8554db0ceb584a4bb4951241834b1588334d5e40e01f88
+  MODEL_BYTES: "1105100256"
+  QWEN_CONFIG_REPO: Qwen/Qwen2.5-0.5B
+  QWEN_CONFIG_REV: 060db6499f32faf8b98477b0a26969ef7d8b9987
+  MIMI_REPO: kyutai/mimi
+  MIMI_REV: 89091b3e466eb6a9d11e537bf26b144f194978f7
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  CLAIRE_REF_SHA256: 3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe
+  LUCIE_REF_SHA256: 9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  SUPERB_REPO: superb/wav2vec2-base-superb-er
+  SUPERB_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  HUMAN_BLIND_SEED: "2026082710"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      technical_pass: ${{ steps.technical.outputs.technical_pass }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Freeze scientific contract before model load
+        run: |
+          mkdir -p render source models
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          c={
+            "schema":"wren-05b-expressive-claire-panic-one-cell-v1",
+            "status":"contract-frozen",
+            "authorization":"#161 RESOURCE_PREFLIGHT_PASS",
+            "cell":"claire--panic",
+            "architecture":"Wren 0.5B multilingual expressive; Claire Mimi reference codes + in-generation <fearful> style token",
+            "spoken_text":"Vite ! Ils arrivent ! Fermez la porte !",
+            "model_input_text":"<fearful> Vite ! Ils arrivent ! Fermez la porte !",
+            "speaker_source":"immutable Claire neutral reference",
+            "speaker_source_sha256":os.environ["CLAIRE_REF_SHA256"],
+            "speaker_conditioning":"model.encode_audio(reference) then first 100 Mimi frames; no reference transcript; no DSP",
+            "model_repo":os.environ["MODEL_REPO"],
+            "model_revision":os.environ["MODEL_REV"],
+            "dependency_revisions":{
+              "qwen_config":os.environ["QWEN_CONFIG_REV"],
+              "mimi":os.environ["MIMI_REV"]
+            },
+            "generation":{
+              "device":"cpu","style_token":"<fearful>","seed":42,
+              "temperature":0.8,"top_k":50,"top_p":0.9,
+              "reference_frames":100,"max_audio_frames":160,"min_audio_frames":2
+            },
+            "parameter_origin":"identical to frozen #161 resource smoke; no post-result tuning",
+            "render_count_exact":1,"retry_count":0,"replacement_count":0,
+            "gates_in_order":[
+              "technical: 24kHz mono finite non-silent; 0.5s <= duration < 12.8s cap; one render only",
+              "identity: frozen WeSpeaker Claire > Lucie; no absolute threshold",
+              "french: frozen Whisper Small WER <= 0.5 against spoken_text only",
+              "emotion: frozen SUPERB panic similarity > contained-sadness similarity",
+              "human blind only after machine 4/4 PASS"
+            ],
+            "known_risk":"upstream style tags were trained only with English text; French tagged behavior is explicitly undefined",
+            "forbidden":[
+              "second render","retry","alternate seed","alternate style token","style mixing",
+              "temperature/top-k/top-p change","reference frame change","alternate reference",
+              "threshold change","DSP","VC rescue","training","finetuning","Production promotion"
+            ],
+            "production":False,
+            "license":"CC-BY-NC-4.0; Lab research only"
+          }
+          Path("render/contract.json").write_text(json.dumps(c,indent=2,ensure_ascii=False))
+          print(json.dumps(c,indent=2,ensure_ascii=False))
+          PY
+
+      - name: Free runner disk and recover immutable references
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          test "$(sha256sum source/reference-claire.wav | cut -d' ' -f1)" = "$CLAIRE_REF_SHA256"
+          test "$(sha256sum source/reference-lucie.wav | cut -d' ' -f1)" = "$LUCIE_REF_SHA256"
+          ffprobe -v error -show_entries stream=sample_rate,channels,duration -of json source/reference-claire.wav | tee render/claire-reference.json
+
+      - name: Install exact CPU runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libsndfile1 ffmpeg
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchaudio==2.7.1
+          python -m pip install --disable-pip-version-check transformers==4.57.6 huggingface-hub==0.36.0 safetensors soundfile numpy sentencepiece
+
+      - name: Download and verify frozen Wren plus dependencies
+        run: |
+          python - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+
+          w=Path(snapshot_download(repo_id=os.environ["MODEL_REPO"],revision=os.environ["MODEL_REV"],local_dir="models/wren"))
+          p=w/"model.safetensors"; h=hashlib.sha256()
+          with p.open("rb") as f:
+              for c in iter(lambda:f.read(8*1024*1024),b""): h.update(c)
+          got=(p.stat().st_size,h.hexdigest())
+          exp=(int(os.environ["MODEL_BYTES"]),os.environ["MODEL_SHA256"])
+          if got!=exp: raise SystemExit(("wren checkpoint mismatch",got,exp))
+
+          q=Path(snapshot_download(repo_id=os.environ["QWEN_CONFIG_REPO"],revision=os.environ["QWEN_CONFIG_REV"],allow_patterns=["config.json"],local_dir="models/qwen-config"))
+          m=Path(snapshot_download(repo_id=os.environ["MIMI_REPO"],revision=os.environ["MIMI_REV"],local_dir="models/mimi"))
+          cfg=json.loads((w/"config.json").read_text())
+          cfg["llm_name"]=str(q.resolve())
+          cfg["mimi_model_name"]=str(m.resolve())
+          (w/"config.json").write_text(json.dumps(cfg,indent=2))
+
+          out={"wren_revision":os.environ["MODEL_REV"],"wren_weight_bytes":got[0],"wren_weight_sha256":got[1],"qwen_config_revision":os.environ["QWEN_CONFIG_REV"],"mimi_revision":os.environ["MIMI_REV"]}
+          Path("render/models.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Render exactly one Claire panic candidate
+        run: |
+          /usr/bin/time -v -o render/render-time.txt python - <<'PY' 2>&1 | tee render/render.log
+          import hashlib,json,random
+          from pathlib import Path
+          import numpy as np
+          import soundfile as sf
+          import torch
+          from transformers import AutoModel,AutoProcessor
+
+          seed=42
+          random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+          processor=AutoProcessor.from_pretrained("models/wren",trust_remote_code=True,local_files_only=True)
+          model=AutoModel.from_pretrained("models/wren",trust_remote_code=True,local_files_only=True).to("cpu").eval()
+
+          y,sr=sf.read("source/reference-claire.wav",dtype="float32")
+          y=np.asarray(y,dtype=np.float32)
+          if y.ndim==2: y=y.mean(axis=1)
+          ref=torch.from_numpy(y).unsqueeze(0)
+          ref_codes=model.encode_audio(ref,sr)[:,:100]
+          ref_sha=hashlib.sha256(ref_codes.cpu().numpy().tobytes()).hexdigest()
+
+          inputs=processor("<fearful> Vite ! Ils arrivent ! Fermez la porte !")
+          inputs={k:v.to("cpu") for k,v in inputs.items()}
+          wav=model.generate(
+              **inputs,ref_codes=ref_codes,
+              max_audio_frames=160,min_audio_frames=2,
+              temperature=0.8,top_k=50,top_p=0.9,
+              output_audio=True,
+          )
+          processor.save_audio(wav,"render/candidate.wav")
+
+          z,zsr=sf.read("render/candidate.wav",dtype="float32")
+          z=np.asarray(z,dtype=np.float32)
+          if z.ndim==2: z=z.mean(axis=1)
+          finite=bool(z.size and np.isfinite(z).all())
+          rms=float(np.sqrt(np.mean(z*z))) if z.size else 0.0
+          p=Path("render/candidate.wav")
+          out={
+            "status":"rendered","sample_rate":int(zsr),"channels":1,"samples":int(z.size),
+            "duration_seconds":float(len(z)/zsr) if zsr else 0.0,
+            "finite":finite,"rms":rms,"output_sha256":hashlib.sha256(p.read_bytes()).hexdigest(),
+            "reference_codes_sha256":ref_sha,"reference_frames":int(ref_codes.shape[-1]),
+            "seed":42,"style_token":"<fearful>","render_count":1,"retry_count":0,"replacement_count":0
+          }
+          Path("render/render.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+          test "$(find render -maxdepth 1 -name 'candidate*.wav' | wc -l)" = "1"
+
+      - name: Frozen technical gate
+        id: technical
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          r=json.loads(Path("render/render.json").read_text())
+          ok=(r["sample_rate"]==24000 and r["channels"]==1 and r["finite"] and r["rms"]>1e-5 and .5<=r["duration_seconds"]<12.8 and r["reference_frames"]==100 and r["render_count"]==1 and r["retry_count"]==0 and r["replacement_count"]==0)
+          out={"status":"pass" if ok else "reject","rule":"24kHz mono finite/non-silent; 0.5<=duration<12.8 cap; exactly 100 reference frames; one render only","render":r}
+          Path("render/technical.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:f.write(f"technical_pass={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Upload immutable scientific render
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wren-05b-expressive-claire-panic-render
+          path: render/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface technical verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("render/technical.json").read_text())["status"]
+          if s!="pass": raise SystemExit(f"verdict: technical-{s}")
+          print("WREN_TECHNICAL_PASS")
+          PY
+
+  validate:
+    needs: render
+    if: needs.render.outputs.technical_pass == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - uses: actions/download-artifact@v4
+        with:
+          name: wren-05b-expressive-claire-panic-render
+          path: render
+
+      - name: Recover immutable validation references
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          mkdir -p source evidence human weights
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          test "$(sha256sum source/reference-claire.wav | cut -d' ' -f1)" = "$CLAIRE_REF_SHA256"
+          test "$(sha256sum source/reference-lucie.wav | cut -d' ' -f1)" = "$LUCIE_REF_SHA256"
+          cp render/contract.json render/render.json render/technical.json evidence/
+          cp render/candidate.wav evidence/candidate.wav
+
+      - name: Install frozen CPU validation runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1 curl
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchaudio==2.7.1
+          python -m pip install --disable-pip-version-check numpy scipy soundfile onnxruntime==1.20.1 transformers==4.40.1
+          git init WeSpeaker
+          git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git
+          git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV"
+          git -C WeSpeaker checkout --detach FETCH_HEAD
+          test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"
+
+      - name: Download and verify frozen WeSpeaker
+        run: |
+          mkdir -p weights/wespeaker
+          curl --fail --location --retry 6 --retry-all-errors "https://huggingface.co/$WESPEAKER_MODEL_REPO/resolve/$WESPEAKER_MODEL_REV/voxceleb_resnet34.onnx?download=true" -o weights/wespeaker/voxceleb_resnet34.onnx
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          p=Path("weights/wespeaker/voxceleb_resnet34.onnx")
+          got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
+          exp=(26534127,"9fea6516d7ad6bf0a76c7689f5a49b65d330fad6dde96c91bb4435ffbfe056a1")
+          if got!=exp: raise SystemExit((got,exp))
+          PY
+
+      - name: Frozen Claire identity gate
+        id: identity
+        run: |
+          python - <<'PY'
+          import importlib.util,json,os
+          from pathlib import Path
+          import numpy as np,onnxruntime as ort
+          spec=importlib.util.spec_from_file_location("ws","WeSpeaker/wespeaker/bin/infer_onnx.py")
+          m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          sess=ort.InferenceSession("weights/wespeaker/voxceleb_resnet34.onnx",providers=["CPUExecutionProvider"])
+          def emb(p):
+              f=m.compute_fbank(p).unsqueeze(0).numpy()
+              e=np.asarray(sess.run(["embs"],{"feats":f})[0]).reshape(-1).astype(np.float64)
+              n=np.linalg.norm(e)
+              if not np.isfinite(e).all() or n<=0: raise SystemExit(f"bad embedding {p}")
+              return e/n
+          o=emb("evidence/candidate.wav"); c=emb("source/reference-claire.wav"); l=emb("source/reference-lucie.wav")
+          sc=float(o@c); sl=float(o@l); margin=sc-sl; ok=margin>0
+          out={"status":"pass" if ok else "reject","sim_claire":sc,"sim_lucie":sl,"target_margin":margin,"rule":"Claire > Lucie; no absolute threshold"}
+          Path("evidence/identity.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install frozen Whisper only after identity PASS
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV" imageio-ffmpeg==0.6.0
+          F="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"
+          mkdir -p "$HOME/.local/bin"; ln -sf "$F" "$HOME/.local/bin/ffmpeg"; echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Frozen French gate
+        id: french
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,re,unicodedata
+          from pathlib import Path
+          import whisper
+          expected="Vite ! Ils arrivent ! Fermez la porte !"
+          def norm(t): return " ".join(re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+"," ",unicodedata.normalize("NFKC",t).lower().replace("’","'")).split())
+          def dist(a,b):
+              p=list(range(len(b)+1))
+              for i,x in enumerate(a,1):
+                  q=[i]
+                  for j,y in enumerate(b,1): q.append(min(q[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+                  p=q
+              return p[-1]
+          model=whisper.load_model("small",device="cpu")
+          p=Path.home()/".cache/whisper/small.pt"
+          sha=hashlib.sha256(p.read_bytes()).hexdigest()
+          if sha!=os.environ["WHISPER_MODEL_SHA256"]: raise SystemExit(sha)
+          text=str(model.transcribe("evidence/candidate.wav",language="fr",task="transcribe",fp16=False,temperature=0,condition_on_previous_text=False).get("text","")).strip()
+          a,b=norm(expected).split(),norm(text).split(); d=dist(a,b); w=d/max(1,len(a)); ok=w<=.5+1e-12
+          out={"status":"pass" if ok else "reject","expected":expected,"transcript":text,"edit_distance":d,"wer":w,"threshold":0.5}
+          Path("evidence/french.json").write_text(json.dumps(out,ensure_ascii=False,indent=2)); print(json.dumps(out,ensure_ascii=False,indent=2))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Download and verify frozen SUPERB only after French PASS
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          mkdir -p weights/superb
+          BASE="https://huggingface.co/$SUPERB_REPO/resolve/$SUPERB_REV"
+          for F in config.json preprocessor_config.json pytorch_model.bin; do
+            curl --fail --location --retry 6 --retry-all-errors "$BASE/$F?download=true" -o "weights/superb/$F"
+          done
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          p=Path("weights/superb/pytorch_model.bin"); h=hashlib.sha256()
+          with p.open("rb") as f:
+              for c in iter(lambda:f.read(8*1024*1024),b""): h.update(c)
+          got=(p.stat().st_size,h.hexdigest())
+          exp=(378361105,"dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b")
+          if got!=exp: raise SystemExit((got,exp))
+          PY
+
+      - name: Frozen panic versus sadness emotion gate
+        id: emotion
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from scipy.signal import resample_poly
+          from transformers import AutoFeatureExtractor,AutoModelForAudioClassification
+          torch.set_num_threads(2)
+          ex=AutoFeatureExtractor.from_pretrained("weights/superb",local_files_only=True)
+          model=AutoModelForAudioClassification.from_pretrained("weights/superb",local_files_only=True).eval()
+          y,sr=sf.read("evidence/candidate.wav",dtype="float32"); y=np.asarray(y,dtype=np.float32); y=y.mean(1) if y.ndim==2 else y
+          if sr!=16000:
+              g=int(np.gcd(sr,16000)); y=resample_poly(y,16000//g,sr//g).astype(np.float32)
+          x=ex(y,sampling_rate=16000,return_tensors="pt",padding=False)
+          with torch.inference_mode(): raw=torch.softmax(model(**x).logits[0],dim=-1).cpu().numpy().astype(np.float64)
+          n=raw/np.linalg.norm(raw)
+          panic=np.array([.0415043309,.6996874809,.2587981224,.0000100258],dtype=np.float64); panic/=np.linalg.norm(panic)
+          sad=np.array([.0128470538,.4423151910,.5446761847,.0001615520],dtype=np.float64); sad/=np.linalg.norm(sad)
+          sp=float(n@panic); ss=float(n@sad); margin=sp-ss; ok=margin>0
+          out={"status":"pass" if ok else "reject","profile":[float(v) for v in raw],"similarity_panic":sp,"similarity_sadness":ss,"target_margin":margin,"semantic_label_claim":False}
+          Path("evidence/emotion.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Build authoritative machine verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json,os,random,shutil
+          from pathlib import Path
+          def status(name):
+              p=Path("evidence")/f"{name}.json"
+              return json.loads(p.read_text())["status"] if p.exists() else "skipped"
+          gates={"technical":json.loads(Path("evidence/technical.json").read_text())["status"],"identity":status("identity"),"french":status("french"),"emotion":status("emotion")}
+          order=["technical","identity","french","emotion"]; first=next((g for g in order if gates[g]!="pass"),None)
+          final="machine-pass" if first is None else f"{first}-reject" if gates[first]=="reject" else f"{first}-not-run"
+          out={"schema":"wren-05b-expressive-claire-panic-machine-v1","status":final,"gates":gates,"human_gate_authorized":first is None,"render_count":1,"retry_count":0,"replacement_count":0,"production":False}
+          Path("evidence/final.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          if first is not None: raise SystemExit(0)
+          rng=random.Random(int(os.environ["HUMAN_BLIND_SEED"])); refs=["claire","lucie"]; rng.shuffle(refs)
+          shutil.copy2(f"source/reference-{refs[0]}.wav","human/reference-1.wav")
+          shutil.copy2(f"source/reference-{refs[1]}.wav","human/reference-2.wav")
+          shutil.copy2("evidence/candidate.wav","human/candidate-A.wav")
+          Path("evidence/human-mapping.json").write_text(json.dumps({"reference-1":refs[0],"reference-2":refs[1],"blind_seed":int(os.environ["HUMAN_BLIND_SEED"])},indent=2))
+          PY
+
+      - name: Create blind human page only after machine PASS
+        if: steps.emotion.outputs.eligible == 'true'
+        run: |
+          cat > human/index.html <<'HTML'
+          <!doctype html><html lang="fr"><meta charset="utf-8"><title>Wren Claire panique — gate humain</title>
+          <style>body{font-family:system-ui;max-width:850px;margin:30px auto;padding:0 18px;line-height:1.45}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.card{border:1px solid #bbb;border-radius:12px;padding:16px;margin:16px 0}audio{width:100%}label{display:block;margin:14px 0}select{width:100%;padding:8px}button{padding:12px 18px;font-size:1rem}@media(max-width:650px){.grid{grid-template-columns:1fr}}</style>
+          <h1>Gate humain aveugle — Claire panique</h1><p>Écoutez les deux références puis le candidat A.</p>
+          <div class="grid"><div class="card"><h2>Référence 1</h2><audio controls src="reference-1.wav"></audio></div><div class="card"><h2>Référence 2</h2><audio controls src="reference-2.wav"></audio></div></div>
+          <div class="card"><h2>Candidat A</h2><p>« Vite ! Ils arrivent ! Fermez la porte ! »</p><audio controls src="candidate-A.wav"></audio>
+          <label>Même personnage ?<select id="identity"><option value="">— choisir —</option><option>Référence 1</option><option>Référence 2</option><option>Impossible</option></select></label>
+          <label>Panique urgente et crédible ?<select id="acting"><option value="">— choisir —</option><option value="yes">yes</option><option value="no">no</option></select></label>
+          <label>Français naturel et intact ?<select id="french"><option value="">— choisir —</option><option value="good">good</option><option value="no">no</option></select></label></div>
+          <button id="export">Exporter le JSON</button><p id="msg"></p>
+          <script>document.getElementById('export').onclick=()=>{const identity=document.getElementById('identity').value,acting=document.getElementById('acting').value,french=document.getElementById('french').value;if(!identity||!acting||!french){document.getElementById('msg').textContent='Complétez les trois réponses.';return}const out={schema:'wren-05b-expressive-claire-panic-human-v1',identity,acting,french};const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(out,null,2)],{type:'application/json'}));a.download='wren-05b-expressive-claire-panic-human.json';a.click();URL.revokeObjectURL(a.href)};</script></html>
+          HTML
+
+      - name: Upload machine evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wren-05b-expressive-claire-panic-machine-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload blind human gate only after machine PASS
+        if: steps.emotion.outputs.eligible == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wren-05b-expressive-claire-panic-human-gate
+          path: human/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface machine verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/final.json").read_text())["status"]
+          if s!="machine-pass": raise SystemExit(f"verdict: {s}")
+          print("WREN_MACHINE_PASS")
+          PY
