@@ -1,0 +1,215 @@
+name: Voice Casting CosyVoice2 EU Claire Panic One Cell
+
+on:
+  push:
+    branches:
+      - lab/cosyvoice2-eu-claire-panic-one-cell
+    paths:
+      - .github/workflows/voice-casting-cosyvoice2-eu-claire-panic-one-cell.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  PACKAGE_VERSION: "0.2.8"
+  PACKAGE_WHEEL_SHA256: "155792a31b6f17e45582411a6cd0f5057da7ff9b3aa7508a16d54c5b63ecf511"
+  MODEL_REPO: hi-paris/CosyVoice2-0.5B-EU
+  MODEL_REV: 6ebd3b08b49bfafe7d280a76600b40622a20f52f
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  CLAIRE_REF_SHA256: 3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe
+  LUCIE_REF_SHA256: 9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822
+  CLAIRE_PANIC_SHA256: ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f
+  CLAIRE_SADNESS_SHA256: d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Freeze scientific contract
+        run: |
+          mkdir -p render source weights wheels
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          c={
+            "schema":"cosyvoice2-eu-claire-panic-one-cell-v1",
+            "authorization":"#163 RESOURCE_PREFLIGHT_PASS",
+            "architecture":"CosyVoice2-EU same-call neutral-reference clone plus textual style prefix",
+            "text":"Vite ! Ils arrivent ! Fermez la porte !",
+            "model_input":"Speak with intense, urgent panic and fear. <|endofprompt|> Vite ! Ils arrivent ! Fermez la porte !",
+            "package_version":os.environ["PACKAGE_VERSION"],
+            "package_wheel_sha256":os.environ["PACKAGE_WHEEL_SHA256"],
+            "model_repo":os.environ["MODEL_REPO"],
+            "model_revision":os.environ["MODEL_REV"],
+            "claire_ref_sha256":os.environ["CLAIRE_REF_SHA256"],
+            "lucie_ref_sha256":os.environ["LUCIE_REF_SHA256"],
+            "claire_panic_sha256":os.environ["CLAIRE_PANIC_SHA256"],
+            "claire_sadness_sha256":os.environ["CLAIRE_SADNESS_SHA256"],
+            "seed":1986,
+            "speed":1.0,
+            "text_frontend":False,
+            "render_count_exact":1,
+            "retry_count":0,
+            "replacement_count":0,
+            "gates_in_order":[
+              "technical: 24 kHz mono finite non-silent and source-duration ratio 0.5..1.5",
+              "identity zero-render: WeSpeaker candidate closer to Claire than Lucie",
+              "French zero-render: Whisper Small WER <= 0.5 against spoken text only",
+              "emotion zero-render: SUPERB candidate closer to immutable Claire panic than contained sadness",
+              "human blind only after machine 4/4 PASS"
+            ],
+            "forbidden":["second render","retry","alternate seed","alternate style prompt","alternate reference","speed change","threshold change","DSP/VC rescue","training","finetuning","Production promotion"],
+            "production":False
+          }
+          Path("render/contract.json").write_text(json.dumps(c,indent=2,ensure_ascii=False),encoding="utf-8")
+          print(json.dumps(c,indent=2,ensure_ascii=False))
+          PY
+
+      - name: Free disk and recover immutable references
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          python - <<'PY'
+          import hashlib, os
+          from pathlib import Path
+          expected={
+            "reference-claire.wav":os.environ["CLAIRE_REF_SHA256"],
+            "reference-lucie.wav":os.environ["LUCIE_REF_SHA256"],
+            "clips/claire--panic.wav":os.environ["CLAIRE_PANIC_SHA256"],
+            "clips/claire--sadness-contained.wav":os.environ["CLAIRE_SADNESS_SHA256"],
+          }
+          for name,sha in expected.items():
+              p=Path("source")/name
+              got=hashlib.sha256(p.read_bytes()).hexdigest()
+              if got!=sha: raise SystemExit((name,got,sha))
+          print("IMMUTABLE_SOURCES_PASS")
+          PY
+
+      - name: Install exact CPU runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg sox libsox-dev libsndfile1-dev build-essential
+          python -m pip download --disable-pip-version-check --no-deps --only-binary=:all: "cosyvoice2-eu==$PACKAGE_VERSION" -d wheels
+          WHEEL="$(find wheels -maxdepth 1 -name 'cosyvoice2_eu-*.whl' -print -quit)"
+          test -n "$WHEEL"
+          test "$(sha256sum "$WHEEL" | cut -d' ' -f1)" = "$PACKAGE_WHEEL_SHA256"
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.3.1 torchaudio==2.3.1
+          python -m pip install --disable-pip-version-check --no-deps "$WHEEL"
+          python - <<'PY'
+          import email, zipfile
+          from pathlib import Path
+          from packaging.requirements import Requirement
+          wheel=next(Path("wheels").glob("cosyvoice2_eu-*.whl"))
+          blocked={"torch","torchaudio","onnxruntime-gpu","onnxruntime","deepspeed","openai-whisper"}
+          with zipfile.ZipFile(wheel) as z:
+              meta=next(n for n in z.namelist() if n.endswith(".dist-info/METADATA"))
+              msg=email.message_from_bytes(z.read(meta))
+          kept=[]
+          for raw in msg.get_all("Requires-Dist",[]):
+              req=Requirement(raw)
+              if req.name.lower() in blocked: continue
+              if req.marker and not req.marker.evaluate(): continue
+              kept.append(raw)
+          Path("/tmp/cosy2eu-cpu-req.txt").write_text("\n".join(kept)+"\n")
+          PY
+          python -m pip install --disable-pip-version-check -r /tmp/cosy2eu-cpu-req.txt
+          python -m pip install --disable-pip-version-check onnxruntime==1.18.0 psutil==6.1.1
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV"
+          python - <<'PY'
+          import torch, onnxruntime
+          if torch.cuda.is_available(): raise SystemExit("CUDA visible")
+          if "CPUExecutionProvider" not in onnxruntime.get_available_providers(): raise SystemExit(onnxruntime.get_available_providers())
+          print("CPU_RUNTIME_PASS",torch.__version__)
+          PY
+
+      - name: Download exact model snapshot
+        run: |
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(repo_id=os.environ["MODEL_REPO"],revision=os.environ["MODEL_REV"],local_dir="weights/CosyVoice2-0.5B-EU"))
+          files=[]; total=0
+          for p in sorted(root.rglob("*")):
+              if not p.is_file() or ".cache" in p.parts: continue
+              h=hashlib.sha256(); size=p.stat().st_size; total+=size
+              with p.open("rb") as f:
+                  for chunk in iter(lambda:f.read(8*1024*1024),b""): h.update(chunk)
+              files.append({"path":str(p.relative_to(root)),"bytes":size,"sha256":h.hexdigest()})
+          if len(files)!=19 or total!=5468562198: raise SystemExit((len(files),total))
+          Path("render/model-manifest.json").write_text(json.dumps({"files":files,"total_bytes":total,"revision":os.environ["MODEL_REV"]},indent=2))
+          print("MODEL_SNAPSHOT_PASS",total)
+          PY
+
+      - name: Render exactly one scientific candidate
+        run: |
+          /usr/bin/time -v -o render/render-time.txt python - <<'PY'
+          import hashlib, json, random, resource, time
+          from pathlib import Path
+          import numpy as np, soundfile as sf, torch
+          from cosyvoice2_eu import load
+          random.seed(1986); np.random.seed(1986); torch.manual_seed(1986)
+          if torch.cuda.is_available(): raise SystemExit("CUDA visible")
+          model=load(model_dir=str(Path("weights/CosyVoice2-0.5B-EU").resolve()),repo_id="hi-paris/CosyVoice2-0.5B-EU",download=False)
+          text="Speak with intense, urgent panic and fear. <|endofprompt|> Vite ! Ils arrivent ! Fermez la porte !"
+          t=time.time()
+          wav,sr=model.tts(text=text,prompt=str(Path("source/reference-claire.wav").resolve()),speed=1.0,text_frontend=False)
+          wall=time.time()-t
+          y=wav.detach().cpu().float().numpy()
+          if y.ndim==2: y=y.mean(axis=0)
+          y=np.asarray(y,dtype=np.float32).reshape(-1)
+          outp=Path("render/candidate.wav"); sf.write(outp,y,sr)
+          out={
+            "status":"rendered","sample_rate":int(sr),"channels":1,"samples":int(y.size),
+            "duration_seconds":float(len(y)/sr) if sr else 0.0,
+            "finite":bool(y.size and np.isfinite(y).all()),
+            "rms":float(np.sqrt(np.mean(y*y))) if y.size else 0.0,
+            "output_sha256":hashlib.sha256(outp.read_bytes()).hexdigest(),
+            "render_wall_seconds":wall,
+            "max_rss_kib":resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            "seed":1986,"render_count":1,"retry_count":0,"replacement_count":0
+          }
+          Path("render/render.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          PY
+
+      - name: Frozen technical gate
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import soundfile as sf
+          r=json.loads(Path("render/render.json").read_text())
+          src,sr=sf.read("source/clips/claire--panic.wav",dtype="float32")
+          source_duration=len(src)/sr
+          ratio=r["duration_seconds"]/source_duration
+          ok=(r["sample_rate"]==24000 and r["channels"]==1 and r["finite"] and r["rms"]>1e-5 and 0.5<=ratio<=1.5 and r["render_count"]==1 and r["retry_count"]==0 and r["replacement_count"]==0)
+          out={"status":"pass" if ok else "reject","source_duration_seconds":source_duration,"candidate_duration_seconds":r["duration_seconds"],"duration_ratio":ratio,"allowed_ratio":[0.5,1.5],"render":r}
+          Path("render/technical.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          if not ok: raise SystemExit("technical-reject")
+          PY
+
+      - name: Upload immutable scientific render
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosyvoice2-eu-claire-panic-one-cell-render
+          path: render/
+          if-no-files-found: error
+          retention-days: 14
