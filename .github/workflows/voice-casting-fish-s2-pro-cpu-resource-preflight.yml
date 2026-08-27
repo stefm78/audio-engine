@@ -146,15 +146,26 @@ jobs:
           print(json.dumps(rows,indent=2))
           PY
 
+          python -m pip install --disable-pip-version-check "uv==0.8.15"
           cd engine/fish-speech
-          python -m pip install --disable-pip-version-check -e '.[cpu]'
+          uv sync --frozen --extra cpu --no-dev
+          .venv/bin/python - <<'PY'
+          import torch
+          print("torch", torch.__version__, "cuda", torch.version.cuda)
+          if torch.version.cuda is not None:
+              raise SystemExit("CPU preflight resolved a CUDA torch build")
+          PY
+          if .venv/bin/python -m pip list 2>/dev/null | grep -q '^nvidia-'; then
+            echo "CUDA/NVIDIA packages present in CPU environment" >&2
+            exit 1
+          fi
           cd ../..
 
           espeak-ng -v fr-fr -s 145 -w evidence/reference.wav             "Bonjour, ceci est une voix de référence."
           test -s evidence/reference.wav
           ffprobe -v error -show_entries stream=sample_rate,channels,duration -of json             evidence/reference.wav | tee evidence/reference.json
 
-          /usr/bin/time -v -o evidence/inference-time.txt             timeout 1800s python engine/fish-speech/fish_speech/models/text2semantic/inference.py               --checkpoint-path checkpoints/s2-pro               --device cpu               --no-compile               --seed 42               --top-p 0.9               --top-k 30               --temperature 1.0               --max-new-tokens 160               --chunk-length 100               --prompt-text "Bonjour, ceci est une voix de référence."               --prompt-audio evidence/reference.wav               --text "[screaming in panic] Attention ! Sortez immédiatement !"               --output evidence/smoke.wav               --output-dir evidence/codes
+          /usr/bin/time -v -o evidence/inference-time.txt             timeout 1800s engine/fish-speech/.venv/bin/python engine/fish-speech/fish_speech/models/text2semantic/inference.py               --checkpoint-path checkpoints/s2-pro               --device cpu               --no-compile               --seed 42               --top-p 0.9               --top-k 30               --temperature 1.0               --max-new-tokens 160               --chunk-length 100               --prompt-text "Bonjour, ceci est une voix de référence."               --prompt-audio evidence/reference.wav               --text "[screaming in panic] Attention ! Sortez immédiatement !"               --output evidence/smoke.wav               --output-dir evidence/codes
 
           test -s evidence/smoke.wav
           python - <<'PY'
