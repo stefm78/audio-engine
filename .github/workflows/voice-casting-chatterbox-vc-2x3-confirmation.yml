@@ -1,0 +1,619 @@
+name: Voice Casting Chatterbox VC 2x3 Confirmation
+
+on:
+  push:
+    branches:
+      - lab/chatterbox-vc-2x3-confirmation
+    paths:
+      - .github/workflows/voice-casting-chatterbox-vc-2x3-confirmation.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CHATTERBOX_REPO: https://github.com/resemble-ai/chatterbox.git
+  CHATTERBOX_REV: 5de7a54aa4e5e2baadb0182dde554908b48b85c2
+  PERTH_REV: ce86c49d029f42272c1902eccb675556b9ed2330
+  MODEL_REPO: ResembleAI/chatterbox
+  MODEL_REV: 5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18
+  CONDS_SHA256: 6552d70568833628ba019c6b03459e77fe71ca197d5c560cef9411bee9d87f4e
+  S3GEN_SHA256: 2b78103c654207393955e4900aac14a12de8ef25f4b09424f1ef91941f161d4e
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  CLAIRE_REF_SHA256: 3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe
+  LUCIE_REF_SHA256: 9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822
+  CLAIRE_PANIC_SHA256: ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f
+  CLAIRE_WONDER_SHA256: da173789bff0c42bbf0f306a581c2d5a9559de0bb98114381397b71526360c8e
+  CLAIRE_SADNESS_SHA256: d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84
+  LUCIE_PANIC_SHA256: 8168d32c7a1ee81485396ff426f1fa6ad306a54765d60351e10dbe7231da3a09
+  LUCIE_WONDER_SHA256: f18ee8d13204d1a1c0ccc6e8621edf107fff8236946a174aaa6d95e7b7ef1788
+  LUCIE_SADNESS_SHA256: 6190b6c45aa4efeea24d55e8f048d0af1dc2199d73b95a974c5b94cbee71b131
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  SUPERB_REPO: superb/wav2vec2-base-superb-er
+  SUPERB_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  HUMAN_BLIND_SEED: "2026082701"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  PIP_NO_CACHE_DIR: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    outputs:
+      eligible: ${{ steps.technical.outputs.eligible }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Freeze 2x3 confirmation contract before any conversion
+        run: |
+          mkdir -p render/clips source weights upstream
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          cases = [
+            {"character":"claire","emotion":"panic","text":"Vite ! Ils arrivent ! Fermez la porte !","source_sha256":os.environ["CLAIRE_PANIC_SHA256"]},
+            {"character":"claire","emotion":"wonder","text":"Regardez... La brume se lève. On voit toute la vallée, jusqu'aux montagnes.","source_sha256":os.environ["CLAIRE_WONDER_SHA256"]},
+            {"character":"claire","emotion":"sadness-contained","text":"Il est parti avant l'aube. Je savais que ce moment viendrait, mais pas si tôt.","source_sha256":os.environ["CLAIRE_SADNESS_SHA256"]},
+            {"character":"lucie","emotion":"panic","text":"Vite ! Ils arrivent ! Fermez la porte !","source_sha256":os.environ["LUCIE_PANIC_SHA256"]},
+            {"character":"lucie","emotion":"wonder","text":"Regardez... La brume se lève. On voit toute la vallée, jusqu'aux montagnes.","source_sha256":os.environ["LUCIE_WONDER_SHA256"]},
+            {"character":"lucie","emotion":"sadness-contained","text":"Il est parti avant l'aube. Je savais que ce moment viendrait, mais pas si tôt.","source_sha256":os.environ["LUCIE_SADNESS_SHA256"]},
+          ]
+          c = {
+            "schema":"chatterbox-vc-2x3-confirmation-v1",
+            "status":"contract-frozen",
+            "architecture":"Resemble ChatterboxVC / S3Gen voice conversion",
+            "scope":"Claire and Lucie x panic/wonder/sadness-contained",
+            "source":"six immutable direct-Qwen emotional WAVs from historical PR #86 evidence",
+            "target_rule":"each character converted only toward its own immutable neutral reference",
+            "conversion_count_exact":6,
+            "retry_count":0,
+            "replacement_count":0,
+            "seed_per_cell":0,
+            "upstream_revision":os.environ["CHATTERBOX_REV"],
+            "perth_revision":os.environ["PERTH_REV"],
+            "model_revision":os.environ["MODEL_REV"],
+            "cases":cases,
+            "gates_in_order":[
+              "technical: every cell native 24 kHz, finite, non-silent, duration ratio 0.5..1.5",
+              "identity: every cell independent WeSpeaker similarity to own reference > other reference",
+              "french: every cell candidate edit-distance <= immutable source edit-distance + 1 AND candidate WER <= 0.5",
+              "emotion: every cell SUPERB profile nearest to the same-character immutable source profile for its intended emotion among the three source emotions"
+            ],
+            "human_gate_only_if_all_machine_pass":{
+              "identity":"6/6 correct blind mappings",
+              "acting":">=5/6 total and >=2/3 per character",
+              "french":"6/6 good",
+              "reference_and_candidate_order":"deterministic blind shuffle using HUMAN_BLIND_SEED; mapping stored only in machine evidence"
+            },
+            "forbidden":[
+              "rerender","retry","alternate reference","seed search","parameter tuning",
+              "DSP output transform","training","finetuning","Production promotion"
+            ],
+          }
+          Path("render/contract.json").write_text(json.dumps(c,indent=2,ensure_ascii=False),encoding="utf-8")
+          print(json.dumps(c,indent=2,ensure_ascii=False))
+          PY
+
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          df -h /
+
+      - name: Recover and verify all immutable source material
+        run: |
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          python - <<'PY'
+          import hashlib, os
+          from pathlib import Path
+          expected = {
+            "reference-claire.wav": os.environ["CLAIRE_REF_SHA256"],
+            "reference-lucie.wav": os.environ["LUCIE_REF_SHA256"],
+            "clips/claire--panic.wav": os.environ["CLAIRE_PANIC_SHA256"],
+            "clips/claire--wonder.wav": os.environ["CLAIRE_WONDER_SHA256"],
+            "clips/claire--sadness-contained.wav": os.environ["CLAIRE_SADNESS_SHA256"],
+            "clips/lucie--panic.wav": os.environ["LUCIE_PANIC_SHA256"],
+            "clips/lucie--wonder.wav": os.environ["LUCIE_WONDER_SHA256"],
+            "clips/lucie--sadness-contained.wav": os.environ["LUCIE_SADNESS_SHA256"],
+          }
+          for name, sha in expected.items():
+              p=Path("source")/name
+              got=hashlib.sha256(p.read_bytes()).hexdigest()
+              if got!=sha: raise SystemExit((name,got,sha))
+              print("SOURCE_PASS",name,got)
+          PY
+
+      - name: Install exact CPU ChatterboxVC runtime with frozen Perth packaging pin
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1
+          git clone --filter=blob:none "$CHATTERBOX_REPO" upstream/chatterbox
+          git -C upstream/chatterbox checkout --detach "$CHATTERBOX_REV"
+          test "$(git -C upstream/chatterbox rev-parse HEAD)" = "$CHATTERBOX_REV"
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          p=Path("upstream/chatterbox/pyproject.toml"); raw=p.read_bytes(); before=hashlib.sha256(raw).hexdigest()
+          s=raw.decode(); old="resemble-perth @ git+https://github.com/resemble-ai/Perth.git@master"; new=f"resemble-perth @ git+https://github.com/resemble-ai/Perth.git@{os.environ['PERTH_REV']}"
+          if s.count(old)!=1: raise SystemExit("unexpected Perth dependency form")
+          p.write_text(s.replace(old,new),encoding="utf-8"); after=hashlib.sha256(p.read_bytes()).hexdigest()
+          Path("render/packaging-patch.txt").write_text(f"original_pyproject_sha256={before}\npatched_pyproject_sha256={after}\nchange=Perth master -> {os.environ['PERTH_REV']}\nscience_code_changed=false\n")
+          PY
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 torchaudio==2.6.0
+          python -m pip install --disable-pip-version-check -e upstream/chatterbox
+          python -m pip install --disable-pip-version-check psutil==6.1.1
+          python -m pip check
+          python - <<'PY'
+          import torch
+          assert not torch.cuda.is_available()
+          print("CPU_ONLY_PASS",torch.__version__)
+          PY
+
+      - name: Download and verify exact killer-approved VC weights
+        run: |
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(repo_id=os.environ["MODEL_REPO"],revision=os.environ["MODEL_REV"],allow_patterns=["s3gen.safetensors","conds.pt"],local_dir="weights/chatterbox-vc"))
+          expected={"conds.pt":(107374,os.environ["CONDS_SHA256"]),"s3gen.safetensors":(1056484620,os.environ["S3GEN_SHA256"])}
+          total=0
+          for name,(size,sha) in expected.items():
+              p=root/name
+              h=hashlib.sha256()
+              with p.open("rb") as f:
+                  for chunk in iter(lambda:f.read(8*1024*1024),b""): h.update(chunk)
+              got=(p.stat().st_size,h.hexdigest()); total+=got[0]
+              if got!=(size,sha): raise SystemExit((name,got))
+          if total!=1056591994: raise SystemExit(total)
+          print("VC_WEIGHTS_PASS",total)
+          PY
+
+      - name: Convert exactly six immutable cells
+        run: |
+          /usr/bin/time -v -o render/convert-time.txt python - <<'PY'
+          import hashlib,json,random,resource,time,traceback
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from chatterbox.vc import ChatterboxVC
+
+          cases=[
+            ("claire","panic"),("claire","wonder"),("claire","sadness-contained"),
+            ("lucie","panic"),("lucie","wonder"),("lucie","sadness-contained"),
+          ]
+          model=ChatterboxVC.from_local("weights/chatterbox-vc","cpu")
+          results=[]
+          for character,emotion in cases:
+              random.seed(0); np.random.seed(0); torch.manual_seed(0)
+              src=f"source/clips/{character}--{emotion}.wav"
+              ref=f"source/reference-{character}.wav"
+              out=Path(f"render/clips/{character}--{emotion}.wav")
+              started=time.time()
+              try:
+                  wav=model.generate(audio=src,target_voice_path=ref)
+                  wall=time.time()-started
+                  y=wav.squeeze(0).detach().cpu().numpy().astype(np.float32); sr=int(model.sr)
+                  sf.write(out,y,sr)
+                  finite=bool(np.isfinite(y).all()) if y.size else False
+                  rms=float(np.sqrt(np.mean(y*y))) if y.size else 0.0
+                  row={"character":character,"emotion":emotion,"status":"converted","seed":0,"sample_rate":sr,"samples":int(y.size),"duration_seconds":float(y.size/sr),"rms":rms,"finite":finite,"convert_wall_seconds":wall,"output_sha256":hashlib.sha256(out.read_bytes()).hexdigest()}
+              except Exception as e:
+                  row={"character":character,"emotion":emotion,"status":"error","seed":0,"error":repr(e),"traceback":traceback.format_exc()}
+              results.append(row); print(json.dumps(row,ensure_ascii=False))
+          summary={"status":"render-complete","conversion_attempt_count":6,"retry_count":0,"replacement_count":0,"max_rss_kib":resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,"cuda_available":torch.cuda.is_available(),"cells":results}
+          Path("render/render.json").write_text(json.dumps(summary,indent=2,ensure_ascii=False),encoding="utf-8")
+          if len(results)!=6: raise SystemExit("unexpected cell count")
+          PY
+
+      - name: Frozen 6-cell technical gate
+        id: technical
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf
+          cases=[("claire","panic"),("claire","wonder"),("claire","sadness-contained"),("lucie","panic"),("lucie","wonder"),("lucie","sadness-contained")]
+          rows=[]
+          for character,emotion in cases:
+              out=Path(f"render/clips/{character}--{emotion}.wav")
+              if not out.exists():
+                  rows.append({"character":character,"emotion":emotion,"status":"reject","reason":"no-output"})
+                  continue
+              y,sr=sf.read(out,dtype="float32"); y=np.asarray(y,dtype=np.float32); y=y.mean(1) if y.ndim==2 else y
+              s,ssr=sf.read(f"source/clips/{character}--{emotion}.wav",dtype="float32"); s=np.asarray(s,dtype=np.float32); s=s.mean(1) if s.ndim==2 else s
+              duration=len(y)/sr; source_duration=len(s)/ssr; ratio=duration/source_duration
+              rms=float(np.sqrt(np.mean(y*y))) if y.size else 0.0; finite=bool(np.isfinite(y).all()) if y.size else False
+              ok=sr==24000 and y.size>0 and finite and rms>1e-5 and .5<=ratio<=1.5
+              rows.append({"character":character,"emotion":emotion,"status":"pass" if ok else "reject","sr":sr,"duration":duration,"source_duration":source_duration,"duration_ratio":ratio,"rms":rms,"finite":finite})
+          ok=all(r["status"]=="pass" for r in rows) and len(rows)==6
+          result={"status":"pass" if ok else "reject","rule":"all 6: native 24 kHz; finite non-silent; duration 0.5x..1.5x immutable source","cells":rows}
+          Path("render/technical.json").write_text(json.dumps(result,indent=2)); print(json.dumps(result,indent=2))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Upload immutable 6-cell render evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatterbox-vc-2x3-confirmation-render
+          path: render/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface technical verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("render/technical.json").read_text())["status"]
+          if s!="pass": raise SystemExit(f"verdict: 2x3-technical-{s}")
+          print("TECHNICAL_6_OF_6_PASS")
+          PY
+
+  validate:
+    needs: render
+    if: needs.render.outputs.eligible == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    outputs:
+      machine_pass: ${{ steps.final.outputs.machine_pass }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - uses: actions/download-artifact@v4
+        with:
+          name: chatterbox-vc-2x3-confirmation-render
+          path: render
+
+      - name: Recover immutable references and sources
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          mkdir -p source evidence human weights
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          expected={
+            "reference-claire.wav":os.environ["CLAIRE_REF_SHA256"],
+            "reference-lucie.wav":os.environ["LUCIE_REF_SHA256"],
+            "clips/claire--panic.wav":os.environ["CLAIRE_PANIC_SHA256"],
+            "clips/claire--wonder.wav":os.environ["CLAIRE_WONDER_SHA256"],
+            "clips/claire--sadness-contained.wav":os.environ["CLAIRE_SADNESS_SHA256"],
+            "clips/lucie--panic.wav":os.environ["LUCIE_PANIC_SHA256"],
+            "clips/lucie--wonder.wav":os.environ["LUCIE_WONDER_SHA256"],
+            "clips/lucie--sadness-contained.wav":os.environ["LUCIE_SADNESS_SHA256"],
+          }
+          for name,sha in expected.items():
+              got=hashlib.sha256((Path("source")/name).read_bytes()).hexdigest()
+              if got!=sha: raise SystemExit((name,got,sha))
+          PY
+          cp render/contract.json render/render.json render/technical.json render/packaging-patch.txt evidence/
+
+      - name: Install CPU validation runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchaudio==2.7.1
+          python -m pip install --disable-pip-version-check numpy scipy soundfile huggingface-hub
+
+      - name: Install pinned independent WeSpeaker
+        run: |
+          python -m pip install --disable-pip-version-check onnxruntime==1.20.1
+          git init WeSpeaker
+          git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git
+          git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV"
+          git -C WeSpeaker checkout --detach FETCH_HEAD
+          test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"
+          mkdir -p weights/wespeaker
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          p=Path(snapshot_download(repo_id=os.environ["WESPEAKER_MODEL_REPO"],revision=os.environ["WESPEAKER_MODEL_REV"],allow_patterns=["voxceleb_resnet34.onnx"],local_dir="weights/wespeaker"))/"voxceleb_resnet34.onnx"
+          h=hashlib.sha256()
+          with p.open("rb") as f:
+              for c in iter(lambda:f.read(8*1024*1024),b""): h.update(c)
+          got=(p.stat().st_size,h.hexdigest())
+          if got!=(26534127,"9fea6516d7ad6bf0a76c7689f5a49b65d330fad6dde96c91bb4435ffbfe056a1"): raise SystemExit(got)
+          PY
+
+      - name: Independent identity 6-of-6 gate
+        id: identity
+        run: |
+          python - <<'PY'
+          import importlib.util,json,os
+          from pathlib import Path
+          import numpy as np,onnxruntime as ort
+          spec=importlib.util.spec_from_file_location("ws","WeSpeaker/wespeaker/bin/infer_onnx.py")
+          m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          sess=ort.InferenceSession("weights/wespeaker/voxceleb_resnet34.onnx",providers=["CPUExecutionProvider"])
+          def emb(p):
+              f=m.compute_fbank(p).unsqueeze(0).numpy(); e=np.asarray(sess.run(["embs"],{"feats":f})[0]).reshape(-1).astype(np.float64)
+              n=np.linalg.norm(e)
+              if not np.isfinite(e).all() or n<=0: raise SystemExit(f"bad embedding {p}")
+              return e/n
+          refs={"claire":emb("source/reference-claire.wav"),"lucie":emb("source/reference-lucie.wav")}
+          rows=[]
+          for character in ["claire","lucie"]:
+              other="lucie" if character=="claire" else "claire"
+              for emotion in ["panic","wonder","sadness-contained"]:
+                  o=emb(f"render/clips/{character}--{emotion}.wav")
+                  own=float(o@refs[character]); alt=float(o@refs[other]); margin=own-alt; ok=margin>0
+                  rows.append({"character":character,"emotion":emotion,"status":"pass" if ok else "reject","sim_own":own,"sim_other":alt,"target_margin":margin})
+          ok=all(r["status"]=="pass" for r in rows) and len(rows)==6
+          result={"status":"pass" if ok else "reject","rule":"all 6 candidates: independent WeSpeaker own reference > other reference; no absolute threshold","cells":rows}
+          Path("evidence/identity.json").write_text(json.dumps(result,indent=2)); print(json.dumps(result,indent=2))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned Whisper only after identity 6-of-6 PASS
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV" imageio-ffmpeg==0.6.0
+          F="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"
+          mkdir -p "$HOME/.local/bin"; ln -sf "$F" "$HOME/.local/bin/ffmpeg"; echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: French preservation 6-of-6 gate
+        id: french
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,re,unicodedata
+          from pathlib import Path
+          import whisper
+
+          texts={
+            "panic":"Vite ! Ils arrivent ! Fermez la porte !",
+            "wonder":"Regardez... La brume se lève. On voit toute la vallée, jusqu'aux montagnes.",
+            "sadness-contained":"Il est parti avant l'aube. Je savais que ce moment viendrait, mais pas si tôt.",
+          }
+          def norm(t): return " ".join(re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+"," ",unicodedata.normalize("NFKC",t).lower().replace("’","'")).split())
+          def dist(a,b):
+              p=list(range(len(b)+1))
+              for i,x in enumerate(a,1):
+                  q=[i]
+                  for j,y in enumerate(b,1): q.append(min(q[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+                  p=q
+              return p[-1]
+          def measure(ref,hyp):
+              a,b=norm(ref).split(),norm(hyp).split(); d=dist(a,b); return d,d/max(1,len(a))
+          model=whisper.load_model("small",device="cpu")
+          p=Path.home()/".cache/whisper/small.pt"
+          sha=hashlib.sha256(p.read_bytes()).hexdigest()
+          if sha!=os.environ["WHISPER_MODEL_SHA256"]: raise SystemExit(sha)
+          rows=[]
+          for character in ["claire","lucie"]:
+              for emotion in ["panic","wonder","sadness-contained"]:
+                  expected=texts[emotion]
+                  src=str(model.transcribe(f"source/clips/{character}--{emotion}.wav",language="fr",task="transcribe",fp16=False,temperature=0,condition_on_previous_text=False).get("text","")).strip()
+                  cand=str(model.transcribe(f"render/clips/{character}--{emotion}.wav",language="fr",task="transcribe",fp16=False,temperature=0,condition_on_previous_text=False).get("text","")).strip()
+                  sd,sw=measure(expected,src); cd,cw=measure(expected,cand)
+                  ok=cd<=sd+1 and cw<=0.5+1e-12
+                  rows.append({"character":character,"emotion":emotion,"status":"pass" if ok else "reject","expected":expected,"source_transcript":src,"candidate_transcript":cand,"source_edit_distance":sd,"candidate_edit_distance":cd,"source_wer":sw,"candidate_wer":cw,"rule":"candidate edit distance <= immutable source edit distance + 1 AND candidate WER <= 0.5"})
+          ok=all(r["status"]=="pass" for r in rows) and len(rows)==6
+          result={"status":"pass" if ok else "reject","cells":rows}
+          Path("evidence/french.json").write_text(json.dumps(result,ensure_ascii=False,indent=2)); print(json.dumps(result,ensure_ascii=False,indent=2))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned SUPERB only after French 6-of-6 PASS
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check transformers==4.40.1
+          mkdir -p weights/superb
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          p=Path(snapshot_download(repo_id=os.environ["SUPERB_REPO"],revision=os.environ["SUPERB_REV"],allow_patterns=["config.json","preprocessor_config.json","pytorch_model.bin"],local_dir="weights/superb"))/"pytorch_model.bin"
+          h=hashlib.sha256()
+          with p.open("rb") as f:
+              for c in iter(lambda:f.read(8*1024*1024),b""): h.update(c)
+          got=(p.stat().st_size,h.hexdigest())
+          if got!=(378361105,"dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b"): raise SystemExit(got)
+          PY
+
+      - name: Source-relative emotion 6-of-6 nearest-profile gate
+        id: emotion
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from scipy.signal import resample_poly
+          from transformers import AutoFeatureExtractor,AutoModelForAudioClassification
+          torch.set_num_threads(2)
+          ex=AutoFeatureExtractor.from_pretrained("weights/superb",local_files_only=True)
+          model=AutoModelForAudioClassification.from_pretrained("weights/superb",local_files_only=True).eval()
+          labels=[str(model.config.id2label[i]).lower() for i in range(4)]
+          def profile(path):
+              y,sr=sf.read(path,dtype="float32"); y=np.asarray(y,dtype=np.float32); y=y.mean(1) if y.ndim==2 else y
+              if sr!=16000:
+                  g=int(np.gcd(sr,16000)); y=resample_poly(y,16000//g,sr//g).astype(np.float32)
+              x=ex(y,sampling_rate=16000,return_tensors="pt",padding=False)
+              with torch.inference_mode(): raw=torch.softmax(model(**x).logits[0],dim=-1).cpu().numpy().astype(np.float64)
+              n=raw/np.linalg.norm(raw)
+              return raw,n
+          emotions=["panic","wonder","sadness-contained"]
+          rows=[]; source={}
+          for character in ["claire","lucie"]:
+              source[character]={}
+              for emotion in emotions:
+                  raw,n=profile(f"source/clips/{character}--{emotion}.wav")
+                  source[character][emotion]=(raw,n)
+          for character in ["claire","lucie"]:
+              for emotion in emotions:
+                  raw,n=profile(f"render/clips/{character}--{emotion}.wav")
+                  sims={e:float(n@source[character][e][1]) for e in emotions}
+                  ranked=sorted(sims,key=sims.get,reverse=True)
+                  margin=sims[emotion]-max(v for k,v in sims.items() if k!=emotion)
+                  ok=ranked[0]==emotion and margin>0
+                  rows.append({"character":character,"emotion":emotion,"status":"pass" if ok else "reject","candidate_profile":{labels[i]:float(raw[i]) for i in range(4)},"similarities_to_same_character_source_emotions":sims,"nearest_source_emotion":ranked[0],"target_margin":margin,"semantic_label_claim":False})
+          ok=all(r["status"]=="pass" for r in rows) and len(rows)==6
+          source_out={c:{e:{labels[i]:float(source[c][e][0][i]) for i in range(4)} for e in emotions} for c in source}
+          result={"status":"pass" if ok else "reject","rule":"all 6 candidate SUPERB profiles nearest to same-character immutable source profile of intended emotion among panic/wonder/sadness-contained; no semantic class claim","source_profiles":source_out,"cells":rows}
+          Path("evidence/emotion.json").write_text(json.dumps(result,indent=2)); print(json.dumps(result,indent=2))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Build authoritative machine verdict and blind human package
+        id: final
+        if: always()
+        run: |
+          python - <<'PY'
+          import json,os,random,shutil
+          from pathlib import Path
+          def read_status(name,path="evidence"):
+              p=Path(path)/f"{name}.json"
+              return json.loads(p.read_text())["status"] if p.exists() else "skipped"
+          gates={"technical":json.loads(Path("evidence/technical.json").read_text())["status"],"identity":read_status("identity"),"french":read_status("french"),"emotion":read_status("emotion")}
+          order=["technical","identity","french","emotion"]; first=next((g for g in order if gates[g]!="pass"),None)
+          final="machine-pass" if first is None else f"{first}-reject" if gates[first]=="reject" else f"{first}-not-run"
+          out={"schema":"chatterbox-vc-2x3-confirmation-machine-v1","status":final,"gates":gates,"human_gate_authorized":first is None,"conversion_count":6,"retry_count":0,"replacement_count":0,"production":False}
+          Path("evidence/final.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:f.write(f"machine_pass={'true' if first is None else 'false'}\n")
+          if first is not None:
+              raise SystemExit(0)
+
+          rng=random.Random(int(os.environ["HUMAN_BLIND_SEED"]))
+          refs=["claire","lucie"]; rng.shuffle(refs)
+          mapping={"reference-1":refs[0],"reference-2":refs[1],"trials":{},"seed":int(os.environ["HUMAN_BLIND_SEED"])}
+          shutil.copy2(f"source/reference-{refs[0]}.wav","human/reference-1.wav")
+          shutil.copy2(f"source/reference-{refs[1]}.wav","human/reference-2.wav")
+          texts={
+            "panic":("Panique urgente","Vite ! Ils arrivent ! Fermez la porte !"),
+            "wonder":("Émerveillement","Regardez... La brume se lève. On voit toute la vallée, jusqu'aux montagnes."),
+            "sadness-contained":("Tristesse contenue","Il est parti avant l'aube. Je savais que ce moment viendrait, mais pas si tôt."),
+          }
+          public={"schema":"chatterbox-vc-2x3-human-v1","reference_files":["reference-1.wav","reference-2.wav"],"trials":[]}
+          for emotion in ["panic","wonder","sadness-contained"]:
+              roles=["claire","lucie"]; rng.shuffle(roles)
+              trial={"emotion":emotion,"label":texts[emotion][0],"text":texts[emotion][1],"candidates":[]}
+              mapping["trials"][emotion]={}
+              for letter,role in zip(["A","B"],roles):
+                  fn=f"{emotion}--candidate-{letter}.wav"
+                  shutil.copy2(f"render/clips/{role}--{emotion}.wav",f"human/{fn}")
+                  trial["candidates"].append({"letter":letter,"file":fn})
+                  mapping["trials"][emotion][letter]=role
+              public["trials"].append(trial)
+          Path("human/manifest.json").write_text(json.dumps(public,indent=2,ensure_ascii=False),encoding="utf-8")
+          Path("evidence/human-mapping.json").write_text(json.dumps(mapping,indent=2),encoding="utf-8")
+          Path("human/instructions.txt").write_text(
+              "Blind 2x3 confirmation. Do not inspect machine evidence before answering.\n\n"
+              "For each of the six candidates:\n"
+              "1. Which reference is the same character: Reference 1 or Reference 2?\n"
+              "2. Is the intended acting credible? yes/no\n"
+              "3. Is the French natural and intact? good/no\n\n"
+              "Acceptance is preregistered: identity 6/6; acting >=5/6 total and >=2/3 per character; French 6/6.\n",
+              encoding="utf-8")
+          PY
+
+      - name: Create self-contained blind listening page
+        if: steps.emotion.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path("human/manifest.json").read_text())
+          cards=[]
+          for t in m["trials"]:
+              cand=""
+              for c in t["candidates"]:
+                  key=f"{t['emotion']}-{c['letter']}"
+                  cand+=f"""
+                  <div class='candidate'>
+                    <h3>Candidate {c['letter']}</h3>
+                    <audio controls preload='metadata' src='{c['file']}'></audio>
+                    <label>Identité
+                      <select data-k='{key}-identity'>
+                        <option value=''>— choisir —</option>
+                        <option>Référence 1</option><option>Référence 2</option><option>Impossible</option>
+                      </select>
+                    </label>
+                    <label>Jeu crédible
+                      <select data-k='{key}-acting'><option value=''>— choisir —</option><option value='yes'>yes</option><option value='no'>no</option></select>
+                    </label>
+                    <label>Français
+                      <select data-k='{key}-french'><option value=''>— choisir —</option><option value='good'>good</option><option value='no'>no</option></select>
+                    </label>
+                  </div>"""
+              cards.append(f"<section><h2>{t['label']}</h2><p>{t['text']}</p><div class='grid'>{cand}</div></section>")
+          html=f"""<!doctype html><html lang='fr'><meta charset='utf-8'><title>ChatterboxVC 2×3 — gate humain aveugle</title>
+          <style>body{{font-family:system-ui;max-width:1000px;margin:30px auto;padding:0 18px;line-height:1.45}}audio{{width:100%}}.refs,.grid{{display:grid;grid-template-columns:1fr 1fr;gap:16px}}section,.candidate,.ref{{border:1px solid #bbb;border-radius:12px;padding:16px;margin:18px 0}}label{{display:block;margin-top:10px}}select{{width:100%;padding:8px}}button{{padding:12px 18px;font-size:1rem}}code{{background:#eee;padding:2px 4px}}@media(max-width:700px){{.refs,.grid{{grid-template-columns:1fr}}}}</style>
+          <h1>ChatterboxVC — confirmation 2×3 aveugle</h1>
+          <p>Écoutez les deux références. Pour chaque candidat, choisissez la référence correspondant au même personnage, puis jugez le jeu et le français. N'inspectez pas les métriques machine avant de répondre.</p>
+          <div class='refs'><div class='ref'><h2>Référence 1</h2><audio controls src='reference-1.wav'></audio></div><div class='ref'><h2>Référence 2</h2><audio controls src='reference-2.wav'></audio></div></div>
+          {''.join(cards)}
+          <button id='export'>Exporter le JSON</button><p id='msg'></p>
+          <script>
+          const schema='chatterbox-vc-2x3-human-v1';
+          document.getElementById('export').onclick=()=>{{
+            const vals={{}}; let missing=[];
+            document.querySelectorAll('select[data-k]').forEach(s=>{{vals[s.dataset.k]=s.value;if(!s.value)missing.push(s.dataset.k)}});
+            if(missing.length){{document.getElementById('msg').textContent='Réponses manquantes : '+missing.join(', ');return}}
+            const trials=[];
+            for(const e of ['panic','wonder','sadness-contained']){{
+              const candidates=[];
+              for(const l of ['A','B']) candidates.push({{letter:l,identity:vals[e+'-'+l+'-identity'],acting:vals[e+'-'+l+'-acting'],french:vals[e+'-'+l+'-french']}});
+              trials.push({{emotion:e,candidates}});
+            }}
+            const out={{schema,trials}};
+            const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(out,null,2)],{{type:'application/json'}}));a.download='chatterbox-vc-2x3-human.json';a.click();URL.revokeObjectURL(a.href);
+            document.getElementById('msg').textContent='JSON exporté.';
+          }};
+          </script></html>"""
+          Path("human/index.html").write_text(html,encoding="utf-8")
+          PY
+
+      - name: Upload machine evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatterbox-vc-2x3-confirmation-machine-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload blind human gate only after full machine PASS
+        if: steps.emotion.outputs.eligible == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatterbox-vc-2x3-confirmation-human-gate
+          path: human/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface machine verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/final.json").read_text())["status"]
+          if s!="machine-pass": raise SystemExit(f"verdict: {s}")
+          print("MACHINE_2X3_PASS")
+          PY
