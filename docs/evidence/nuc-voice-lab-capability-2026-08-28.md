@@ -177,7 +177,7 @@ All four source and destination SHA-256 values matched after copy.
 
 The NUC is a **persistent safety/cache copy only**. It is not the sole canonical archive.
 
-Issue #174 remains the authority for creating a durable independent archive before the expiring Actions artifact disappears.
+A durable independent archive has now been created as GitHub prerelease `voice-lab-reference-pack-v1` by successful run `33165305338`, with all four immutable WAV hashes verified before packaging. The NUC remains a secondary read-mostly copy.
 
 ## Local layout
 
