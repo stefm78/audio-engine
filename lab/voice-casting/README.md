@@ -32,6 +32,9 @@ The current unresolved target is:
 The frozen one-cell protocol and the current capability-gap evidence are recorded in
 [`docs/evidence/voice-casting-capability-gap-2026-08-28.md`](../../docs/evidence/voice-casting-capability-gap-2026-08-28.md).
 
+The completed NUC capability characterization is recorded in
+[`docs/evidence/nuc-voice-lab-capability-2026-08-28.md`](../../docs/evidence/nuc-voice-lab-capability-2026-08-28.md).
+
 ## Execution policy
 
 A new candidate is admitted only after a cheap resource/API preflight.
@@ -45,7 +48,9 @@ Scientific experiments remain frozen:
 - no seed search;
 - no post-result tuning or rescue.
 
-The NUC is being characterized as an **optional Lab executor**. Its final backend/runtime configuration is not part of Production and must not be assumed until the separate capability manifest is complete.
+The Intel NUC8i7HVK is a characterized **optional Lab executor**. Proven local paths include CPU PyTorch, ONNX Runtime CPU, strict DirectML, OpenVINO CPU/iGPU and Vulkan/GGUF on the Radeon RX Vega M GH. A real French voice-cloning TTS smoke also passed through ONNX Runtime CPU.
+
+These capabilities are Lab evidence only. They do not alter the scientific qualification criteria and are not part of Production.
 
 Because this repository is public, the NUC must not be attached as an unrestricted persistent self-hosted runner. Preferred future topology is local/manual execution or a private Lab control-plane that checks out an exact immutable `audio-engine` SHA.
 
