@@ -1,0 +1,261 @@
+name: Voice Casting Marco Voice CPU Fearful Resource Preflight
+
+on:
+  push:
+    branches:
+      - lab/marco-voice-cpu-fearful-resource-preflight
+    paths:
+      - .github/workflows/voice-casting-marco-voice-cpu-fearful-resource-preflight.yml
+
+permissions:
+  contents: read
+
+env:
+  CODE_REPO: https://github.com/ATH-MaaS/Marco-Voice.git
+  CODE_REV: 669d5afca063875a365522e87134a8c06cdd1e8e
+  MODEL_REPO: ATH-MaaS/Marco-Voice
+  MODEL_REV: 813ab3b80d52d9e94e7a9e86ea2fe4df161052a4
+  MODEL_SUBDIR: marco_voice_enhenced
+  EMOTION_REPO: ATH-MaaS/Marco-Voice-TTS
+  EMOTION_REV: efacc59121111d8aedc1c2d83561f3ea2815c29a
+  EMOTION_FILE: emotion_info.pt
+  EMOTION_SHA256: 8d66ae02c5d65c7690416776c08bf6d9b8c835b6bdb1adc30c3a35b20800c0d9
+  PYTHONUNBUFFERED: "1"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  TOKENIZERS_PARALLELISM: "false"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Freeze resource-only contract
+        run: |
+          mkdir -p evidence model assets
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          c={
+            "schema":"marco-voice-cpu-fearful-resource-preflight-v1",
+            "scientific_audio":False,
+            "production":False,
+            "purpose":"prove exact Marco-Voice enhanced checkpoint can execute arbitrary reference cloning + separate native Fearful embedding + French text on standard CPU",
+            "code":{"repo":os.environ["CODE_REPO"],"revision":os.environ["CODE_REV"]},
+            "model":{"repo":os.environ["MODEL_REPO"],"revision":os.environ["MODEL_REV"],"subdir":os.environ["MODEL_SUBDIR"]},
+            "emotion_asset":{"repo_type":"space","repo":os.environ["EMOTION_REPO"],"revision":os.environ["EMOTION_REV"],"file":os.environ["EMOTION_FILE"],"sha256":os.environ["EMOTION_SHA256"],"key_path":["female003","Fearful"]},
+            "reference":"disposable local espeak-ng French voice only; no Claire/Lucie",
+            "reference_text":"Bonjour, ceci est une voix de référence.",
+            "target_text":"Attention ! Sortez immédiatement !",
+            "emotion_key":"Fearful",
+            "load_jit":False,
+            "load_onnx":False,
+            "fp16":False,
+            "speed":1.0,
+            "seed_source":"checkpoint cosyvoice.yaml frozen seed 1986",
+            "render_count_exact":1,
+            "retry_count":0,
+            "replacement_count":0,
+            "pass_rule":"exact code + exact model revision manifest + exact Fearful asset + CPU-only full load + one finite non-silent 22050-Hz clone+Fearful French smoke",
+            "science_authorized_next":"only PASS may authorize one separate Claire-panic cell using the same code/model/emotion asset/key/default sampling",
+            "forbidden":["Claire","Lucie","scientific scoring","alternate emotion speaker/key","seed search","parameter search","Production promotion"]
+          }
+          Path("evidence/contract.json").write_text(json.dumps(c,indent=2,ensure_ascii=False))
+          print(json.dumps(c,indent=2,ensure_ascii=False))
+          PY
+
+      - name: Free runner disk and install system runtime
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends git curl ffmpeg espeak-ng libsndfile1
+          df -h /
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Checkout exact Marco-Voice code
+        run: |
+          git clone "$CODE_REPO" upstream
+          git -C upstream checkout --detach "$CODE_REV"
+          test "$(git -C upstream rev-parse HEAD)" = "$CODE_REV"
+          git -C upstream submodule update --init --recursive || true
+          git -C upstream status --short
+          printf '%s\n' "$CODE_REV" > evidence/code-revision.txt
+
+      - name: Install inference-only CPU runtime
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu             torch==2.3.1 torchaudio==2.3.1
+          python -m pip install --disable-pip-version-check             numpy==1.26.4 scipy==1.15.2 soundfile==0.13.1             onnxruntime==1.18.0 HyperPyYAML==1.2.2 omegaconf==2.3.0             inflect==7.5.0 librosa==0.11.0 einops==0.8.1             conformer==0.3.2 diffusers==0.33.1 torchdiffeq==0.2.5             transformers==4.50.3 huggingface-hub==0.27.1             WeTextProcessing==1.0.4             "openai-whisper @ git+https://github.com/openai/whisper.git@517a43ecd132a2089d85f4ebc044728a71d49f6e"
+          python -m pip check
+          python - <<'PY'
+          import torch,torchaudio,onnxruntime
+          print("torch",torch.__version__,"torchaudio",torchaudio.__version__,"cuda",torch.cuda.is_available(),"providers",onnxruntime.get_available_providers())
+          assert torch.cuda.is_available() is False
+          assert "CPUExecutionProvider" in onnxruntime.get_available_providers()
+          PY
+
+      - name: Download exact model snapshot subset and record hashes
+        run: |
+          python - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          root=Path(snapshot_download(
+              repo_id=os.environ["MODEL_REPO"],
+              revision=os.environ["MODEL_REV"],
+              allow_patterns=[os.environ["MODEL_SUBDIR"]+"/*","LICENSE","NOTICE"],
+              local_dir="model",
+              local_dir_use_symlinks=False,
+          ))
+          files=[]
+          total=0
+          for p in sorted(root.rglob("*")):
+              if not p.is_file(): continue
+              h=hashlib.sha256()
+              with p.open("rb") as f:
+                  for b in iter(lambda:f.read(8*1024*1024),b""): h.update(b)
+              rel=str(p.relative_to(root)); size=p.stat().st_size; total+=size
+              files.append({"path":rel,"size":size,"sha256":h.hexdigest()})
+          required=[f"{os.environ['MODEL_SUBDIR']}/{x}" for x in ["cosyvoice.yaml","llm.pt","flow.pt","hift.pt","campplus.onnx","speech_tokenizer_v1.onnx"]]
+          have={x["path"] for x in files}
+          missing=[x for x in required if x not in have]
+          out={"repo":os.environ["MODEL_REPO"],"revision":os.environ["MODEL_REV"],"files":files,"file_count":len(files),"total_bytes":total,"missing_required":missing}
+          Path("evidence/model-manifest.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps({"file_count":len(files),"total_bytes":total,"missing_required":missing},indent=2))
+          if missing: raise SystemExit(missing)
+          PY
+          df -h /
+
+      - name: Download and verify official Fearful embedding asset
+        run: |
+          python - <<'PY'
+          import hashlib,os,shutil
+          from pathlib import Path
+          from huggingface_hub import hf_hub_download
+          src=Path(hf_hub_download(
+              repo_id=os.environ["EMOTION_REPO"],
+              repo_type="space",
+              revision=os.environ["EMOTION_REV"],
+              filename=os.environ["EMOTION_FILE"],
+          ))
+          dst=Path("assets")/os.environ["EMOTION_FILE"]; shutil.copy2(src,dst)
+          h=hashlib.sha256(dst.read_bytes()).hexdigest()
+          print("emotion_asset",dst.stat().st_size,h)
+          if h!=os.environ["EMOTION_SHA256"]: raise SystemExit((h,os.environ["EMOTION_SHA256"]))
+          PY
+          python - <<'PY'
+          import json,torch
+          from pathlib import Path
+          obj=torch.load("assets/emotion_info.pt",map_location="cpu",weights_only=False)
+          e=obj["female003"]["Fearful"]
+          out={"speaker_key":"female003","emotion_key":"Fearful","shape":list(e.shape),"dtype":str(e.dtype),"finite":bool(torch.isfinite(e).all())}
+          Path("evidence/emotion-asset.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          if not out["finite"] or e.numel()==0: raise SystemExit(out)
+          PY
+
+      - name: Create disposable French reference
+        run: |
+          espeak-ng -v fr-fr -s 155 -w assets/reference.wav "Bonjour, ceci est une voix de référence."
+          ffmpeg -hide_banner -loglevel error -y -i assets/reference.wav -ac 1 -ar 16000 assets/reference-16k.wav
+          sha256sum assets/reference-16k.wav | tee evidence/reference-sha256.txt
+          ffprobe -v error -show_entries stream=sample_rate,channels -show_entries format=duration -of json assets/reference-16k.wav | tee evidence/reference.json
+
+      - name: Full CPU load and exactly one clone plus Fearful French smoke
+        env:
+          PYTHONPATH: ${{ github.workspace }}/upstream/Models/marco_voice:${{ github.workspace }}/upstream/Models/marco_voice/third_party/Matcha-TTS
+        run: |
+          /usr/bin/time -v -o evidence/smoke-time.txt python - <<'PY' 2>&1 | tee evidence/smoke.log
+          import hashlib,json,math,os,time
+          from pathlib import Path
+          import torch,torchaudio
+          from cosyvoice_rodis.cli.cosyvoice import CosyVoice
+          from cosyvoice_rodis.utils.file_utils import load_wav
+
+          assert not torch.cuda.is_available()
+          model_dir=str(Path("model")/os.environ["MODEL_SUBDIR"])
+          t0=time.time()
+          model=CosyVoice(model_dir,load_jit=False,load_onnx=False,fp16=False)
+          load_seconds=time.time()-t0
+          emotion_data=torch.load("assets/emotion_info.pt",map_location="cpu",weights_only=False)
+          emotion=emotion_data["female003"]["Fearful"].to("cpu")
+          ref=load_wav("assets/reference-16k.wav",16000)
+          outs=[]
+          t1=time.time()
+          for item in model.synthesize(
+              "Attention ! Sortez immédiatement !",
+              "Bonjour, ceci est une voix de référence.",
+              ref,
+              "Fearful",
+              emotion,
+              stream=False,
+              speed=1.0,
+          ):
+              outs.append(item["tts_speech"].detach().float().cpu())
+          render_seconds=time.time()-t1
+          if len(outs)!=1: raise SystemExit(("piece_count",len(outs)))
+          audio=torch.cat(outs,dim=1)
+          if audio.numel()==0 or not bool(torch.isfinite(audio).all()): raise SystemExit("empty/nonfinite")
+          torchaudio.save("evidence/smoke.wav",audio,22050)
+          p=Path("evidence/smoke.wav")
+          rms=float(torch.sqrt(torch.mean(audio*audio)))
+          duration=float(audio.shape[1]/22050)
+          out={
+            "status":"pass" if rms>1e-5 and 0.15<duration<15 else "reject",
+            "sample_rate":22050,
+            "channels":1,
+            "duration_seconds":duration,
+            "rms":rms,
+            "finite":True,
+            "piece_count":len(outs),
+            "load_seconds":load_seconds,
+            "render_seconds":render_seconds,
+            "sha256":hashlib.sha256(p.read_bytes()).hexdigest(),
+            "cuda":False,
+            "emotion_speaker_key":"female003",
+            "emotion_key":"Fearful",
+            "render_count":1,
+            "retry_count":0,
+            "replacement_count":0
+          }
+          Path("evidence/smoke.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          if out["status"]!="pass": raise SystemExit(out)
+          PY
+          test "${PIPESTATUS[0]}" = "0"
+
+      - name: Record resource verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/smoke.json").read_text()) if Path("evidence/smoke.json").exists() else {}
+          ok=s.get("status")=="pass"
+          out={"schema":"marco-voice-cpu-fearful-resource-result-v1","status":"resource-preflight-pass" if ok else "resource-preflight-fail","science_authorized_next":ok,"scientific_audio":False,"production":False}
+          Path("evidence/final.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          PY
+
+      - name: Upload resource evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: marco-voice-cpu-fearful-resource-preflight
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface resource verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/final.json").read_text())["status"]
+          if s!="resource-preflight-pass": raise SystemExit(s)
+          print("MARCO_VOICE_RESOURCE_PREFLIGHT_PASS")
+          PY
