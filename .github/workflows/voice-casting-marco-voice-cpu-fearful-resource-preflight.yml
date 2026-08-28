@@ -91,7 +91,7 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --upgrade pip
           python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu             torch==2.3.1 torchaudio==2.3.1
-          python -m pip install --disable-pip-version-check             numpy==1.26.4 scipy==1.15.2 soundfile==0.13.1             onnxruntime==1.18.0 HyperPyYAML==1.2.2 omegaconf==2.3.0             inflect==7.5.0 librosa==0.11.0 einops==0.8.1             conformer==0.3.2 diffusers==0.33.1 torchdiffeq==0.2.5             transformers==4.50.3 huggingface-hub==0.27.1             WeTextProcessing==1.0.4.1             "openai-whisper @ git+https://github.com/openai/whisper.git@517a43ecd132a2089d85f4ebc044728a71d49f6e"
+          python -m pip install --disable-pip-version-check             numpy==1.26.4 scipy==1.15.2 soundfile==0.13.1             onnxruntime==1.18.0 HyperPyYAML==1.2.2 omegaconf==2.3.0             inflect==7.5.0 librosa==0.11.0 einops==0.8.1             conformer==0.3.2 diffusers==0.33.1 torchdiffeq==0.2.5             transformers==4.50.3 huggingface-hub==0.27.1 modelscope==1.25.0             WeTextProcessing==1.0.4.1             "openai-whisper @ git+https://github.com/openai/whisper.git@517a43ecd132a2089d85f4ebc044728a71d49f6e"
           python -m pip check
           python - <<'PY'
           import torch,torchaudio,onnxruntime
