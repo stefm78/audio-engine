@@ -12,6 +12,20 @@ validated/local sounds ──► soundscape ──────────┘
 
 Consumers use **one CLI, one program contract and one reusable workflow**.
 
+## Production consumers
+
+Audio Engine is intentionally product-agnostic. It is the shared rendering layer for:
+
+- **audioguides** — episodes, narration, dialogue and deterministic sound design;
+- **audiobooks** — chapter/unit rendering plus assembly of already-rendered listening units;
+- **learning kits** — reusable spoken prompts, dialogues and instructional audio assets.
+
+Consumer repositories own authoring, publication, packaging, playback and durable product storage. Audio Engine owns the deterministic conversion of a declared audio program into exact audio assets plus manifests.
+
+The current Production voice provider is Edge TTS. Voice research is isolated in the Voice Casting Lab and cannot change Production behavior without an explicit promotion decision. Production rendering never depends on Lab runners, Lab model caches or the availability of experimental hardware.
+
+See [`lab/voice-casting/README.md`](lab/voice-casting/README.md) for the research boundary.
+
 ## Quick start
 
 Requires Python 3.11+.
@@ -47,6 +61,7 @@ See [`docs/EFFECTS.md`](docs/EFFECTS.md), [`docs/CONTRACT.md`](docs/CONTRACT.md)
 - **v3** — bounded deterministic soundscape.
 - **v4** — semantic acoustic spaces, safe fades and foreground-only `scene` events.
 - **v5** — `bridge`: a sound owns real foreground time, then continues under the next spoken segment.
+- **v6** — measured relative bridge carry based on the actual rendered duration of following spoken segment(s).
 
 ### v4 scene
 
@@ -151,7 +166,7 @@ The consumer decides whether outputs go to a site, package, object storage or Gi
 
 ## Provider and privacy
 
-The current TTS provider is Edge TTS and processing is remote. Do not send content that must remain local. Provider choice is isolated from soundscape and mixing semantics.
+The current Production TTS provider is Edge TTS and processing is remote. Do not send content that must remain local. Provider choice is isolated from soundscape and mixing semantics. Experimental providers remain Lab-only until an explicit promotion gate changes this boundary.
 
 ## Design boundary
 
