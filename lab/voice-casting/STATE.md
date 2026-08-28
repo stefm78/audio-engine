@@ -76,13 +76,28 @@ See:
 - `docs/evidence/nuc-voice-lab-capability-2026-08-28.md`;
 - closed-unmerged PRs referenced by the capability-gap evidence file.
 
+## Resource-reject reassessment
+
+The post-characterization reassessment is complete.
+
+- Marco-Voice: **STILL_RESOURCE_BLOCKED**; current upstream code revision is still the failed #171 revision, so its explicit upstream-fix trigger has not occurred.
+- Orpheus multilingual French: **RESOURCE_PATH_PLAUSIBLE / SCIENTIFIC_GATE_NOT_MET**; llama.cpp-compatible execution is materially more plausible, but the required same-path arbitrary-reference + independent fear/panic control is not established.
+- Dia / Dia2: **FRENCH_REJECT**.
+- EmoCtrl-TTS: **NO_PUBLIC_EXECUTABLE_MODEL**.
+- Qwen3-TTS: **SCIENTIFIC_REJECT — CLOSED**.
+- MOSS-TTS-Nano: **RESOURCE_PASS / NO_INDEPENDENT_EMOTION**.
+
+Result: **no new scientific cell and no new cheap resource preflight are authorized now.**
+
 ## Next action
 
 Do not run more generic NUC benchmarks.
 
-Perform a read-only reassessment of previous **resource rejects** against the proven NUC backend envelope.
+Remain **CAPABILITY GAP / WATCH** and monitor only material external reopening triggers.
 
-Only if a candidate now has a concrete supported runtime path and still passes the scientific admission gates should one cheap resource/API preflight be opened.
+The deadline-driven operational task is issue #174: create the independent durable archive of the four immutable Voice Lab WAV references before the source Actions artifact expires on 2026-09-08.
+
+A private NUC control-plane is not the next task; create it only when a real admitted experiment requires repeatable NUC execution.
 
 ## Production rule
 
