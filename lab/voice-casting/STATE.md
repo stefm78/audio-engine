@@ -56,7 +56,7 @@ The four frozen Voice Lab WAV references are cached locally on the NUC in a pers
 
 The NUC is not the sole canonical archive.
 
-Issue #174 remains open until an independent durable archive is recorded.
+A durable independent GitHub Release archive now exists as `voice-lab-reference-pack-v1`, produced by successful run `33165305338` after verification of all four immutable WAV SHA-256 values. The NUC remains only a secondary read-mostly copy.
 
 ## Runner security decision
 
@@ -95,7 +95,7 @@ Do not run more generic NUC benchmarks.
 
 Remain **CAPABILITY GAP / WATCH** and monitor only material external reopening triggers.
 
-The deadline-driven operational task is issue #174: create the independent durable archive of the four immutable Voice Lab WAV references before the source Actions artifact expires on 2026-09-08.
+The source-artifact expiry risk is closed by the durable `voice-lab-reference-pack-v1` release. No additional archive rerun is required.
 
 A private NUC control-plane is not the next task; create it only when a real admitted experiment requires repeatable NUC execution.
 
