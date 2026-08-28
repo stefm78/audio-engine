@@ -6,6 +6,8 @@ Repository: `stefm78/audio-engine`
 
 Baseline: `main@159fbebc34fd3797595eb1425fbf81c4f4801352`
 
+The consolidation branch that creates this snapshot is intentionally excluded from the inventory.
+
 ## Purpose
 
 This file is the first durable branch-retention inventory for the Production / Voice Lab rationalization.
@@ -23,21 +25,22 @@ Deletion policy remains:
 
 ## Snapshot summary
 
-Branches outside `main`: **117**
+Branches outside `main`, excluding this consolidation branch: **116**
 
-- `KEEP_TEMP_ACTIVE`: **0**
+- `KEEP_TEMP_ACTIVE`: **1**
 - `EVIDENCE_DURABLE_CAN_DELETE`: **21**
-- `EVIDENCE_NOT_DURABLE_HOLD`: **77**
-- `UNKNOWN_REVIEW_REQUIRED`: **19**
+- `EVIDENCE_NOT_DURABLE_HOLD`: **76**
+- `UNKNOWN_REVIEW_REQUIRED`: **18**
 
 Classification rule used for this first pass:
 
+- open associated PR -> `KEEP_TEMP_ACTIVE`;
 - associated merged PR -> `EVIDENCE_DURABLE_CAN_DELETE`;
 - closed-unmerged PR -> `EVIDENCE_NOT_DURABLE_HOLD` until its exact scientific evidence is checked against durable records;
 - no associated PR -> `UNKNOWN_REVIEW_REQUIRED`;
-- `lab/archive-reference-pack-v1` -> `EVIDENCE_DURABLE_CAN_DELETE` because the successful archive run and durable release are now separately recorded.
+- `lab/archive-reference-pack-v1` -> `EVIDENCE_DURABLE_CAN_DELETE` because the successful archive run and durable release are separately recorded.
 
-No branch is marked `KEEP_TEMP_ACTIVE` in this snapshot because GitHub reports no open PR among these historical refs. NUC characterization is external execution state, not a reason to keep an obsolete experiment branch.
+At snapshot time, `lab/nuc-capability-closeout` / PR #175 is the only active retained branch. Its presence reflects a current documentation closeout, not a Production dependency.
 
 ## Important limits
 
@@ -52,7 +55,6 @@ A branch marked `EVIDENCE_NOT_DURABLE_HOLD` is not scientifically reopened. It i
 | Branch | HEAD | PR | Class | Initial rationale |
 | --- | --- | --- | --- | --- |
 | `chore/rationalize-production-lab-boundary` | `e9e0fe71a145916a6664cab491141f1206e4a4e9` | #173 merged | `EVIDENCE_DURABLE_CAN_DELETE` | At least one associated PR merged |
-| `chore/voice-lab-evidence-consolidation` | `1b651fddaa2fdfad66cd84e58ef13dead13b254b` | — | `UNKNOWN_REVIEW_REQUIRED` | No associated PR found in repository PR history |
 | `chore/voice-lab-progress-logs` | `ad914f7de5119f4c4dda5bed076bbaad5d94bad3` | — | `UNKNOWN_REVIEW_REQUIRED` | No associated PR found in repository PR history |
 | `docs/qwen3-style-transplant-verdict` | `e2d7aa2bcdf566f6e160e5c967af73f56d80d721` | — | `UNKNOWN_REVIEW_REQUIRED` | No associated PR found in repository PR history |
 | `feature/chatterbox-v3-stage2` | `b1b7bcf616d023411e198d6ec6eee12f4a1cc205` | #44 merged | `EVIDENCE_DURABLE_CAN_DELETE` | At least one associated PR merged |
@@ -123,7 +125,7 @@ A branch marked `EVIDENCE_NOT_DURABLE_HOLD` is not scientifically reopened. It i
 | `infra/publish-radio-only-contrast-emotion` | `80db8f44487e9179967805be091e43d561a7e97a` | #94 merged | `EVIDENCE_DURABLE_CAN_DELETE` | At least one associated PR merged |
 | `infra/trigger-voice-lab-pages-publish` | `b78d4af3952b24aa2307834380934a4df55cdc27` | #74 merged | `EVIDENCE_DURABLE_CAN_DELETE` | At least one associated PR merged |
 | `infra/voice-lab-radio-only` | `8269ce6774297498a7817f9890cdc0744e6a4792` | #93 merged | `EVIDENCE_DURABLE_CAN_DELETE` | At least one associated PR merged |
-| `lab/archive-reference-pack-v1` | `fe090fc968684aab2d29f30a26d38cf3ddf54d36` | — | `EVIDENCE_DURABLE_CAN_DELETE` | Durable release voice-lab-reference-pack-v1 exists; branch is execution scaffolding only |
+| `lab/archive-reference-pack-v1` | `fe090fc968684aab2d29f30a26d38cf3ddf54d36` | — | `EVIDENCE_DURABLE_CAN_DELETE` | Durable release voice-lab-reference-pack-v1 exists; branch is archive execution scaffolding |
 | `lab/chatterbox-multilingual-claire-panic-one-cell` | `06a66fe29bdb9e478345727efccbe0ef76d4a52d` | #149 closed | `EVIDENCE_NOT_DURABLE_HOLD` | Closed-unmerged PR evidence exists; per-branch durable receipt not yet confirmed |
 | `lab/chatterbox-multilingual-cpu-resource-preflight` | `feab40fccd4b573570083202fcb73fdf08f4c2a4` | #148 closed | `EVIDENCE_NOT_DURABLE_HOLD` | Closed-unmerged PR evidence exists; per-branch durable receipt not yet confirmed |
 | `lab/chatterbox-multilingual-v3-claire-panic-one-cell` | `76e0dbc0750f274950345ceda151c0cd88983912` | #151 closed, #152 closed | `EVIDENCE_NOT_DURABLE_HOLD` | Closed-unmerged PR evidence exists; per-branch durable receipt not yet confirmed |
@@ -143,7 +145,7 @@ A branch marked `EVIDENCE_NOT_DURABLE_HOLD` is not scientifically reopened. It i
 | `lab/marco-voice-cpu-fearful-resource-preflight` | `dc4ec08f05e89f08ad1b85c3d4c78fb0ae33a177` | #171 closed | `EVIDENCE_NOT_DURABLE_HOLD` | Closed-unmerged PR evidence exists; per-branch durable receipt not yet confirmed |
 | `lab/meanvc2-cpu-one-cell` | `32eb0acd33cc4ea412a01fd5de23d86a6cdbf60e` | #133 closed | `EVIDENCE_NOT_DURABLE_HOLD` | Closed-unmerged PR evidence exists; per-branch durable receipt not yet confirmed |
 | `lab/meanvc2-cpu-one-cell-science` | `e1eb04a7f0f59c3a4e29dc341b002d8b504fd75c` | #134 closed | `EVIDENCE_NOT_DURABLE_HOLD` | Closed-unmerged PR evidence exists; per-branch durable receipt not yet confirmed |
-| `lab/nuc-capability-closeout` | `d2cb1419b3c22ebfb38c1d1221f64419ce69c9ba` | #175 closed | `EVIDENCE_NOT_DURABLE_HOLD` | Closed-unmerged PR evidence exists; per-branch durable receipt not yet confirmed |
+| `lab/nuc-capability-closeout` | `d2cb1419b3c22ebfb38c1d1221f64419ce69c9ba` | #175 open | `KEEP_TEMP_ACTIVE` | Associated PR is currently open |
 | `lab/openvoice-v2-cpu-feasibility` | `8298fff4463b0a6b8f01233e6ba386cfb4bd20d4` | #132 closed | `EVIDENCE_NOT_DURABLE_HOLD` | Closed-unmerged PR evidence exists; per-branch durable receipt not yet confirmed |
 | `lab/qwen-base-icl-cpu-resource-preflight` | `f039f497d5a7f4ff64c9f159c613c32db40d8a6a` | — | `UNKNOWN_REVIEW_REQUIRED` | No associated PR found in repository PR history |
 | `lab/qwen-c-emotion-stack-claire-panic-one-cell` | `1b9d57eb327e8279fdb7cffcb25e45160062923e` | #159 closed | `EVIDENCE_NOT_DURABLE_HOLD` | Closed-unmerged PR evidence exists; per-branch durable receipt not yet confirmed |
@@ -173,7 +175,8 @@ A branch marked `EVIDENCE_NOT_DURABLE_HOLD` is not scientifically reopened. It i
 
 The next safe pass should:
 
-1. delete the merged-PR branches and archive-workflow branch only after a final spot check;
-2. audit closed-unmerged branches in scientific families, grouping related recovery/preflight branches under one durable evidence receipt;
-3. inspect the no-PR refs individually;
-4. never treat additional compute or the NUC as a reason to reopen a `SCIENTIFIC REJECT`.
+1. let the active NUC closeout PR finish independently;
+2. delete merged-PR branches and the archive-workflow branch only after a final spot check;
+3. audit closed-unmerged branches in scientific families, grouping related recovery/preflight branches under durable evidence receipts;
+4. inspect the no-PR refs individually;
+5. never treat additional compute or the NUC as a reason to reopen a `SCIENTIFIC REJECT`.
