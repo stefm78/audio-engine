@@ -1,4 +1,5 @@
 name: Voice Casting Marco Voice CPU Fearful Resource Preflight
+# Infrastructure rerun marker only: prior runner stalled before Python/model execution.
 
 on:
   push:
