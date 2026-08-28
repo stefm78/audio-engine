@@ -1,0 +1,517 @@
+name: Voice Casting WORLD Prosody Claire Panic One Cell
+
+on:
+  push:
+    branches:
+      - lab/world-prosody-claire-panic-one-cell
+    paths:
+      - .github/workflows/voice-casting-world-prosody-claire-panic-one-cell.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CARRIER_RUN_ID: "33051484957"
+  CARRIER_ARTIFACT: chatterbox-multilingual-claire-panic-render
+  CARRIER_SHA256: 3843f79c5f66a68427dc6246f72eed810e048a84f9b304e151d82641f2bb5d38
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  CLAIRE_REF_SHA256: 3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe
+  LUCIE_REF_SHA256: 9e5ff59c1b2993b249851bfd3a9f8e78047fd5afd93b034392df1977ae54c822
+  PANIC_SHA256: ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f
+  SADNESS_SHA256: d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84
+  WESPEAKER_REV: dfa741957e5c11f477623b6e583d67d0af25ee88
+  WESPEAKER_MODEL_REPO: Wespeaker/wespeaker-voxceleb-resnet34
+  WESPEAKER_MODEL_REV: ff1ac5bca8ef11e90662b879aa923979e0bd277b
+  WHISPER_REV: 5f86d1d86363843179951550570367b37c5d6f78
+  WHISPER_MODEL_SHA256: 9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794
+  SUPERB_REPO: superb/wav2vec2-base-superb-er
+  SUPERB_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  HUMAN_BLIND_SEED: "2026082801"
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      technical_pass: ${{ steps.technical.outputs.technical_pass }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Freeze scientific contract before WORLD resynthesis
+        run: |
+          mkdir -p carrier source render
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          c={
+            "schema":"world-prosody-claire-panic-one-cell-v1",
+            "status":"contract-frozen",
+            "architecture":"WORLD source-filter prosody transplant; no TTS render; no post-hoc VC",
+            "carrier":{
+              "provenance":"#149 Chatterbox Multilingual Claire-panic immutable candidate",
+              "run_id":int(os.environ["CARRIER_RUN_ID"]),
+              "sha256":os.environ["CARRIER_SHA256"],
+              "role":"Claire timbre carrier: spectral envelope + aperiodicity"
+            },
+            "donor":{
+              "provenance":"immutable Claire panic source clip from recovery artifact",
+              "sha256":os.environ["PANIC_SHA256"],
+              "role":"acting donor: F0 + duration + relative energy contour"
+            },
+            "text":"Vite ! Ils arrivent ! Fermez la porte !",
+            "world":{
+              "pyworld_version":"0.3.6",
+              "frame_period_ms":5.0,
+              "f0":"donor Harvest + StoneMask, unmodified",
+              "spectral_envelope":"carrier CheapTrick; log-domain linear interpolation to donor normalized time",
+              "aperiodicity":"carrier D4C; linear interpolation to donor normalized time",
+              "energy":"replace carrier frame spectral power with donor relative RMS contour around donor WORLD time points; global anchor = median carrier interpolated spectral power",
+              "energy_window_ms":25.0,
+              "final_normalization":False,
+              "final_pitch_shift":False,
+              "final_time_stretch":False,
+              "final_filter_or_eq":False,
+              "output_subtype":"PCM_16 only if pre-write abs peak < 1.0; otherwise technical reject"
+            },
+            "render_count_exact":1,
+            "retry_count":0,
+            "replacement_count":0,
+            "gates_in_order":[
+              "technical: exact source hashes; 24 kHz; finite; non-silent; no pre-write clipping; output duration within 50 ms of donor",
+              "identity: independent WeSpeaker Claire > Lucie; no absolute threshold",
+              "french: Whisper Small WER <= 0.5 against exact text",
+              "emotion: frozen SUPERB candidate closer to immutable panic than immutable contained sadness",
+              "human only after machine 4/4 PASS: Claire identity, panic acting yes, French good"
+            ],
+            "forbidden":[
+              "second resynthesis","retry","parameter adjustment","manual F0 scaling","manual duration scaling",
+              "energy clipping/tuning","final normalization","EQ","DSP rescue after result","VC",
+              "alternate donor","alternate carrier","threshold change","Production promotion"
+            ],
+            "production":False
+          }
+          Path("render/contract.json").write_text(json.dumps(c,indent=2,ensure_ascii=False))
+          print(json.dumps(c,indent=2,ensure_ascii=False))
+          PY
+
+      - name: Recover and verify immutable carrier and donor sources
+        run: |
+          gh run download "$CARRIER_RUN_ID" --repo "${{ github.repository }}" -n "$CARRIER_ARTIFACT" -D carrier
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          test "$(sha256sum carrier/candidate.wav | cut -d' ' -f1)" = "$CARRIER_SHA256"
+          test "$(sha256sum source/reference-claire.wav | cut -d' ' -f1)" = "$CLAIRE_REF_SHA256"
+          test "$(sha256sum source/reference-lucie.wav | cut -d' ' -f1)" = "$LUCIE_REF_SHA256"
+          test "$(sha256sum source/clips/claire--panic.wav | cut -d' ' -f1)" = "$PANIC_SHA256"
+          test "$(sha256sum source/clips/claire--sadness-contained.wav | cut -d' ' -f1)" = "$SADNESS_SHA256"
+          python - <<'PY'
+          import json,soundfile as sf
+          from pathlib import Path
+          out={}
+          for k,p in {
+            "carrier":"carrier/candidate.wav",
+            "panic":"source/clips/claire--panic.wav",
+            "sadness":"source/clips/claire--sadness-contained.wav"
+          }.items():
+              y,sr=sf.read(p,always_2d=False)
+              out[k]={"sample_rate":sr,"channels":1 if y.ndim==1 else y.shape[1],"samples":len(y),"duration_seconds":len(y)/sr}
+          Path("render/sources.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          if out["carrier"]["sample_rate"]!=24000 or out["panic"]["sample_rate"]!=24000:
+              raise SystemExit("carrier and panic donor must both be native 24 kHz")
+          PY
+
+      - name: Install frozen WORLD runtime
+        run: |
+          python -m pip install --disable-pip-version-check numpy==2.2.6 scipy==1.15.3 soundfile==0.13.1 pyworld==0.3.6
+          python - <<'PY'
+          import pyworld,sys
+          assert pyworld.__version__=="0.3.6",pyworld.__version__
+          print("PYWORLD_PASS",pyworld.__version__,sys.version)
+          PY
+
+      - name: Resynthesize exactly one candidate
+        run: |
+          /usr/bin/time -v -o render/world-time.txt python - <<'PY'
+          import hashlib,json,math
+          from pathlib import Path
+          import numpy as np,pyworld as pw,soundfile as sf
+          from scipy.interpolate import interp1d
+
+          FS=24000
+          FP=5.0
+          EPS=1e-12
+          ENERGY_WIN_MS=25.0
+
+          def mono(path):
+              y,sr=sf.read(path,dtype="float64",always_2d=False)
+              if y.ndim==2:y=y.mean(axis=1)
+              if sr!=FS:raise SystemExit((path,sr))
+              if not np.isfinite(y).all() or y.size==0:raise SystemExit(path)
+              return np.ascontiguousarray(y,dtype=np.float64)
+
+          carrier=mono("carrier/candidate.wav")
+          donor=mono("source/clips/claire--panic.wav")
+
+          # WORLD analysis. Donor contributes F0/time; carrier contributes tract/noise.
+          f0d,td=pw.harvest(donor,FS,frame_period=FP)
+          f0d=pw.stonemask(donor,f0d,td,FS)
+          f0c,tc=pw.harvest(carrier,FS,frame_period=FP)
+          f0c=pw.stonemask(carrier,f0c,tc,FS)
+          spc=pw.cheaptrick(carrier,f0c,tc,FS)
+          apc=pw.d4c(carrier,f0c,tc,FS)
+
+          # Interpolate carrier spectral envelope/aperiodicity to donor normalized time.
+          xc=np.linspace(0.0,1.0,spc.shape[0],dtype=np.float64)
+          xd=np.linspace(0.0,1.0,len(f0d),dtype=np.float64)
+          logsp=np.log(np.maximum(spc,EPS))
+          spi=np.exp(interp1d(xc,logsp,axis=0,kind="linear",assume_sorted=True)(xd))
+          api=interp1d(xc,apc,axis=0,kind="linear",assume_sorted=True)(xd)
+          api=np.minimum(1.0,np.maximum(0.0,api))
+
+          # Donor relative RMS contour at WORLD time points; no hand-tuned gain curve.
+          half=max(1,int(round(FS*(ENERGY_WIN_MS/1000.0)/2.0)))
+          win=np.hanning(2*half+1)
+          win2=win*win
+          def frame_rms(y,times):
+              z=np.pad(y,(half,half))
+              vals=[]
+              for t in times:
+                  center=int(round(float(t)*FS))+half
+                  seg=z[center-half:center+half+1]
+                  if len(seg)!=len(win): seg=np.pad(seg,(0,len(win)-len(seg)))
+                  vals.append(math.sqrt(float(np.sum((seg*win)**2)/(np.sum(win2)+EPS))))
+              return np.asarray(vals,dtype=np.float64)
+
+          dr=frame_rms(donor,td)
+          positive=dr[dr>EPS]
+          if positive.size==0:raise SystemExit("silent donor")
+          dmed=float(np.median(positive))
+          drel=dr/dmed
+
+          cp=np.maximum(np.mean(spi,axis=1),EPS)
+          cmed=float(np.median(cp))
+          target_power=cmed*(drel*drel)
+          scale=target_power/cp
+          spo=spi*scale[:,None]
+
+          out=pw.synthesize(f0d.astype(np.float64),spo.astype(np.float64),api.astype(np.float64),FS,FP)
+          out=np.asarray(out,dtype=np.float64)
+          peak=float(np.max(np.abs(out))) if out.size else 0.0
+          rms=float(np.sqrt(np.mean(out*out))) if out.size else 0.0
+          finite=bool(np.isfinite(out).all()) if out.size else False
+          donor_duration=len(donor)/FS
+          duration=len(out)/FS
+
+          pre={
+            "status":"resynthesized",
+            "sample_rate":FS,
+            "samples":int(out.size),
+            "duration_seconds":duration,
+            "donor_duration_seconds":donor_duration,
+            "duration_delta_seconds":duration-donor_duration,
+            "rms":rms,
+            "abs_peak_pre_write":peak,
+            "finite":finite,
+            "world_frames":int(len(f0d)),
+            "voiced_fraction":float(np.mean(f0d>0)),
+            "carrier_frames":int(spc.shape[0]),
+            "render_count":1,
+            "retry_count":0,
+            "replacement_count":0,
+            "final_normalization":False
+          }
+          Path("render/prewrite.json").write_text(json.dumps(pre,indent=2)); print(json.dumps(pre,indent=2))
+          if not finite or out.size==0 or peak>=1.0:
+              raise SystemExit("technical pre-write reject: nonfinite/empty/clipping")
+          sf.write("render/candidate.wav",out,FS,subtype="PCM_16")
+          p=Path("render/candidate.wav")
+          pre["output_sha256"]=hashlib.sha256(p.read_bytes()).hexdigest()
+          Path("render/render.json").write_text(json.dumps(pre,indent=2)); print("OUTPUT_SHA256",pre["output_sha256"])
+          PY
+
+      - name: Frozen technical gate
+        id: technical
+        if: always()
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf
+          p=Path("render/candidate.wav")
+          ok=p.exists()
+          r=json.loads(Path("render/prewrite.json").read_text()) if Path("render/prewrite.json").exists() else {}
+          if ok:
+              y,sr=sf.read(p,dtype="float64",always_2d=False)
+              if y.ndim==2:y=y.mean(axis=1)
+              ok=(sr==24000 and y.size>0 and np.isfinite(y).all() and
+                  float(np.sqrt(np.mean(y*y)))>1e-5 and
+                  r.get("abs_peak_pre_write",2)>=0 and r.get("abs_peak_pre_write",2)<1.0 and
+                  abs(r.get("duration_delta_seconds",999))<=0.0500001 and
+                  r.get("render_count")==1 and r.get("retry_count")==0 and r.get("replacement_count")==0)
+          out={"status":"pass" if ok else "reject","rule":"24k finite non-silent; pre-write peak <1; duration within 50ms donor; exactly one resynthesis","render":r}
+          Path("render/technical.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:f.write(f"technical_pass={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Upload immutable scientific resynthesis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: world-prosody-claire-panic-render
+          path: render/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface technical verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("render/technical.json").read_text())["status"]
+          if s!="pass":raise SystemExit(f"verdict: technical-{s}")
+          print("WORLD_TECHNICAL_PASS")
+          PY
+
+  validate:
+    needs: render
+    if: needs.render.outputs.technical_pass == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - uses: actions/download-artifact@v4
+        with:
+          name: world-prosody-claire-panic-render
+          path: render
+
+      - name: Recover immutable validation references
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          mkdir -p source evidence human weights
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          test "$(sha256sum source/reference-claire.wav | cut -d' ' -f1)" = "$CLAIRE_REF_SHA256"
+          test "$(sha256sum source/reference-lucie.wav | cut -d' ' -f1)" = "$LUCIE_REF_SHA256"
+          test "$(sha256sum source/clips/claire--panic.wav | cut -d' ' -f1)" = "$PANIC_SHA256"
+          test "$(sha256sum source/clips/claire--sadness-contained.wav | cut -d' ' -f1)" = "$SADNESS_SHA256"
+          cp render/contract.json render/render.json render/technical.json evidence/
+
+      - name: Install CPU validation runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1 curl
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchaudio==2.7.1
+          python -m pip install --disable-pip-version-check numpy scipy soundfile onnxruntime==1.20.1 transformers==4.40.1
+          git init WeSpeaker
+          git -C WeSpeaker remote add origin https://github.com/wenet-e2e/wespeaker.git
+          git -C WeSpeaker fetch --depth=1 origin "$WESPEAKER_REV"
+          git -C WeSpeaker checkout --detach FETCH_HEAD
+          test "$(git -C WeSpeaker rev-parse HEAD)" = "$WESPEAKER_REV"
+
+      - name: Download and verify WeSpeaker
+        run: |
+          mkdir -p weights/wespeaker
+          curl --fail --location --retry 6 --retry-all-errors             "https://huggingface.co/$WESPEAKER_MODEL_REPO/resolve/$WESPEAKER_MODEL_REV/voxceleb_resnet34.onnx?download=true"             -o weights/wespeaker/voxceleb_resnet34.onnx
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          p=Path("weights/wespeaker/voxceleb_resnet34.onnx")
+          got=(p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
+          exp=(26534127,"9fea6516d7ad6bf0a76c7689f5a49b65d330fad6dde96c91bb4435ffbfe056a1")
+          if got!=exp:raise SystemExit((got,exp))
+          PY
+
+      - name: Independent Claire identity gate
+        id: identity
+        run: |
+          python - <<'PY'
+          import importlib.util,json,os
+          from pathlib import Path
+          import numpy as np,onnxruntime as ort
+          spec=importlib.util.spec_from_file_location("ws","WeSpeaker/wespeaker/bin/infer_onnx.py")
+          m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          sess=ort.InferenceSession("weights/wespeaker/voxceleb_resnet34.onnx",providers=["CPUExecutionProvider"])
+          def emb(path):
+              feat=m.compute_fbank(path).unsqueeze(0).numpy()
+              e=np.asarray(sess.run(["embs"],{"feats":feat})[0]).reshape(-1).astype(np.float64)
+              n=np.linalg.norm(e)
+              if not np.isfinite(e).all() or n<=0:raise SystemExit(path)
+              return e/n
+          o=emb("render/candidate.wav"); c=emb("source/reference-claire.wav"); l=emb("source/reference-lucie.wav")
+          sc=float(o@c); sl=float(o@l); margin=sc-sl; ok=margin>0
+          out={"status":"pass" if ok else "reject","sim_claire":sc,"sim_lucie":sl,"target_margin":margin}
+          Path("evidence/identity.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Install pinned Whisper after identity PASS
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check "git+https://github.com/openai/whisper.git@$WHISPER_REV" imageio-ffmpeg==0.6.0
+          F="$(python - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"
+          mkdir -p "$HOME/.local/bin"; ln -sf "$F" "$HOME/.local/bin/ffmpeg"; echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Frozen French gate
+        id: french
+        if: steps.identity.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,re,unicodedata
+          from pathlib import Path
+          import whisper
+          expected="Vite ! Ils arrivent ! Fermez la porte !"
+          def norm(t):return " ".join(re.sub(r"[^a-zàâäæçéèêëîïôöœùûüÿ0-9']+"," ",unicodedata.normalize("NFKC",t).lower().replace("’","'")).split())
+          def dist(a,b):
+              p=list(range(len(b)+1))
+              for i,x in enumerate(a,1):
+                  q=[i]
+                  for j,y in enumerate(b,1):q.append(min(q[-1]+1,p[j]+1,p[j-1]+(x!=y)))
+                  p=q
+              return p[-1]
+          model=whisper.load_model("small",device="cpu")
+          ckpt=Path.home()/".cache/whisper/small.pt"
+          if hashlib.sha256(ckpt.read_bytes()).hexdigest()!=os.environ["WHISPER_MODEL_SHA256"]:raise SystemExit("whisper hash")
+          text=str(model.transcribe("render/candidate.wav",language="fr",task="transcribe",fp16=False,temperature=0,condition_on_previous_text=False).get("text","")).strip()
+          a,b=norm(expected).split(),norm(text).split(); d=dist(a,b); w=d/max(1,len(a)); ok=w<=0.5+1e-12
+          out={"status":"pass" if ok else "reject","expected":expected,"transcript":text,"edit_distance":d,"wer":w,"threshold":0.5}
+          Path("evidence/french.json").write_text(json.dumps(out,ensure_ascii=False,indent=2)); print(json.dumps(out,ensure_ascii=False,indent=2))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Download frozen SUPERB after French PASS
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          mkdir -p weights/superb
+          BASE="https://huggingface.co/$SUPERB_REPO/resolve/$SUPERB_REV"
+          for F in config.json preprocessor_config.json pytorch_model.bin; do
+            curl --fail --location --retry 6 --retry-all-errors "$BASE/$F?download=true" -o "weights/superb/$F"
+          done
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          p=Path("weights/superb/pytorch_model.bin"); h=hashlib.sha256()
+          with p.open("rb") as f:
+              for c in iter(lambda:f.read(8*1024*1024),b""):h.update(c)
+          if (p.stat().st_size,h.hexdigest())!=(378361105,"dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b"):raise SystemExit("superb hash")
+          PY
+
+      - name: Frozen source-relative emotion gate
+        id: emotion
+        if: steps.french.outputs.eligible == 'true'
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from scipy.signal import resample_poly
+          from transformers import AutoFeatureExtractor,AutoModelForAudioClassification
+          torch.set_num_threads(2)
+          ex=AutoFeatureExtractor.from_pretrained("weights/superb",local_files_only=True)
+          model=AutoModelForAudioClassification.from_pretrained("weights/superb",local_files_only=True).eval()
+          def prof(path):
+              y,sr=sf.read(path,dtype="float32",always_2d=False)
+              y=np.asarray(y,dtype=np.float32); y=y.mean(1) if y.ndim==2 else y
+              if sr!=16000:
+                  g=int(np.gcd(sr,16000)); y=resample_poly(y,16000//g,sr//g).astype(np.float32)
+              x=ex(y,sampling_rate=16000,return_tensors="pt",padding=False)
+              with torch.inference_mode():return torch.softmax(model(**x).logits[0],dim=-1).cpu().numpy().astype(np.float64)
+          def unit(v):
+              n=np.linalg.norm(v)
+              if not np.isfinite(v).all() or n<=0:raise SystemExit("bad profile")
+              return v/n
+          c=prof("render/candidate.wav"); p=prof("source/clips/claire--panic.wav"); s=prof("source/clips/claire--sadness-contained.wav")
+          cu,pu,su=unit(c),unit(p),unit(s)
+          sp=float(cu@pu); ss=float(cu@su); margin=sp-ss; ok=margin>0
+          out={"status":"pass" if ok else "reject","candidate_profile":[float(x) for x in c],"similarity_panic":sp,"similarity_sadness":ss,"target_margin":margin,"semantic_label_claim":False}
+          Path("evidence/emotion.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as f:f.write(f"eligible={'true' if ok else 'false'}\n")
+          PY
+
+      - name: Build machine verdict and blind human package
+        if: always()
+        run: |
+          python - <<'PY'
+          import json,os,random,shutil
+          from pathlib import Path
+          def st(name):
+              p=Path("evidence")/f"{name}.json"
+              return json.loads(p.read_text())["status"] if p.exists() else "skipped"
+          gates={"technical":json.loads(Path("evidence/technical.json").read_text())["status"],"identity":st("identity"),"french":st("french"),"emotion":st("emotion")}
+          order=["technical","identity","french","emotion"]; first=next((g for g in order if gates[g]!="pass"),None)
+          final="machine-pass" if first is None else (f"{first}-reject" if gates[first]=="reject" else f"{first}-not-run")
+          out={"schema":"world-prosody-claire-panic-machine-v1","status":final,"gates":gates,"human_gate_authorized":first is None,"render_count":1,"retry_count":0,"replacement_count":0,"production":False}
+          Path("evidence/final.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          if first is None:
+              rng=random.Random(int(os.environ["HUMAN_BLIND_SEED"]))
+              refs=["claire","lucie"]; rng.shuffle(refs)
+              shutil.copy2(f"source/reference-{refs[0]}.wav","human/reference-1.wav")
+              shutil.copy2(f"source/reference-{refs[1]}.wav","human/reference-2.wav")
+              shutil.copy2("render/candidate.wav","human/candidate-A.wav")
+              Path("evidence/human-mapping.json").write_text(json.dumps({"reference-1":refs[0],"reference-2":refs[1],"blind_seed":int(os.environ["HUMAN_BLIND_SEED"])},indent=2))
+              Path("human/manifest.json").write_text(json.dumps({"schema":"world-prosody-claire-panic-human-v1","candidate":"candidate-A.wav","references":["reference-1.wav","reference-2.wav"]},indent=2))
+          PY
+
+      - name: Create blind human page
+        if: steps.emotion.outputs.eligible == 'true'
+        run: |
+          cat > human/index.html <<'HTML'
+          <!doctype html><html lang="fr"><meta charset="utf-8"><title>WORLD — gate humain</title>
+          <body style="font-family:system-ui;max-width:800px;margin:30px auto;padding:16px">
+          <h1>Gate humain aveugle — Claire panique</h1>
+          <h2>Référence 1</h2><audio controls src="reference-1.wav"></audio>
+          <h2>Référence 2</h2><audio controls src="reference-2.wav"></audio>
+          <h2>Candidat A</h2><audio controls src="candidate-A.wav"></audio>
+          <p>Même personnage : <select id="identity"><option></option><option>Référence 1</option><option>Référence 2</option><option>Impossible</option></select></p>
+          <p>Panique crédible : <select id="acting"><option></option><option value="yes">yes</option><option value="no">no</option></select></p>
+          <p>Français : <select id="french"><option></option><option value="good">good</option><option value="no">no</option></select></p>
+          <button id="go">Exporter JSON</button><script>
+          document.getElementById('go').onclick=()=>{const identity=document.getElementById('identity').value,acting=document.getElementById('acting').value,french=document.getElementById('french').value;if(!identity||!acting||!french)return;const o={schema:'world-prosody-claire-panic-human-v1',identity,acting,french};const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(o,null,2)],{type:'application/json'}));a.download='world-prosody-claire-panic-human.json';a.click();};
+          </script></body></html>
+          HTML
+
+      - name: Upload machine evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: world-prosody-claire-panic-machine-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload human gate after machine PASS
+        if: steps.emotion.outputs.eligible == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: world-prosody-claire-panic-human-gate
+          path: human/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface machine verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/final.json").read_text())["status"]
+          if s!="machine-pass":raise SystemExit(f"verdict: {s}")
+          print("WORLD_MACHINE_PASS")
+          PY
