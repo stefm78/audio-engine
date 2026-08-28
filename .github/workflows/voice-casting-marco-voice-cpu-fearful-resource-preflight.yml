@@ -43,7 +43,7 @@ jobs:
             "scientific_audio":False,
             "production":False,
             "purpose":"prove exact Marco-Voice enhanced checkpoint can execute arbitrary reference cloning + separate native Fearful embedding + French text on standard CPU",
-            "code":{"repo":os.environ["CODE_REPO"],"revision":os.environ["CODE_REV"]},
+            "code":{"repo":os.environ["CODE_REPO"],"revision":os.environ["CODE_REV"],"source_repair_budget":1,"source_repair":"Models/marco_voice/cosyvoice_rodis/transformer/encoder.py: add from torch import nn because upstream uses nn.Linear without importing nn"},
             "model":{"repo":os.environ["MODEL_REPO"],"revision":os.environ["MODEL_REV"],"subdir":os.environ["MODEL_SUBDIR"]},
             "emotion_asset":{"repo_type":"space","repo":os.environ["EMOTION_REPO"],"revision":os.environ["EMOTION_REV"],"file":os.environ["EMOTION_FILE"],"sha256":os.environ["EMOTION_SHA256"],"key_path":["female003","Fearful"]},
             "reference":"disposable local espeak-ng French voice only; no Claire/Lucie",
@@ -58,7 +58,7 @@ jobs:
             "render_count_exact":1,
             "retry_count":0,
             "replacement_count":0,
-            "pass_rule":"exact code + exact model revision manifest + exact Fearful asset + CPU-only full load + one finite non-silent 22050-Hz clone+Fearful French smoke",
+            "pass_rule":"exact upstream code revision plus exactly one recorded correctness repair (missing nn import) + exact model revision manifest + exact Fearful asset + CPU-only full load + one finite non-silent 22050-Hz clone+Fearful French smoke",
             "science_authorized_next":"only PASS may authorize one separate Claire-panic cell using the same code/model/emotion asset/key/default sampling",
             "forbidden":["Claire","Lucie","scientific scoring","alternate emotion speaker/key","seed search","parameter search","Production promotion"]
           }
@@ -86,6 +86,36 @@ jobs:
           git -C upstream submodule update --init --recursive || true
           git -C upstream status --short
           printf '%s\n' "$CODE_REV" > evidence/code-revision.txt
+
+      - name: Apply exactly one deterministic upstream correctness repair
+        run: |
+          python - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          p=Path("upstream/Models/marco_voice/cosyvoice_rodis/transformer/encoder.py")
+          raw=p.read_text()
+          original=hashlib.sha256(raw.encode()).hexdigest()
+          assert "self.style_proj = nn.Linear" in raw, "expected upstream defect absent"
+          assert "from torch import nn" not in raw
+          assert "import torch.nn as nn" not in raw
+          needle="import torch\nimport torch.utils.checkpoint as ckpt"
+          assert needle in raw
+          patched=raw.replace(needle,"import torch\nfrom torch import nn\nimport torch.utils.checkpoint as ckpt",1)
+          assert patched.count("from torch import nn")==1
+          p.write_text(patched)
+          out={
+            "repair_budget":1,
+            "repair_index":1,
+            "path":str(p),
+            "reason":"upstream encoder.py uses nn.Linear but omits nn import; sibling encoder_layer.py imports from torch import nn",
+            "original_sha256":original,
+            "patched_sha256":hashlib.sha256(patched.encode()).hexdigest(),
+            "diff_semantics":"add exactly one line: from torch import nn",
+            "scientific_parameter_change":False
+          }
+          Path("evidence/upstream-source-repair.json").write_text(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
 
       - name: Install inference-only CPU runtime
         run: |
