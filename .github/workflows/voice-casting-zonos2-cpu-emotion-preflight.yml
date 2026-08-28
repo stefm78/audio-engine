@@ -78,7 +78,6 @@ jobs:
           cmake -S zonos2.cpp -B zonos2.cpp/build -DCMAKE_BUILD_TYPE=Release
           cmake --build zonos2.cpp/build -j2 --target zonos2-cli
           test -x zonos2.cpp/build/zonos2-cli
-          cp zonos2.cpp/LICENSE evidence/engine-LICENSE
           git -C zonos2.cpp submodule status | tee evidence/submodules.txt
           sha256sum zonos2.cpp/emotion_directions/* | tee evidence/emotion-direction-sha256.txt
 
