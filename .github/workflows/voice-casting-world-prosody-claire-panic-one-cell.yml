@@ -114,7 +114,7 @@ jobs:
           test "$(sha256sum source/clips/claire--panic.wav | cut -d' ' -f1)" = "$PANIC_SHA256"
           test "$(sha256sum source/clips/claire--sadness-contained.wav | cut -d' ' -f1)" = "$SADNESS_SHA256"
           python - <<'PY'
-          import json,soundfile as sf
+          import json,wave
           from pathlib import Path
           out={}
           for k,p in {
@@ -122,8 +122,9 @@ jobs:
             "panic":"source/clips/claire--panic.wav",
             "sadness":"source/clips/claire--sadness-contained.wav"
           }.items():
-              y,sr=sf.read(p,always_2d=False)
-              out[k]={"sample_rate":sr,"channels":1 if y.ndim==1 else y.shape[1],"samples":len(y),"duration_seconds":len(y)/sr}
+              with wave.open(p,"rb") as w:
+                  sr=w.getframerate(); ch=w.getnchannels(); n=w.getnframes()
+              out[k]={"sample_rate":sr,"channels":ch,"samples":n,"duration_seconds":n/sr}
           Path("render/sources.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
           if out["carrier"]["sample_rate"]!=24000 or out["panic"]["sample_rate"]!=24000:
               raise SystemExit("carrier and panic donor must both be native 24 kHz")
