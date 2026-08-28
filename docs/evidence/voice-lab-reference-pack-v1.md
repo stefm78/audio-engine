@@ -44,6 +44,18 @@ The archive workflow downloaded the exact source artifact, required the four exp
 
 GitHub currently reports the release as `immutable: false`. Governance therefore treats the tag, release and assets as read-mostly durable evidence: do not overwrite or delete them without an explicit evidence migration.
 
+## Independent post-publication verification
+
+A separate verification branch downloaded the already-published release assets rather than reading the source Actions artifact.
+
+- verification branch HEAD: `9e54ab2dc09b34da07752b42e4ce617d52617bdd`
+- verification workflow: `.github/workflows/verify-voice-lab-reference-pack.yml`
+- successful verification run: `33173561027`
+- verified archive digest: `sha256:688eaa76d700f6ce5b5410e5fe37fa17877c7673737c31d7a50442304d6a4759`
+- post-extraction verdict: `PASS_DURABLE_RELEASE_EXACT_BYTES`
+
+The verification run extracted the durable release archive and independently re-ran SHA-256 checks against all four WAV files. This closes the distinction between "the source bytes were correct before packaging" and "the durable published asset still contains those exact bytes".
+
 ## Immutable WAV hashes
 
 ```text
@@ -79,6 +91,7 @@ Frozen panic source duration: `2.56 s`.
 REFERENCE_HASHES_VERIFIED: PASS
 NUC_REFERENCE_COPY: PASS
 DURABLE_RELEASE_ARCHIVE: PASS
+POST_PUBLICATION_EXACT_BYTES: PASS
 SOURCE_ARTIFACT_EXPIRY_RISK: CLOSED
 PRODUCTION_PROMOTION: NO
 PRODUCTION_DEPENDENCY: NONE
