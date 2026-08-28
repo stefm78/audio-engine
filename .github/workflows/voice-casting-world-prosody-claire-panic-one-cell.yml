@@ -70,7 +70,7 @@ jobs:
             },
             "text":"Vite ! Ils arrivent ! Fermez la porte !",
             "world":{
-              "pyworld_version":"0.3.6",
+              "pyworld_version":"0.3.5",
               "frame_period_ms":5.0,
               "f0":"donor Harvest + StoneMask, unmodified",
               "spectral_envelope":"carrier CheapTrick; log-domain linear interpolation to donor normalized time",
@@ -132,10 +132,10 @@ jobs:
 
       - name: Install frozen WORLD runtime
         run: |
-          python -m pip install --disable-pip-version-check numpy==2.2.6 scipy==1.15.3 soundfile==0.13.1 pyworld==0.3.6
+          python -m pip install --disable-pip-version-check numpy==2.2.6 scipy==1.15.3 soundfile==0.13.1 pyworld==0.3.5
           python - <<'PY'
           import pyworld,sys
-          assert pyworld.__version__=="0.3.6",pyworld.__version__
+          assert pyworld.__version__=="0.3.5",pyworld.__version__
           print("PYWORLD_PASS",pyworld.__version__,sys.version)
           PY
 
