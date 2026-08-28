@@ -118,7 +118,7 @@ jobs:
           REF="zonos2.cpp/default_voices/AmericanFemale.mp3"
           test -s "$REF"
           sha256sum "$REF" | tee evidence/public-reference-sha256.txt
-          /usr/bin/time -v -o evidence/smoke-time.txt             zonos2.cpp/build/zonos2-cli "models/$BACKBONE_FILE"               --tts "Bonjour." evidence/smoke.wav               --dac "models/$DAC_FILE"               --clone "$REF"               --spk-encoder "models/$SPK_FILE"               --cpu               --inaccurate               --emotion-valence -1               --emotion-arousal 1               --emotion-strength 1               --emotion-cfg-scale 1.5               --seed 1               --max 300               2>&1 | tee evidence/smoke.log
+          /usr/bin/time -v -o evidence/smoke-time.txt             zonos2.cpp/build/zonos2-cli "models/$BACKBONE_FILE"               --tts "Bonjour." evidence/smoke.wav               --dac "models/$DAC_FILE"               --clone "$REF"               --spk-encoder "models/$SPK_FILE"               --cpu               --inaccurate               --emotion-valence -1               --emotion-arousal 1               --emotion-strength 1               --emotion-cfg-scale 1.5               --emotion-dir zonos2.cpp/emotion_directions               --seed 1               --max 300               2>&1 | tee evidence/smoke.log
           test "${PIPESTATUS[0]}" = "0"
           test -s evidence/smoke.wav
           python3 - <<'PY'
