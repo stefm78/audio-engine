@@ -1,0 +1,180 @@
+name: Voice Casting ZONOS2 CPU Emotion Preflight
+
+on:
+  push:
+    branches:
+      - lab/zonos2-cpu-emotion-preflight
+    paths:
+      - .github/workflows/voice-casting-zonos2-cpu-emotion-preflight.yml
+
+permissions:
+  contents: read
+
+env:
+  ENGINE_REPO: https://github.com/Zyphra/zonos2.cpp.git
+  ENGINE_REV: 39a4d01558db86dca1219273992c77ebc8e03991
+  HF_REPO: Zyphra/ZONOS2-GGUF
+  HF_REV: 75c877ec8ac86dda42bfc0e9968c87f29e10ef57
+  BACKBONE_FILE: zonos2-q4_k.gguf
+  BACKBONE_SHA256: dd78788653e3d3f668713cca9b27db4e564bae5f099609609be0a100e06a12f5
+  DAC_FILE: dac.gguf
+  DAC_SHA256: b5330fc112cfac5e7bae511a5083915ce5028899de4d7a4193dcc5874063532c
+  SPK_FILE: spk-encoder.gguf
+  SPK_SHA256: 284849980047a811e2c2a13ce7527c8a6a286021df152e5325533d783240eb6d
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Freeze resource-only contract
+        run: |
+          mkdir -p evidence models
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          c={
+            "schema":"zonos2-cpu-emotion-resource-preflight-v1",
+            "scientific_audio":False,
+            "production":False,
+            "purpose":"prove standard GitHub CPU can execute ZONOS2 Q4_K voice clone + French bytes + valence/arousal emotion conditioning",
+            "engine_rev":os.environ["ENGINE_REV"],
+            "weights":{"repo":os.environ["HF_REPO"],"revision":os.environ["HF_REV"],"backbone":os.environ["BACKBONE_FILE"],"quant":"Q4_K"},
+            "public_reference":"zonos2.cpp/default_voices/AmericanFemale.mp3 at exact engine revision; no Claire/Lucie",
+            "text":"Bonjour.",
+            "emotion_contract":{
+              "named_emotion":None,
+              "valence":-1.0,
+              "arousal":1.0,
+              "strength":1.0,
+              "cfg_scale":1.5,
+              "accurate_mode":False,
+              "interpretation":"negative valence + positive arousal fear quadrant; shipped axes only, no custom fear direction"
+            },
+            "seed":1,
+            "pass_rule":"exact code/build + exact GGUF hashes + public clone + emotion axes loaded + one finite non-silent 44.1k WAV on CPU",
+            "science_authorized_next":"only PASS may authorize one separate Claire-panic cell with the exact same quant and emotion parameters"
+          }
+          Path("evidence/contract.json").write_text(json.dumps(c,indent=2)); print(json.dumps(c,indent=2))
+          PY
+
+      - name: Free runner disk and install build tools
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          sudo docker system prune -af || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends build-essential cmake git curl ffmpeg
+          df -h /
+
+      - name: Checkout exact zonos2.cpp and build CPU CLI
+        run: |
+          git clone --recurse-submodules "$ENGINE_REPO" zonos2.cpp
+          git -C zonos2.cpp checkout --detach "$ENGINE_REV"
+          git -C zonos2.cpp submodule update --init --recursive
+          test "$(git -C zonos2.cpp rev-parse HEAD)" = "$ENGINE_REV"
+          cmake -S zonos2.cpp -B zonos2.cpp/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build zonos2.cpp/build -j2 --target zonos2-cli
+          test -x zonos2.cpp/build/zonos2-cli
+          cp zonos2.cpp/LICENSE evidence/engine-LICENSE
+          git -C zonos2.cpp submodule status | tee evidence/submodules.txt
+          sha256sum zonos2.cpp/emotion_directions/* | tee evidence/emotion-direction-sha256.txt
+
+      - name: Download and verify frozen GGUF pipeline
+        run: |
+          BASE="https://huggingface.co/$HF_REPO/resolve/$HF_REV"
+          for F in "$BACKBONE_FILE" "$DAC_FILE" "$SPK_FILE"; do
+            curl --fail --location --retry 6 --retry-all-errors "$BASE/$F?download=true" -o "models/$F"
+          done
+          test "$(sha256sum "models/$BACKBONE_FILE" | cut -d' ' -f1)" = "$BACKBONE_SHA256"
+          test "$(sha256sum "models/$DAC_FILE" | cut -d' ' -f1)" = "$DAC_SHA256"
+          test "$(sha256sum "models/$SPK_FILE" | cut -d' ' -f1)" = "$SPK_SHA256"
+          stat -c '%n %s bytes' models/* | tee evidence/model-sizes.txt
+          sha256sum models/* | tee evidence/model-sha256.txt
+          df -h /
+
+      - name: Inspect shipped emotion capabilities
+        run: |
+          cat zonos2.cpp/emotion_directions/manifest.json | tee evidence/emotion-manifest.json
+          cat zonos2.cpp/emotion_directions/calibration.json | tee evidence/emotion-calibration.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path("zonos2.cpp/emotion_directions/manifest.json").read_text())
+          names=set()
+          axes=set()
+          for name,entry in m.get("directions",{}).items():
+              if entry.get("kind")=="axis" or name in {"valence","arousal"}: axes.add(name)
+              else:names.add(name)
+          out={"named":sorted(names),"axes":sorted(axes),"valence_present":"valence" in axes,"arousal_present":"arousal" in axes,"fear_direction_present":"fear" in names or "fearful" in names}
+          Path("evidence/emotion-capabilities.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          if not out["valence_present"] or not out["arousal_present"]: raise SystemExit(out)
+          if out["fear_direction_present"]: raise SystemExit("contract expected axes, not a newly discovered named fear direction")
+          PY
+
+      - name: One public-resource French emotion smoke on CPU
+        run: |
+          REF="zonos2.cpp/default_voices/AmericanFemale.mp3"
+          test -s "$REF"
+          sha256sum "$REF" | tee evidence/public-reference-sha256.txt
+          /usr/bin/time -v -o evidence/smoke-time.txt             zonos2.cpp/build/zonos2-cli "models/$BACKBONE_FILE"               --tts "Bonjour." evidence/smoke.wav               --dac "models/$DAC_FILE"               --clone "$REF"               --spk-encoder "models/$SPK_FILE"               --cpu               --inaccurate               --emotion-valence -1               --emotion-arousal 1               --emotion-strength 1               --emotion-cfg-scale 1.5               --seed 1               --max 300               2>&1 | tee evidence/smoke.log
+          test "${PIPESTATUS[0]}" = "0"
+          test -s evidence/smoke.wav
+          python3 - <<'PY'
+          import hashlib,json,math,struct,wave
+          from pathlib import Path
+          p=Path("evidence/smoke.wav")
+          with wave.open(str(p),"rb") as w:
+              sr=w.getframerate(); ch=w.getnchannels(); sw=w.getsampwidth(); n=w.getnframes(); raw=w.readframes(n)
+          if sw!=2: raise SystemExit(("sample-width",sw))
+          vals=struct.unpack("<"+"h"*(len(raw)//2),raw)
+          if ch>1: vals=vals[::ch]
+          rms=(sum((v/32768.0)**2 for v in vals)/max(1,len(vals)))**0.5
+          dur=len(vals)/sr
+          log=Path("evidence/smoke.log").read_text(errors="replace")
+          signals={
+            "cpu":True,
+            "clone":"clone:" in log,
+            "emotion":"emotion:" in log,
+            "axes":"axes=" in log,
+            "cfg_1_5":"cfg=1.50" in log or "cfg=1.5" in log,
+          }
+          ok=sr==44100 and ch==1 and 0.15<dur<10 and rms>1e-5 and all(signals.values())
+          out={"status":"pass" if ok else "reject","sample_rate":sr,"channels":ch,"duration_seconds":dur,"rms":rms,"finite":math.isfinite(rms),"sha256":hashlib.sha256(p.read_bytes()).hexdigest(),"signals":signals}
+          Path("evidence/smoke.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          if not ok: raise SystemExit(out)
+          PY
+
+      - name: Record authoritative resource verdict
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/smoke.json").read_text()) if Path("evidence/smoke.json").exists() else {}
+          ok=s.get("status")=="pass"
+          out={"schema":"zonos2-cpu-emotion-resource-result-v1","status":"resource-preflight-pass" if ok else "resource-preflight-fail","science_authorized_next":ok,"scientific_audio":False,"production":False}
+          Path("evidence/final.json").write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          PY
+
+      - name: Upload resource evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zonos2-cpu-emotion-resource-preflight
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface resource verdict
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("evidence/final.json").read_text())["status"]
+          if s!="resource-preflight-pass": raise SystemExit(s)
+          print("ZONOS2_RESOURCE_PREFLIGHT_PASS")
+          PY
