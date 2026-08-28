@@ -17,7 +17,8 @@ Consumers call **Audio Engine**, not separate services.
 ## Non-goals
 
 Do not add:
-- audioguide-specific or Learn-it-specific behavior;
+- audioguide-specific, audiobook-specific or Learn-it-specific behavior;
+- any Production dependency on Voice Lab runners, experimental model caches or private Lab infrastructure;
 - content authoring or permanent media storage;
 - arbitrary Web downloads during rendering;
 - web UI, backend, database, accounts, queues, or job dashboards;
@@ -32,9 +33,23 @@ Do not add:
 - Schema v2: stable stereo placement + one optional legacy ambience bed.
 - Schema v3: bounded deterministic soundscape with explicit timestamps. Old engines must reject it rather than silently lose sound design.
 - Schema v4: bounded narrative sound direction: semantic acoustic spaces, safe event fades and explicit `scene` events that reserve narration-free space after a segment. Older schemas must not accept v4-only fields.
+- Schema v5: bounded `bridge` intent with explicit foreground time and fixed carry under following speech.
+- Schema v6: measured relative bridge carry based on actual rendered spoken-segment duration; fixed v5 carry remains available.
 - Assembly remains schema v1.
 
 Core commands include `capabilities`, `voices`, `recommend`, `sounds`, `ambiences`, `ambience discover/qualify`, `render`, `batch`, `assemble`, and `validate`.
+
+## Production / Lab isolation
+
+Production and research share one repository but not one runtime dependency graph.
+
+- `main` is the Production authority for the reusable renderer.
+- Current Production TTS remains Edge unless an explicit promotion decision changes it.
+- Voice Lab experiments may use GitHub-hosted CPU or external/private execution resources, but Production must remain fully functional when those resources are unavailable.
+- Experimental ML dependencies, model weights and persistent Lab caches must not become required dependencies of `audio-engine render`.
+- Lab experiments are evidence-producing research lanes; scientific PASS is necessary but never sufficient for Production promotion.
+- Durable Lab evidence must be preserved before deleting historical branches or workflows.
+- For a public repository, do not attach a persistent self-hosted Lab machine directly as a default execution target. Any future NUC integration requires an explicitly governed secure control-plane or local/manual execution model.
 
 ## Voice governance
 
