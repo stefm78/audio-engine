@@ -253,6 +253,31 @@ A candidate still needs:
 
 Only then may the cheap resource/API gate be reopened.
 
+## Resource-reject reassessment — 2026-08-28
+
+The completed NUC characterization was applied read-only to the strongest prior resource-blocked or resource-adjacent candidates.
+
+| Candidate | Current classification | Reason |
+| --- | --- | --- |
+| Marco-Voice | **STILL_RESOURCE_BLOCKED** | Current upstream `main` still resolves to code SHA `669d5afca063875a365522e87134a8c06cdd1e8e`, the same code revision used by the failed #171 preflight. The explicit upstream-fix reopening trigger has therefore not occurred. |
+| Orpheus TTS multilingual French | **RESOURCE_PATH_PLAUSIBLE / SCIENTIFIC_GATE_NOT_MET** | Official project documentation now includes a no-GPU llama.cpp-compatible path, and an official French 3B research-release model exists. That makes local execution materially more plausible on the characterized NUC. However, the official path does not establish the required same-path combination of arbitrary-reference cloning plus an independent fear/panic control in French. No preflight is authorized yet. |
+| Dia / Dia2 | **FRENCH_REJECT** | Current official releases remain English-only. Improved local resources do not change the language gate. |
+| EmoCtrl-TTS | **NO_PUBLIC_EXECUTABLE_MODEL** | The architecture remains scientifically aligned, including emotion-controllable zero-shot TTS, but Microsoft Research states that it is a pure research project with no plan to expand public access. No executable public checkpoint is available for this Lab gate. |
+| Qwen3-TTS | **SCIENTIFIC_REJECT — CLOSED** | Previous frozen Voice Lab cells already established strong identity/French with emotion failure. Better local compute is not a reopening trigger. |
+| MOSS-TTS-Nano | **RESOURCE_PASS / NO_INDEPENDENT_EMOTION** | Real French cloning on the NUC is proven by the integration smoke above, but no independent fear/panic control is established. |
+
+### Reassessment decision
+
+**NO CANDIDATE IS AUTHORIZED FOR A NEW SCIENTIFIC CELL OR A NEW CHEAP RESOURCE PREFLIGHT AT THIS TIME.**
+
+Orpheus is the only candidate whose *resource* position materially improved, because a llama.cpp-compatible no-GPU path and French research release exist. It remains below the scientific admission gate until the same executable path demonstrates both arbitrary speaker reference and a genuinely independent fear/panic control.
+
+Marco-Voice remains the highest-value architecture to watch, but its explicit upstream-fix trigger has not fired.
+
+The Lab therefore remains **CAPABILITY GAP / WATCH**.
+
+No further generic NUC benchmarking is justified.
+
 ## Closeout
 
 NUC capability status:
