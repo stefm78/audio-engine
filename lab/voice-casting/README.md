@@ -35,6 +35,19 @@ The frozen one-cell protocol and the current capability-gap evidence are recorde
 The completed NUC capability characterization is recorded in
 [`docs/evidence/nuc-voice-lab-capability-2026-08-28.md`](../../docs/evidence/nuc-voice-lab-capability-2026-08-28.md).
 
+## Retained reusable Lab surface
+
+The repository keeps only the generic Voice Lab primitives needed for future admitted candidates:
+
+- `audio_engine.voice_lab`: reproducible campaign/probe/pairwise harness;
+- `audio_engine.voice_casting_distance`: cheap acoustic contrast prefilter, never a speaker-identity qualification;
+- `audio_engine.voice_lab_evaluation`: generic human-evaluation aggregation;
+- `lab/tests/`: Lab-only offline tests.
+
+Historical model-specific harnesses/providers for Azure, Chatterbox and Qwen3 x-vector are not part of the retained runtime surface. Their scientific outcomes are preserved in `docs/evidence/voice-lab-historical-family-closeout-2026-08-29.md`.
+
+The Production CLI does not import Voice Lab code eagerly. Production CI runs `tests/`; Lab tests run only in the Lab workflow.
+
 ## Execution policy
 
 A new candidate is admitted only after a cheap resource/API preflight.
