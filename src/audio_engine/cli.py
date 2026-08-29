@@ -17,15 +17,18 @@ from .sound.catalog import SOUND_TYPES, public_catalog as public_sound_catalog, 
 from .sound.library import hydrate_sound_library
 from .sound.selection import select_candidates
 from .timing import timing_report
-from .voice_lab import (
-    PAIRWISE_DIMENSIONS,
-    PROVIDER_CANDIDATE_SETS,
-    build_campaign,
-    probe_catalog,
-    render_campaign,
-    write_pairwise_bundle,
-)
 from .voices import load_voice_config, public_catalog, recommend_presets
+
+
+VOICE_LAB_PROVIDER_CANDIDATE_SETS = ("fr", "fr-plus-multilingual")
+VOICE_LAB_PAIRWISE_DIMENSIONS = (
+    "acting_fit",
+    "french_pronunciation",
+    "lineage_continuity",
+    "long_form_fatigue",
+    "narrative_fit",
+    "naturalness",
+)
 
 
 def _add_qualify_args(parser, include_type=True):
@@ -56,7 +59,7 @@ def _add_voice_lab_args(parser, include_out=False):
     )
     parser.add_argument(
         "--candidate-set",
-        choices=PROVIDER_CANDIDATE_SETS,
+        choices=VOICE_LAB_PROVIDER_CANDIDATE_SETS,
         default="fr",
         help="Provider discovery set; ignored when --scope presets",
     )
@@ -135,7 +138,7 @@ def build_parser():
     voice_lab_pairwise.add_argument("--probe", default="identity-neutral")
     voice_lab_pairwise.add_argument(
         "--dimension",
-        choices=tuple(sorted(PAIRWISE_DIMENSIONS)),
+        choices=VOICE_LAB_PAIRWISE_DIMENSIONS,
         default="french_pronunciation",
     )
     voice_lab_pairwise.add_argument("--rounds", type=int, default=4)
@@ -230,6 +233,13 @@ def main(argv=None):
             config, _ = load_voice_config(args.voices)
             result = recommend_presets(target, config, args.limit)
         elif args.command == "voice-lab":
+            from .voice_lab import (
+                build_campaign,
+                probe_catalog,
+                render_campaign,
+                write_pairwise_bundle,
+            )
+
             if args.voice_lab_command == "catalog":
                 result = probe_catalog()
             elif args.voice_lab_command == "pairwise":
