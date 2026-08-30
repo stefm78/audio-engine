@@ -12,6 +12,8 @@ audio-engine sounds
 
 If a recipe and the installed capability catalog ever disagree, the installed catalog wins.
 
+At the PROD-WP-001 baseline, the built-in reusable sound catalog contains no promoted entries (`entries: []`). Sound-directed examples below therefore use consumer-owned, workspace-bounded local files. A director must provision and lock those files before rendering, or promote validated reusable assets through the existing sound-acquisition governance.
+
 ## Recipe 1 — Clean narration
 
 **Intent:** spoken narration with no environment.
@@ -74,7 +76,7 @@ Keep a character's placement stable unless the story gives a real reason to move
   "title": "Texture under speech",
   "soundscape": {
     "bed": {
-      "sound": "cathedral-calm",
+      "file": "assets/cathedral-room-tone.wav",
       "gain_db": -23
     },
     "ducking": "speech"
@@ -108,7 +110,7 @@ Prefer `speech` when the environment competes with intelligibility.
   "soundscape": {
     "events": [
       {
-        "sound": "church-bell-distant",
+        "file": "assets/church-bell.wav",
         "at_ms": 4200,
         "gain_db": -18,
         "placement": "right"
@@ -138,7 +140,7 @@ Use explicit `at_ms`. The public placement vocabulary is only `left`, `center`, 
   "soundscape": {
     "events": [
       {
-        "sound": "historic-horse-hooves",
+        "file": "assets/horse-hooves.wav",
         "role": "scene",
         "after_segment": 1,
         "space_ms": 3200
@@ -197,7 +199,7 @@ The capability catalog recommends at most roughly 2500 ms rendered duration for 
   "soundscape": {
     "events": [
       {
-        "sound": "historic-horse-hooves",
+        "file": "assets/horse-hooves.wav",
         "role": "bridge",
         "after_segment": 1,
         "foreground_ms": 3500,
@@ -231,7 +233,7 @@ Use fixed carry only when the millisecond overlap is itself the artistic intent.
   "soundscape": {
     "events": [
       {
-        "sound": "historic-pipe-organ",
+        "file": "assets/pipe-organ.wav",
         "role": "bridge",
         "after_segment": 1,
         "foreground_ms": 5200,
@@ -282,7 +284,7 @@ Consult the installed catalog rather than copying numeric defaults into a consum
 
 ## Sound resources
 
-Recipes reference validated catalog ids for clarity. A production director should discover real ids with:
+Prefer validated catalog ids when the installed catalog contains suitable entries. Discover them with:
 
 ```bash
 audio-engine sounds
@@ -290,7 +292,7 @@ audio-engine sounds --type ambience
 audio-engine sounds --type event
 ```
 
-A workspace-bounded local file may also be used where the Program contract permits it.
+At the current baseline the built-in catalog is empty, so these recipes deliberately show workspace-bounded local files. Those paths are examples only: the consumer must supply the exact locked assets and their provenance/licence evidence before production.
 
 Rendering never resolves arbitrary Web URLs.
 
