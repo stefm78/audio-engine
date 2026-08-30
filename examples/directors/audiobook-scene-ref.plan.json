@@ -1,0 +1,69 @@
+{
+  "production_plan_version": 1,
+  "product": "audiobook",
+  "id": "audiobook-scene-door",
+  "title": "Scène exemple — derrière la porte",
+  "language": "fr-FR",
+  "objective": "Préserver la scène canonique tout en attachant des décisions de continuité, de priorité et de risque sans recopier les trois répliques.",
+  "content_binding": {
+    "mode": "program-ref",
+    "program": "examples/directors/audiobook-scene.program.json",
+    "git_blob_sha1": "43bd264bbc71be1964d913d8d6e8c29226888900",
+    "content_authority": "program"
+  },
+  "casting": {
+    "narrator": {
+      "continuity_key": "book-main-narrator",
+      "program_selector": {
+        "preset": "conteuse-chaleureuse"
+      }
+    },
+    "officer": {
+      "continuity_key": "character-officer",
+      "program_selector": {
+        "preset": "officier-autorite"
+      }
+    }
+  },
+  "overlays": [
+    {
+      "id": "approach-tension",
+      "segment_range": [1, 1],
+      "importance": "essential",
+      "performance_intent": "contained-tension"
+    },
+    {
+      "id": "quiet-order",
+      "segment_range": [2, 2],
+      "importance": "essential",
+      "performance_intent": "quiet-authority",
+      "execution_policy": "preserve-program"
+    },
+    {
+      "id": "release",
+      "segment_range": [3, 3],
+      "importance": "important",
+      "performance_intent": "restrained-release"
+    }
+  ],
+  "fallback_policy": {
+    "essential_speech": "fail",
+    "supportive_sound": "omit-and-warn",
+    "optional_content": "omit-and-warn"
+  },
+  "risk_hints": [
+    "character-continuity",
+    "preserve-authored-acoustic-accent"
+  ],
+  "product_context": {
+    "book_id": "demo-book",
+    "part_id": "part-1",
+    "chapter_id": "chapter-3",
+    "scene_id": "door-scene",
+    "arc_position": "tension-to-release",
+    "continuity_scope": "book",
+    "sound_density": "sparse",
+    "narrator_pace_policy": "stable-long-form",
+    "chapter_assembly_id": "demo-book-part-1-chapter-3"
+  }
+}

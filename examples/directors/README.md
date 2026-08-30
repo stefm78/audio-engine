@@ -20,3 +20,7 @@ The repository test `tests/test_production_director_profiles.py` verifies:
 - offline preflight with zero TTS/network access.
 
 These are interface fixtures, not final product content.
+
+## Binding-mode fixture
+
+`audiobook-scene-ref.plan.json` binds to the existing `audiobook-scene.program.json` by exact Git blob SHA. It intentionally contains no spoken text. This demonstrates the preferred migration/long-form `program-ref` mode without creating a second content authority.
