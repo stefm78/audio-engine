@@ -1,0 +1,51 @@
+{
+  "schema_version": 6,
+  "id": "production-reference-v1-probe",
+  "title": "Production Reference v1 — representative bridge probe",
+  "language": "fr-FR",
+  "profile": "speech",
+  "lead_in_ms": 300,
+  "actors": {
+    "sentry": {"placement": "left"},
+    "narrator": {"placement": "center"},
+    "merchant": {"placement": "right"}
+  },
+  "soundscape": {
+    "bed": {
+      "sound": "reference-square-ambience",
+      "gain_db": -29
+    },
+    "events": [
+      {
+        "sound": "reference-horse-hooves",
+        "role": "bridge",
+        "after_segment": 1,
+        "foreground_ms": 3000,
+        "carry_through_segments": 2,
+        "tail_ms": 900,
+        "gain_db": -23,
+        "placement": "left"
+      }
+    ],
+    "ducking": "speech"
+  },
+  "segments": [
+    {
+      "character_id": "sentry",
+      "preset": "sentinelle-nerveuse",
+      "text": "Écartez-vous ! Laissez passer le cavalier !",
+      "pause_after_ms": 200
+    },
+    {
+      "character_id": "narrator",
+      "preset": "narrateur-vif",
+      "text": "Les sabots passent au premier plan, puis restent sous cette phrase.",
+      "pause_after_ms": 200
+    },
+    {
+      "character_id": "merchant",
+      "preset": "marchande-truculente",
+      "text": "Pas si vite ! Vous allez renverser tout mon étal !"
+    }
+  ]
+}
