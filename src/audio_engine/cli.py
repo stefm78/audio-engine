@@ -10,6 +10,7 @@ from .assemble import assemble_plan
 from .batch import render_batch
 from .contract import ContractError, load_json, validate_assembly, validate_program
 from .effects import load_capabilities, public_capabilities
+from .preflight import preflight_program
 from .preview import preview_program
 from .render import render_program
 from .sound.acquisition import DEFAULT_PROVIDERS, ensure_sound
@@ -103,6 +104,14 @@ def build_parser():
     assemble = sub.add_parser("assemble", help="Assemble existing audio assets")
     assemble.add_argument("plan")
     assemble.add_argument("--out", default="output")
+
+    preflight = sub.add_parser(
+        "preflight",
+        help="Resolve cheap local Production prerequisites without TTS or network access",
+    )
+    preflight.add_argument("program")
+    preflight.add_argument("--voices", default=None)
+    preflight.add_argument("--sounds", default=None)
 
     validate = sub.add_parser("validate", help="Validate a JSON contract")
     validate.add_argument("file")
@@ -214,6 +223,12 @@ def main(argv=None):
             )
         elif args.command == "timing":
             result = timing_report(args.program, args.out, voices_path=args.voices)
+        elif args.command == "preflight":
+            result = preflight_program(
+                args.program,
+                voices_path=args.voices,
+                sounds_path=args.sounds,
+            )
         elif args.command == "batch":
             result = render_batch(args.pattern, args.out, voices_path=args.voices, sounds_path=args.sounds)
         elif args.command == "assemble":
