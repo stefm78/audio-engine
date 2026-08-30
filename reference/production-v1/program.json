@@ -6,9 +6,15 @@
   "profile": "speech",
   "lead_in_ms": 700,
   "actors": {
-    "narrator": {"placement": "center"},
-    "sentry": {"placement": "left"},
-    "merchant": {"placement": "right"}
+    "narrator": {
+      "placement": "center"
+    },
+    "sentry": {
+      "placement": "left"
+    },
+    "merchant": {
+      "placement": "right"
+    }
   },
   "soundscape": {
     "bed": {
@@ -17,7 +23,7 @@
     },
     "events": [
       {
-        "sound": "reference-bell",
+        "sound": "reference-bell-punctuation",
         "role": "punctuation",
         "at_ms": 2200,
         "gain_db": -23,

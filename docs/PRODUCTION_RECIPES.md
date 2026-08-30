@@ -126,6 +126,8 @@ Prefer `speech` when the environment competes with intelligibility.
 
 Use explicit `at_ms`. The public placement vocabulary is only `left`, `center`, `right`.
 
+Choose an intrinsically short one-shot for `punctuation`. This role has no authored play-duration field: the mixer uses the source naturally within the remaining master window. A long source is therefore a poor punctuation ingredient even when it is technically valid as an event asset.
+
 ## Recipe 5 — Let the sound take the scene
 
 **Intent:** narration stops and an event briefly carries information or emotion by itself.

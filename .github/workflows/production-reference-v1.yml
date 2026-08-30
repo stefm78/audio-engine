@@ -147,18 +147,30 @@ jobs:
           audio_file = root / manifest.get('audio', {}).get('file', '')
           if not audio_file.is_file() or audio_file.stat().st_size <= 0:
               failures.append('master-audio')
-          intents = manifest.get('mix', {}).get('resolved_sound_intent', [])
-          roles = [item.get('role') for item in intents]
+          components = manifest.get('mix', {}).get('soundscape', {}).get('components', [])
+          roles = [item.get('intent_role') for item in components if item.get('role') == 'event']
           for required in ('punctuation', 'bridge', 'scene'):
               if required not in roles:
                   failures.append(f'missing-intent:{required}')
+
+          intents = manifest.get('mix', {}).get('resolved_sound_intent', [])
           bridges = [item for item in intents if item.get('role') == 'bridge']
           if len(bridges) != 1 or bridges[0].get('carry_mode') != 'through-segments':
               failures.append('measured-bridge')
-          components = manifest.get('mix', {}).get('soundscape', {}).get('components', [])
-          if any(item.get('duration_clipped') for item in components):
-              failures.append('duration-clipped')
-          spaces = {item.get('acoustic_space') for item in manifest.get('mix', {}).get('timeline', [])}
+
+          structural_clips = [
+              item for item in components
+              if item.get('intent_role') in ('scene', 'bridge') and item.get('duration_clipped')
+          ]
+          if structural_clips:
+              failures.append('structural-duration-clipped')
+
+          punctuation = [item for item in components if item.get('intent_role') == 'punctuation']
+          if any(float(item.get('play_duration_ms') or 0) > 8000 for item in punctuation):
+              failures.append('punctuation-too-long')
+
+          timeline = manifest.get('mix', {}).get('timeline', {}) or {}
+          spaces = {item.get('acoustic_space') for item in timeline.values() if isinstance(item, dict)}
           if 'large-stone-interior' not in spaces or 'small-stone-room' not in spaces:
               failures.append('acoustic-space-resolution')
 
