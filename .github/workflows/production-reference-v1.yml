@@ -1,0 +1,189 @@
+name: Production reference v1
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'reference/production-v1/**'
+      - '.github/workflows/production-reference-v1.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Audio Engine
+        run: python -m pip install --disable-pip-version-check .
+
+      - name: Restore durable reference sound seed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: production-reference-sounds-v1
+        run: |
+          mkdir -p .reference-sound-seed
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir .reference-sound-seed --clobber || true
+          fi
+
+      - name: Hydrate exact reference sounds
+        run: |
+          audio-engine sound hydrate reference/production-v1/sound-requirements.json \
+            --seed-dir .reference-sound-seed \
+            --out sound-library | tee reference-hydration-command.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('sound-library/hydration.json').read_text(encoding='utf-8'))
+          if data.get('unresolved_count') != 0:
+              raise SystemExit(f"Unresolved reference sounds: {data.get('unresolved')}")
+          if data.get('resolved_count') != data.get('requirements_count'):
+              raise SystemExit(f"Reference hydration incomplete: {data}")
+          print(json.dumps(data, indent=2))
+          PY
+
+      - name: Publish durable exact sound seed
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: production-reference-sounds-v1
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Production Reference sounds v1" \
+              --notes "Machine-qualified, licence/provenance-verified, hash-locked sound seed for Production Reference v1. Attribution and exact source evidence are carried by the accompanying catalog JSON files."
+          fi
+          find sound-library/assets sound-library/catalogs sound-library/selections -maxdepth 1 -type f -print0 | \
+            while IFS= read -r -d '' file; do
+              gh release upload "$RELEASE_TAG" "$file" --repo "$GITHUB_REPOSITORY" --clobber
+            done
+          gh release upload "$RELEASE_TAG" sound-library/sounds.json sound-library/hydration.json \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Cheap preflight full reference
+        run: |
+          audio-engine preflight reference/production-v1/program.json \
+            --sounds sound-library/sounds.json | tee full-preflight.json
+
+      - name: Cheap preflight representative probe
+        run: |
+          audio-engine preflight reference/production-v1/probe.json \
+            --sounds sound-library/sounds.json | tee probe-preflight.json
+
+      - name: Timing risk report before TTS
+        run: |
+          audio-engine timing reference/production-v1/program.json \
+            --out reference-output | tee full-timing.json
+
+      - name: Render representative probe
+        run: |
+          audio-engine render reference/production-v1/probe.json \
+            --out reference-output \
+            --sounds sound-library/sounds.json | tee probe-render.json
+
+      - name: Structural probe gate
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path('reference-output/production-reference-v1-probe/manifest.json').read_text(encoding='utf-8'))
+          if manifest.get('status') != 'success':
+              raise SystemExit(f"Probe render did not succeed: {manifest.get('status')}")
+          intents = manifest.get('mix', {}).get('resolved_sound_intent', [])
+          bridges = [item for item in intents if item.get('intent_role') == 'bridge']
+          if len(bridges) != 1:
+              raise SystemExit(f"Expected exactly one bridge intent, got {len(bridges)}")
+          bridge = bridges[0]
+          if bridge.get('carry_mode') != 'through-segments':
+              raise SystemExit(f"Probe bridge did not use measured carry: {bridge}")
+          if float(bridge.get('resolved_carry_under_speech_ms') or 0) <= 0:
+              raise SystemExit(f"Probe bridge carry did not resolve to measured speech: {bridge}")
+          components = manifest.get('mix', {}).get('soundscape', {}).get('components', [])
+          clipped = [item for item in components if item.get('duration_clipped')]
+          if clipped:
+              raise SystemExit(f"Probe sound resource too short for requested intent: {clipped}")
+          print('REPRESENTATIVE_PROBE_PASS')
+          PY
+
+      - name: Commit to full reference render
+        run: |
+          echo "Probe passed. Committing to full render."
+          audio-engine render reference/production-v1/program.json \
+            --out reference-output \
+            --sounds sound-library/sounds.json | tee full-render.json
+
+      - name: Automatic structural QA
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('reference-output/production-reference-v1')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+          transcript = json.loads((root / 'transcript.json').read_text(encoding='utf-8'))
+
+          failures = []
+          if manifest.get('status') != 'success':
+              failures.append('manifest-status')
+          if manifest.get('program_schema_version') != 6:
+              failures.append('schema-version')
+          if len(transcript.get('segments', [])) != 7:
+              failures.append('segment-count')
+          audio_file = root / manifest.get('audio', {}).get('file', '')
+          if not audio_file.is_file() or audio_file.stat().st_size <= 0:
+              failures.append('master-audio')
+          intents = manifest.get('mix', {}).get('resolved_sound_intent', [])
+          roles = [item.get('intent_role') for item in intents]
+          for required in ('punctuation', 'bridge', 'scene'):
+              if required not in roles:
+                  failures.append(f'missing-intent:{required}')
+          bridges = [item for item in intents if item.get('intent_role') == 'bridge']
+          if len(bridges) != 1 or bridges[0].get('carry_mode') != 'through-segments':
+              failures.append('measured-bridge')
+          components = manifest.get('mix', {}).get('soundscape', {}).get('components', [])
+          if any(item.get('duration_clipped') for item in components):
+              failures.append('duration-clipped')
+          spaces = {item.get('acoustic_space') for item in manifest.get('mix', {}).get('timeline', [])}
+          if 'large-stone-interior' not in spaces or 'small-stone-room' not in spaces:
+              failures.append('acoustic-space-resolution')
+
+          if failures:
+              raise SystemExit('REFERENCE_STRUCTURAL_QA_FAIL: ' + ', '.join(failures))
+          print('REFERENCE_STRUCTURAL_QA_PASS')
+          PY
+
+      - name: Extract post-render listening windows
+        run: |
+          audio-engine preview reference/production-v1/program.json \
+            --out reference-output \
+            --sounds sound-library/sounds.json \
+            --before-ms 1800 --after-ms 1800 | tee listening-windows.json
+
+      - name: Upload reference evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-reference-v1-${{ github.sha }}
+          path: |
+            reference-output
+            sound-library
+            full-preflight.json
+            probe-preflight.json
+            full-timing.json
+            probe-render.json
+            full-render.json
+            listening-windows.json
+          if-no-files-found: warn
+          retention-days: 30
