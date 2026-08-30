@@ -1,5 +1,9 @@
 # Production Reference v1
 
+**Status: `PRODUCTION_REFERENCE_RENDER_PASS`**
+
+Human gate accepted on 2026-08-30: voices/French 5/5, acting/identity 4/5, sound balance 5/5, transitions/timing 5/5, overall immersion 5/5, no defect flags. Exact result: [`human-review.json`](human-review.json).
+
 This directory is the first production-director reference package for Audio Engine.
 
 It is a deliberately compact fictional scene, not product content and not a claim about a real historical location. Its purpose is to exercise the reusable Production boundary with one reproducible hard case.
@@ -9,6 +13,8 @@ It is a deliberately compact fictional scene, not product content and not a clai
 - `program.json` — full schema-v6 reference Program.
 - `probe.json` — smaller representative Program used before committing to the full render.
 - `sound-requirements.json` — semantic requirements for the exact sound assets used by both Programs.
+- `human-review.json` — exact accepted human scorecard for the V0 reference audio.
+- `review.html` — browser listening/review surface; it produces a visible copyable summary rather than requiring a downloaded result file.
 
 ## Why there are two Programs
 

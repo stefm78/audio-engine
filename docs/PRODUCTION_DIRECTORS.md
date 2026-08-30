@@ -176,6 +176,21 @@ For v6 bridges, the engine can carry an event through one to three actual render
 
 Do not use MP3 tags as timing authority.
 
+## Human review surface
+
+When a human gate is necessary, prefer a browser-based listening surface on GitHub Pages.
+
+The reviewer should not have to download or upload a result file. The page should:
+
+- expose the master and only the focused clips that materially help diagnosis;
+- collect bounded scores, defect flags, notes and one explicit decision;
+- continuously build a visible **copy/paste summary** in a text area;
+- provide a one-click **Copy summary** action with a manual-select fallback;
+- keep the summary self-contained with the reference id and exact audio authority;
+- treat the copied summary pasted into the conversation as the human gate input.
+
+A downloadable JSON may exist only as archival convenience; it must not be required for the review workflow.
+
 ## Reproducibility
 
 For durable production, record:
