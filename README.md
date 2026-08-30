@@ -52,7 +52,7 @@ audio-engine capabilities --category acoustic_spaces
 
 The sound catalog answers which validated audio assets exist; the capability catalog answers what the renderer can do with them.
 
-See [`docs/EFFECTS.md`](docs/EFFECTS.md), [`docs/CONTRACT.md`](docs/CONTRACT.md), [`docs/SOUNDS.md`](docs/SOUNDS.md), and [`docs/VOICES.md`](docs/VOICES.md).
+See [`docs/EFFECTS.md`](docs/EFFECTS.md), [`docs/CONTRACT.md`](docs/CONTRACT.md), [`docs/SOUNDS.md`](docs/SOUNDS.md), and [`docs/VOICES.md`](docs/VOICES.md). Production-director consumers should also read [`docs/PRODUCTION_DIRECTORS.md`](docs/PRODUCTION_DIRECTORS.md) and the supported [`docs/PRODUCTION_RECIPES.md`](docs/PRODUCTION_RECIPES.md).
 
 ## Program schemas
 
