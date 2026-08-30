@@ -1,4 +1,4 @@
-name: Voice Lab Pages
+name: Audio Engine Pages
 
 on:
   push:
@@ -16,7 +16,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: voice-lab-pages
+  group: audio-engine-pages
   cancel-in-progress: true
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - id: request
-        name: Validate publication request
+        name: Validate optional Voice Lab publication request
         shell: bash
         run: |
           set -euo pipefail
@@ -52,7 +52,7 @@ jobs:
           echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
 
       - id: locator
-        name: Publish Pages run locator
+        name: Publish Voice Lab Pages run locator
         if: steps.request.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -70,6 +70,7 @@ jobs:
           - artifact: $ARTIFACT
           - target: https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/lab/current/
 
+          The unified Pages deployment also publishes the Production Reference human-review surface.
           This issue is updated automatically on success or failure.
           EOF
           ISSUE_URL="$(gh issue create \
@@ -81,7 +82,6 @@ jobs:
 
   publish:
     needs: request
-    if: needs.request.outputs.enabled == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -89,7 +89,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Verify source run and download exact artifact
+      - name: Verify Voice Lab source run and download exact artifact
+        if: needs.request.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ needs.request.outputs.run_id }}
@@ -108,16 +109,64 @@ jobs:
           test -f _download/index.html
           printf '%s\n' "$RUN_JSON" > _download/source-run.json
 
-      - name: Build minimal public listening site
+      - name: Download durable Production Reference review package
         env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: production-reference-v1-v0
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _production
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'production-reference-v1-v0-review.zip' \
+            --dir _production \
+            --clobber
+          unzip -q _production/production-reference-v1-v0-review.zip -d _production/unpacked
+          test -s _production/unpacked/review-package/review.html
+          test -s _production/unpacked/review-package/production-reference-v1-v0.mp3
+          test -s _production/unpacked/review-package/previews/event-01.mp3
+          test -s _production/unpacked/review-package/previews/event-02.mp3
+          test -s _production/unpacked/review-package/previews/event-03.mp3
+
+      - name: Build unified public listening site
+        env:
+          LAB_ENABLED: ${{ needs.request.outputs.enabled }}
           RUN_ID: ${{ needs.request.outputs.run_id }}
           ARTIFACT: ${{ needs.request.outputs.artifact }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p _site/lab/current
-          cp -R _download/. _site/lab/current/
+          mkdir -p _site/production/reference-v1
+          cp -R _production/unpacked/review-package/. _site/production/reference-v1/
+          cp _site/production/reference-v1/review.html _site/production/reference-v1/index.html
+
           python - <<'PY'
+          from pathlib import Path
+
+          p = Path('_site/production/reference-v1/index.html')
+          text = p.read_text(encoding='utf-8')
+          marker = '<meta name="robots" content="noindex,nofollow">'
+          if marker not in text:
+              text = text.replace('</head>', marker + '</head>', 1)
+          p.write_text(text, encoding='utf-8')
+          PY
+
+          cat > _site/production/reference-v1/publication.json <<'EOF'
+          {
+            "schema": "production-reference-pages-publication-v1",
+            "reference": "production-reference-v1-v0",
+            "engine_main_sha": "d568551140402304ff1ddb8a4da47d89add98189",
+            "authoritative_run": 33299241399,
+            "release": "production-reference-v1-v0",
+            "status": "REFERENCE_RENDER_V0_READY_FOR_HUMAN"
+          }
+          EOF
+
+          if [ "$LAB_ENABLED" = "true" ]; then
+            mkdir -p _site/lab/current
+            cp -R _download/. _site/lab/current/
+            python - <<'PY'
           from pathlib import Path
           p = Path('_site/lab/current/index.html')
           text = p.read_text(encoding='utf-8')
@@ -126,12 +175,51 @@ jobs:
               text = text.replace('</head>', marker + '</head>', 1)
           p.write_text(text, encoding='utf-8')
           PY
-          cat > _site/index.html <<'HTML'
-          <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Voice Casting Lab</title><style>body{font-family:system-ui,sans-serif;max-width:720px;margin:12vh auto;padding:0 24px;line-height:1.5}a{display:inline-block;padding:14px 18px;border:1px solid #222;border-radius:10px;color:inherit;text-decoration:none;font-weight:650}</style></head><body><h1>Voice Casting Lab</h1><p>Le test humain courant est prêt.</p><a href="lab/current/">Ouvrir le test</a></body></html>
-          HTML
-          cat > _site/lab/current/publication.json <<EOF
+            cat > _site/lab/current/publication.json <<EOF
           {"schema":"voice-lab-pages-publication-v1","run_id":"$RUN_ID","artifact":"$ARTIFACT"}
           EOF
+          fi
+
+          cat > _site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="fr">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <meta name="robots" content="noindex,nofollow">
+            <title>Audio Engine — écoutes</title>
+            <style>
+              body{font-family:system-ui,sans-serif;max-width:760px;margin:10vh auto;padding:0 24px;line-height:1.5}
+              .card{border:1px solid #bbb;border-radius:12px;padding:18px;margin:16px 0}
+              a{display:inline-block;padding:11px 15px;border:1px solid #222;border-radius:9px;color:inherit;text-decoration:none;font-weight:650}
+            </style>
+          </head>
+          <body>
+            <h1>Audio Engine — écoutes</h1>
+            <div class="card">
+              <h2>Production Reference v1 — V0</h2>
+              <p>Master, trois extraits ciblés, scorecard humaine et export JSON.</p>
+              <a href="production/reference-v1/">Ouvrir la revue Production</a>
+            </div>
+            <div class="card" id="lab-card">
+              <h2>Voice Casting Lab</h2>
+              <p>Test humain courant du Lab.</p>
+              <a href="lab/current/">Ouvrir le test Voice Lab</a>
+            </div>
+          </body>
+          </html>
+          HTML
+
+          if [ "$LAB_ENABLED" != "true" ]; then
+            python - <<'PY'
+          from pathlib import Path
+          p = Path('_site/index.html')
+          text = p.read_text(encoding='utf-8')
+          start = text.index('<div class="card" id="lab-card">')
+          end = text.index('</div>', start) + len('</div>')
+          p.write_text(text[:start] + text[end:], encoding='utf-8')
+          PY
+          fi
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
@@ -147,8 +235,8 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
-      - name: Mark Pages published
-        if: success()
+      - name: Mark Voice Lab Pages published
+        if: success() && needs.request.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ needs.request.outputs.locator_issue }}
@@ -160,21 +248,22 @@ jobs:
           set -euo pipefail
           BODY="$RUNNER_TEMP/pages-success.md"
           cat > "$BODY" <<EOF
-          Voice Lab Pages deployment succeeded.
+          Unified Audio Engine Pages deployment succeeded.
 
           - pages_run_id: $GITHUB_RUN_ID
           - source_run_id: $SOURCE_RUN_ID
           - artifact: $ARTIFACT
           - page_url: $PAGE_URL
-          - direct_test: ${PAGE_URL}lab/current/
+          - voice_lab: ${PAGE_URL}lab/current/
+          - production_reference: ${PAGE_URL}production/reference-v1/
           EOF
           gh issue edit "$ISSUE_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Voice Lab Pages published $GITHUB_RUN_ID" \
             --body-file "$BODY"
 
-      - name: Mark Pages failed
-        if: failure()
+      - name: Mark Voice Lab Pages failed
+        if: failure() && needs.request.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ needs.request.outputs.locator_issue }}
@@ -188,7 +277,7 @@ jobs:
           fi
           BODY="$RUNNER_TEMP/pages-failure.md"
           cat > "$BODY" <<EOF
-          Voice Lab Pages deployment failed.
+          Unified Audio Engine Pages deployment failed.
 
           - pages_run_id: $GITHUB_RUN_ID
           - source_run_id: $SOURCE_RUN_ID
