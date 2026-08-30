@@ -52,7 +52,7 @@ Use:
 
 - `capabilities` for supported Program schema versions, acoustic spaces, sound roles, transition defaults, placement, ducking and hard limits;
 - `voices` for validated voice presets and stable casting metadata;
-- `sounds` for validated production-ready ambience/event resources.
+- `sounds` for validated production-ready ambience/event resources. At the PROD-WP-001 baseline the built-in catalog is empty, so a director cannot assume any reusable sound id exists.
 
 The machine-readable capability catalog remains `src/audio_engine/capabilities.json`. Do not create or hard-code a competing catalog in consumer applications.
 
@@ -101,7 +101,7 @@ audio-engine timing PROGRAM.json --out output
 
 `timing` gives measured cached durations when available and calibrated estimates otherwise. Estimates are design guidance, not final timing authority.
 
-A director should stop before full rendering when the Program itself is invalid or requests a capability outside the installed catalog.
+A director should stop before full rendering when the Program itself is invalid or requests a capability outside the installed catalog. Sound semantics can still be authored with consumer-owned local relative files, but those files must be present and governed by the consumer before render.
 
 ## Representative probe
 
