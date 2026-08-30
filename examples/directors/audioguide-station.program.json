@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "audioguide-station-portal",
+  "title": "Station exemple — le portail",
+  "language": "fr-FR",
+  "segments": [
+    {
+      "preset": "narrateur-vif",
+      "text": "Regardez juste au-dessus du portail : la pierre forme ici une pointe très nette."
+    },
+    {
+      "preset": "narrateur-vif",
+      "text": "Ce détail servait autant à guider le regard qu'à donner de l'élan à toute la façade."
+    }
+  ]
+}

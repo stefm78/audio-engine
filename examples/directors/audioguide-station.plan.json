@@ -1,0 +1,54 @@
+{
+  "production_plan_version": 1,
+  "product": "audioguide",
+  "id": "audioguide-station-portal",
+  "title": "Station exemple — le portail",
+  "language": "fr-FR",
+  "objective": "Orienter immédiatement le regard vers le portail puis donner un détail mémorable sans surcharger l'écoute.",
+  "casting": {
+    "narrator": {
+      "preset": "narrateur-vif",
+      "continuity_key": "audioguide-main-narrator"
+    }
+  },
+  "beats": [
+    {
+      "id": "look-up",
+      "speaker": "narrator",
+      "text": "Regardez juste au-dessus du portail : la pierre forme ici une pointe très nette.",
+      "importance": "essential",
+      "performance_intent": "clear-invitation",
+      "sound_recipe": "clean-narration"
+    },
+    {
+      "id": "detail",
+      "speaker": "narrator",
+      "text": "Ce détail servait autant à guider le regard qu'à donner de l'élan à toute la façade.",
+      "importance": "important",
+      "performance_intent": "warm-explanation",
+      "sound_recipe": "clean-narration"
+    }
+  ],
+  "fallback_policy": {
+    "essential_speech": "fail",
+    "supportive_sound": "omit-and-warn",
+    "optional_content": "omit-and-warn"
+  },
+  "risk_hints": [
+    "outdoor-intelligibility",
+    "visual-cue-timing"
+  ],
+  "product_context": {
+    "station_id": "portal-demo",
+    "location_label": "Portail principal",
+    "visual_cue": "Lever les yeux au-dessus du portail.",
+    "target_duration_s": 28,
+    "max_duration_s": 40,
+    "resume_after_beats": [
+      "look-up"
+    ],
+    "listening_environment": "outdoor-noisy",
+    "next_step": "station-demo-next",
+    "optional_content_policy": "skip-on-time-pressure"
+  }
+}

@@ -205,6 +205,18 @@ For durable production, record:
 
 Reusable workflow consumers should pin `render.yml` and `engine_ref` to the same tested SHA.
 
+## Production Plan profiles
+
+The proven consumer authoring profiles are:
+
+- [Production Plan v1](directors/PRODUCTION_PLAN_V1.md) — common core;
+- [Audioguide profile](directors/AUDIOGUIDE_PROFILE.md);
+- [Audiobook profile](directors/AUDIOBOOK_PROFILE.md).
+
+Worked plan -> Program fixtures live under `examples/directors/` and are tested for offline preflight and no silent field loss.
+
+The current compiler decision is deliberately `NO_COMMON_COMPILER_YET`: consumers should use small deterministic adapters until real duplicated logic justifies centralization.
+
 ## Product-specific directors
 
 Audioguide and Audiobook directors may make different high-level decisions, but both compile to the same Audio Engine Program boundary.

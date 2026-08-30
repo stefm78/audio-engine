@@ -1,0 +1,21 @@
+{
+  "schema_version": 4,
+  "id": "audiobook-scene-door",
+  "title": "Scène exemple — derrière la porte",
+  "language": "fr-FR",
+  "segments": [
+    {
+      "preset": "conteuse-chaleureuse",
+      "text": "Elle s'arrêta devant la porte et attendit, sans oser frapper une seconde fois."
+    },
+    {
+      "preset": "officier-autorite",
+      "text": "Entrez.",
+      "acoustic_space": "large-stone-interior"
+    },
+    {
+      "preset": "conteuse-chaleureuse",
+      "text": "Un seul mot, et toute l'attente venait de changer de poids."
+    }
+  ]
+}
