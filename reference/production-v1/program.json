@@ -1,0 +1,92 @@
+{
+  "schema_version": 6,
+  "id": "production-reference-v1",
+  "title": "Production Reference v1 — La place au matin",
+  "language": "fr-FR",
+  "profile": "speech",
+  "lead_in_ms": 700,
+  "actors": {
+    "narrator": {"placement": "center"},
+    "sentry": {"placement": "left"},
+    "merchant": {"placement": "right"}
+  },
+  "soundscape": {
+    "bed": {
+      "sound": "reference-square-ambience",
+      "gain_db": -29
+    },
+    "events": [
+      {
+        "sound": "reference-bell",
+        "role": "punctuation",
+        "at_ms": 2200,
+        "gain_db": -23,
+        "placement": "right"
+      },
+      {
+        "sound": "reference-horse-hooves",
+        "role": "bridge",
+        "after_segment": 2,
+        "foreground_ms": 4000,
+        "carry_through_segments": 2,
+        "tail_ms": 1200,
+        "gain_db": -23,
+        "placement": "left"
+      },
+      {
+        "sound": "reference-bell",
+        "role": "scene",
+        "after_segment": 5,
+        "space_ms": 3200,
+        "gain_db": -21,
+        "placement": "center"
+      }
+    ],
+    "ducking": "speech"
+  },
+  "segments": [
+    {
+      "character_id": "narrator",
+      "preset": "narrateur-vif",
+      "text": "La place s'éveille. Les voix sont encore rares, et la pierre renvoie les premiers bruits du matin.",
+      "pause_after_ms": 500
+    },
+    {
+      "character_id": "sentry",
+      "preset": "sentinelle-nerveuse",
+      "text": "Écartez-vous ! Laissez passer le cavalier !",
+      "pause_after_ms": 250
+    },
+    {
+      "character_id": "narrator",
+      "preset": "narrateur-vif",
+      "text": "Les sabots débouchent sur les pavés, d'abord seuls, puis ils restent derrière la voix tandis que le cheval traverse la place.",
+      "pause_after_ms": 300
+    },
+    {
+      "character_id": "merchant",
+      "preset": "marchande-truculente",
+      "text": "Pas si vite ! Vous allez renverser tout mon étal !",
+      "pause_after_ms": 500
+    },
+    {
+      "character_id": "narrator",
+      "preset": "narrateur-vif",
+      "acoustic_space": "large-stone-interior",
+      "text": "Sous le grand porche de pierre, le son change brusquement. Une cloche prend alors toute la place.",
+      "pause_after_ms": 350
+    },
+    {
+      "character_id": "narrator",
+      "preset": "narrateur-vif",
+      "acoustic_space": "small-stone-room",
+      "text": "La narration revient seulement après lui avoir laissé son propre espace.",
+      "pause_after_ms": 450
+    },
+    {
+      "character_id": "narrator",
+      "preset": "narrateur-vif",
+      "text": "Cette courte scène sert de référence : dialogue, espace, ambiance continue, ponctuation et événement qui passe du premier plan à l'arrière-plan."
+    }
+  ]
+}
