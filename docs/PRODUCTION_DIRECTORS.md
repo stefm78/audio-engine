@@ -29,7 +29,7 @@ capabilities             voices               sounds
                            |
                       validate / timing
                            |
-                    targeted preview
+                 representative probe
                            |
                          render
                            |
@@ -108,23 +108,31 @@ A director should stop before full rendering when the Program itself is invalid 
 
 ## Representative probe
 
-For sound-directed programs, audition risky transitions before a full batch:
+A representative probe is a **separate, small Program**, compiled by the Production Director from the highest-risk interaction(s) in the full Program.
+
+Do not use `audio-engine preview` as the pre-render probe. `preview` renders the supplied Program first and only then extracts listening windows, so using it on the full Program would defeat fail-cheap.
+
+Recommended sequence:
 
 ```bash
-audio-engine preview PROGRAM.json --out output --event 1
+audio-engine preflight FULL_PROGRAM.json
+audio-engine preflight PROBE_PROGRAM.json
+audio-engine render PROBE_PROGRAM.json --out probe-output
 ```
 
-The director should select the event(s) with the highest structural or artistic risk rather than mechanically previewing the first event.
+Only after the probe render passes its structural checks should production commit to the full Program render.
 
-Typical high-risk probes are:
+Typical high-risk probe content includes:
 
 - a `scene` event with a tight narration-free window;
-- a `bridge` that must hand attention back to speech;
+- a `bridge` that must hand attention back to measured speech;
 - a dense texture/event combination;
 - a short acoustic accent;
 - a transition whose source asset may be too short.
 
-Preview reuses stage caches, so unchanged speech should not be synthesized again during later mixing changes.
+Keep the probe bounded. It should preserve the risky interaction, not become a second copy of the whole episode.
+
+After a full render exists, `audio-engine preview` remains useful for extracting focused listening windows from that rendered result. It reuses the render cache when inputs are unchanged.
 
 ## Commit late, finish robustly
 
@@ -141,7 +149,11 @@ preflight ------- FAIL -> stop cheaply
         |
 timing / risk selection
         |
-representative preview -- blocker -> stop cheaply
+compile small probe Program
+        |
+probe preflight ---- FAIL -> stop cheaply
+        |
+probe render ------- blocker -> stop cheaply
         |
 ======== commit to full render ========
         |
