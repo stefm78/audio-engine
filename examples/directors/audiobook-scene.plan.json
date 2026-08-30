@@ -1,0 +1,67 @@
+{
+  "production_plan_version": 1,
+  "product": "audiobook",
+  "id": "audiobook-scene-door",
+  "title": "Scène exemple — derrière la porte",
+  "language": "fr-FR",
+  "objective": "Créer une tension brève puis laisser une seule réplique prendre un relief acoustique sans fatiguer l'écoute.",
+  "casting": {
+    "narrator": {
+      "preset": "conteuse-chaleureuse",
+      "continuity_key": "book-main-narrator"
+    },
+    "officer": {
+      "preset": "officier-autorite",
+      "continuity_key": "character-officer"
+    }
+  },
+  "beats": [
+    {
+      "id": "approach",
+      "speaker": "narrator",
+      "text": "Elle s'arrêta devant la porte et attendit, sans oser frapper une seconde fois.",
+      "importance": "essential",
+      "performance_intent": "contained-tension",
+      "sound_recipe": "clean-narration"
+    },
+    {
+      "id": "order",
+      "speaker": "officer",
+      "text": "Entrez.",
+      "importance": "essential",
+      "performance_intent": "quiet-authority",
+      "sound_recipe": "acoustic-accent",
+      "recipe_params": {
+        "acoustic_space": "large-stone-interior"
+      }
+    },
+    {
+      "id": "release",
+      "speaker": "narrator",
+      "text": "Un seul mot, et toute l'attente venait de changer de poids.",
+      "importance": "important",
+      "performance_intent": "restrained-release",
+      "sound_recipe": "clean-narration"
+    }
+  ],
+  "fallback_policy": {
+    "essential_speech": "fail",
+    "supportive_sound": "omit-and-warn",
+    "optional_content": "omit-and-warn"
+  },
+  "risk_hints": [
+    "character-continuity",
+    "acoustic-accent-restraint"
+  ],
+  "product_context": {
+    "book_id": "demo-book",
+    "part_id": "part-1",
+    "chapter_id": "chapter-3",
+    "scene_id": "door-scene",
+    "arc_position": "tension-to-release",
+    "continuity_scope": "book",
+    "sound_density": "sparse",
+    "narrator_pace_policy": "stable-long-form",
+    "chapter_assembly_id": "demo-book-part-1-chapter-3"
+  }
+}
