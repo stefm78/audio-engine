@@ -99,6 +99,7 @@ V6 bridge rules:
 - exactly one carry mode is declared: `carry_under_speech_ms` **or** `carry_through_segments`;
 - `carry_through_segments` is 1..3 and may not run past the program's final segment;
 - `tail_ms` is 0..3000 and is valid only with relative carry;
+- if the relative carry reaches the final spoken segment, the Program must reserve enough final `pause_after_ms` for the desired tail; otherwise the sound is clipped by master duration and that clipping is reported in the manifest;
 - the dry TTS clips are rendered/cached first;
 - the speech track is probed and its actual segment timeline becomes the authority;
 - the relative intent is then resolved to an exact local millisecond carry for the mixer;

@@ -246,14 +246,14 @@ Use fixed carry only when the millisecond overlap is itself the artistic intent.
   },
   "segments": [
     {"preset": "narrateur-vif", "text": "L'orgue prend toute la place."},
-    {"preset": "narrateur-vif", "text": "Puis il reste sous la narration jusqu'à la fin de cette phrase."}
+    {"preset": "narrateur-vif", "text": "Puis il reste sous la narration jusqu'à la fin de cette phrase.", "pause_after_ms": 1000}
   ]
 }
 ```
 
 This is the preferred recipe when the desired instruction is “continue under the next sentence”.
 
-The measured speech timeline is the authority. `carry_through_segments` supports one to three following segments; optional `tail_ms` is bounded by the capability catalog.
+The measured speech timeline is the authority. `carry_through_segments` supports one to three following segments; optional `tail_ms` is bounded by the capability catalog. If the measured carry reaches the final spoken segment of the Program, reserve at least the desired tail as `pause_after_ms` on that final segment; otherwise the manifest correctly reports clipping by master duration.
 
 ## Recipe 9 — Texture plus one narrative event
 

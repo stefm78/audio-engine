@@ -6,9 +6,15 @@
   "profile": "speech",
   "lead_in_ms": 300,
   "actors": {
-    "sentry": {"placement": "left"},
-    "narrator": {"placement": "center"},
-    "merchant": {"placement": "right"}
+    "sentry": {
+      "placement": "left"
+    },
+    "narrator": {
+      "placement": "center"
+    },
+    "merchant": {
+      "placement": "right"
+    }
   },
   "soundscape": {
     "bed": {
@@ -45,7 +51,8 @@
     {
       "character_id": "merchant",
       "preset": "marchande-truculente",
-      "text": "Pas si vite ! Vous allez renverser tout mon étal !"
+      "text": "Pas si vite ! Vous allez renverser tout mon étal !",
+      "pause_after_ms": 1200
     }
   ]
 }

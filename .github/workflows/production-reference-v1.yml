@@ -105,7 +105,7 @@ jobs:
           if manifest.get('status') != 'success':
               raise SystemExit(f"Probe render did not succeed: {manifest.get('status')}")
           intents = manifest.get('mix', {}).get('resolved_sound_intent', [])
-          bridges = [item for item in intents if item.get('intent_role') == 'bridge']
+          bridges = [item for item in intents if item.get('role') == 'bridge']
           if len(bridges) != 1:
               raise SystemExit(f"Expected exactly one bridge intent, got {len(bridges)}")
           bridge = bridges[0]
@@ -148,11 +148,11 @@ jobs:
           if not audio_file.is_file() or audio_file.stat().st_size <= 0:
               failures.append('master-audio')
           intents = manifest.get('mix', {}).get('resolved_sound_intent', [])
-          roles = [item.get('intent_role') for item in intents]
+          roles = [item.get('role') for item in intents]
           for required in ('punctuation', 'bridge', 'scene'):
               if required not in roles:
                   failures.append(f'missing-intent:{required}')
-          bridges = [item for item in intents if item.get('intent_role') == 'bridge']
+          bridges = [item for item in intents if item.get('role') == 'bridge']
           if len(bridges) != 1 or bridges[0].get('carry_mode') != 'through-segments':
               failures.append('measured-bridge')
           components = manifest.get('mix', {}).get('soundscape', {}).get('components', [])
