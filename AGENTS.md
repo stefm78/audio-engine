@@ -37,7 +37,7 @@ Do not add:
 - Schema v6: measured relative bridge carry based on actual rendered spoken-segment duration; fixed v5 carry remains available.
 - Assembly remains schema v1.
 
-Core commands include `capabilities`, `voices`, `recommend`, `sounds`, `ambiences`, `ambience discover/qualify`, `render`, `batch`, `assemble`, and `validate`.
+Core commands include `capabilities`, `voices`, `recommend`, `sounds`, `ambiences`, `ambience discover/qualify`, `preflight`, `render`, `batch`, `assemble`, and `validate`.
 
 ## Production / Lab isolation
 
@@ -127,6 +127,16 @@ The `sound` module should produce **one deterministic environment WAV**. The mix
 - Production assets require provenance, licence and content hash.
 - Raw redistribution depends on the exact asset licence; commercial royalty-free files must not be republished standalone when forbidden.
 - Do not create a separate asset service without evidence.
+
+## Preflight governance
+
+`audio-engine preflight` is the cheap local Production gate between authoring and synthesis.
+
+- It must remain offline: no provider discovery, TTS, Web access or rendering.
+- Reuse the same contract, voice-resolution and asset-resolution rules as Production rendering.
+- Resolve validated preset ids and static local/materialized sound inputs before expensive work.
+- Do not claim that an explicit provider voice name is live-available unless a separate network check actually occurred.
+- Do not turn subjective artistic preferences into preflight failures.
 
 ## Engineering rules
 
