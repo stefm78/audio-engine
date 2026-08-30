@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "reference": "production-reference-v1-v0",
+  "engine_main_sha": "d568551140402304ff1ddb8a4da47d89add98189",
+  "authoritative_run": 33299241399,
+  "scores": {
+    "voices_french": 5,
+    "acting_identity": 4,
+    "sound_balance": 5,
+    "transitions_timing": 5,
+    "immersion_overall": 5
+  },
+  "flags": [],
+  "notes": "1 extrait cible, pas de cloche",
+  "decision": "PASS"
+}

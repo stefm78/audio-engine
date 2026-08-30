@@ -4,7 +4,9 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'reference/production-v1/**'
+      - 'reference/production-v1/program.json'
+      - 'reference/production-v1/probe.json'
+      - 'reference/production-v1/sound-requirements.json'
       - '.github/workflows/production-reference-v1.yml'
 
 permissions:

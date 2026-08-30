@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Production Reference v1 — revue humaine</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:900px;margin:0 auto;padding:24px;line-height:1.45}
+h1{margin-bottom:.2rem}.meta{color:#555;margin-top:0}.status{padding:12px 14px;border:1px solid #aaa;border-radius:10px}
+section{border:1px solid #ccc;border-radius:10px;padding:16px;margin:16px 0}
+audio{width:100%;margin:8px 0 12px}
+.score{display:grid;grid-template-columns:minmax(210px,1fr) repeat(5,42px);gap:6px;align-items:center;margin:10px 0}
+.score label{text-align:center}.score .name{text-align:left;font-weight:600}
+textarea{width:100%;box-sizing:border-box;min-height:110px}
+#summary{min-height:280px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.9rem}
+button{padding:10px 16px;font-size:1rem;margin:6px 8px 6px 0}
+.decision label,.flags label{display:block;margin:7px 0}
+small{color:#555}
+</style>
+</head>
+<body>
+<h1>Production Reference v1 — V0</h1>
+<p class="meta">Audio authority: main@d568551140402304ff1ddb8a4da47d89add98189 · run 33299241399</p>
+<p class="status"><strong>Référence acceptée :</strong> PRODUCTION_REFERENCE_RENDER_PASS. La grille reste disponible comme modèle de revue et produit maintenant un bilan directement copiable.</p>
+
+<section>
+<h2>Master</h2>
+<audio controls preload="metadata" src="production-reference-v1-v0.mp3"></audio>
+</section>
+
+<section>
+<h2>Extraits ciblés</h2>
+<p><strong>1 — ponctuation courte</strong> : la ponctuation doit souligner sans envahir.</p>
+<audio controls preload="metadata" src="previews/event-01.mp3"></audio>
+<p><strong>2 — sabots / bridge</strong> : premier plan, reprise de la voix, maintien sous deux répliques, puis sortie naturelle.</p>
+<audio controls preload="metadata" src="previews/event-02.mp3"></audio>
+<p><strong>3 — événement / scène</strong> : le son possède son propre espace avant la reprise du récit.</p>
+<audio controls preload="metadata" src="previews/event-03.mp3"></audio>
+</section>
+
+<section>
+<h2>Score</h2>
+<p>1 = mauvais · 5 = excellent.</p>
+<div id="scores"></div>
+</section>
+
+<section class="flags">
+<h2>Défauts éventuels</h2>
+<label><input type="checkbox" value="foreign_pronunciation"> Prononciation étrangère / français anormal</label>
+<label><input type="checkbox" value="voice_confusion"> Personnages difficiles à distinguer</label>
+<label><input type="checkbox" value="sound_masks_speech"> Son masque la parole</label>
+<label><input type="checkbox" value="transition_too_short"> Son / transition trop court</label>
+<label><input type="checkbox" value="transition_too_long"> Son / transition trop long</label>
+<label><input type="checkbox" value="acoustic_effect_artificial"> Effet acoustique artificiel ou excessif</label>
+<label><input type="checkbox" value="pacing_problem"> Rythme / pauses à corriger</label>
+</section>
+
+<section>
+<h2>Notes</h2>
+<textarea id="notes" placeholder="Uniquement les corrections réellement utiles, avec le moment concerné si possible."></textarea>
+</section>
+
+<section class="decision">
+<h2>Décision</h2>
+<label><input type="radio" name="decision" value="PASS"> PASS — utilisable comme référence Production</label>
+<label><input type="radio" name="decision" value="V1_TARGETED"> V1 ciblée — quelques corrections précises</label>
+<label><input type="radio" name="decision" value="FAIL"> FAIL — problème structurel/perceptuel</label>
+</section>
+
+<section>
+<h2>Bilan à copier</h2>
+<p>Le bilan ci-dessous se met à jour automatiquement. Copie-le puis colle-le directement dans la conversation : aucun fichier n'est nécessaire.</p>
+<textarea id="summary" readonly></textarea>
+<button id="copy" type="button">Copier le bilan</button>
+<span id="copy-status" role="status" aria-live="polite"></span>
+<p><small>Si le bouton de copie est bloqué par le navigateur, sélectionne simplement le texte de cette zone et copie-le manuellement.</small></p>
+</section>
+
+<script>
+const criteria=[
+ ["voices_french","Voix et français"],
+ ["acting_identity","Jeu et différenciation des personnages"],
+ ["sound_balance","Équilibre voix / ambiance / effets"],
+ ["transitions_timing","Transitions, durées, tails et reprise de parole"],
+ ["immersion_overall","Immersion globale"]
+];
+const box=document.getElementById("scores");
+for(const [key,label] of criteria){
+ const row=document.createElement("div");row.className="score";
+ const name=document.createElement("div");name.className="name";name.textContent=label;row.appendChild(name);
+ for(let n=1;n<=5;n++){
+  const lab=document.createElement("label");
+  const input=document.createElement("input");input.type="radio";input.name=key;input.value=n;
+  lab.appendChild(input);lab.appendChild(document.createTextNode(String(n)));row.appendChild(lab);
+ }
+ box.appendChild(row);
+}
+function result(){
+ const scores={};
+ for(const [key] of criteria){
+  const el=document.querySelector('input[name="'+key+'"]:checked');
+  scores[key]=el?Number(el.value):null;
+ }
+ const flags=[...document.querySelectorAll('.flags input:checked')].map(x=>x.value);
+ const dec=document.querySelector('input[name="decision"]:checked');
+ return {
+  schema_version:1,
+  reference:"production-reference-v1-v0",
+  engine_main_sha:"d568551140402304ff1ddb8a4da47d89add98189",
+  authoritative_run:33299241399,
+  scores,
+  flags,
+  notes:document.getElementById("notes").value,
+  decision:dec?dec.value:null
+ };
+}
+function refresh(){
+ document.getElementById("summary").value=JSON.stringify(result(),null,2);
+}
+document.addEventListener("change",refresh);
+document.getElementById("notes").addEventListener("input",refresh);
+document.getElementById("copy").addEventListener("click",async()=>{
+ refresh();
+ const area=document.getElementById("summary");
+ const status=document.getElementById("copy-status");
+ try{
+  await navigator.clipboard.writeText(area.value);
+  status.textContent="Bilan copié.";
+ }catch(e){
+  area.focus();area.select();
+  let ok=false;
+  try{ok=document.execCommand("copy");}catch(_){}
+  status.textContent=ok?"Bilan copié.":"Sélectionne le bilan et copie-le manuellement.";
+ }
+});
+refresh();
+</script>
+</body>
+</html>
