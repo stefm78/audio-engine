@@ -94,10 +94,13 @@ Before expensive synthesis, use deterministic checks first:
 
 ```bash
 audio-engine validate PROGRAM.json
+audio-engine preflight PROGRAM.json
 audio-engine timing PROGRAM.json --out output
 ```
 
-`validate` rejects invalid contract combinations.
+`validate` checks only the declared JSON contract. `preflight` then resolves the selected profile, validated local voice presets, local ambience/soundscape files and materialized sound-catalog references without provider discovery, TTS, Web access or rendering.
+
+Explicit provider voice names remain legal, but preflight deliberately does not query the remote provider to prove that a live voice name still exists; its report states `provider_voice_availability: not-network-checked`.
 
 `timing` gives measured cached durations when available and calibrated estimates otherwise. Estimates are design guidance, not final timing authority.
 
@@ -132,7 +135,9 @@ capability discovery
         |
 director compile
         |
-validate -------- FAIL -> stop cheaply
+validate
+        |
+preflight ------- FAIL -> stop cheaply
         |
 timing / risk selection
         |
