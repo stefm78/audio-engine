@@ -41,18 +41,8 @@ jobs:
           audio-engine sound hydrate reference/production-v1/sound-requirements.json \
             --seed-dir .reference-sound-seed \
             --out sound-library | tee reference-hydration-command.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          data = json.loads(Path('sound-library/hydration.json').read_text(encoding='utf-8'))
-          if data.get('unresolved_count') != 0:
-              raise SystemExit(f"Unresolved reference sounds: {data.get('unresolved')}")
-          if data.get('resolved_count') != data.get('requirements_count'):
-              raise SystemExit(f"Reference hydration incomplete: {data}")
-          print(json.dumps(data, indent=2))
-          PY
 
-      - name: Publish durable exact sound seed
+      - name: Publish resolved sound seed
         if: success()
         shell: bash
         env:
@@ -71,6 +61,19 @@ jobs:
             done
           gh release upload "$RELEASE_TAG" sound-library/sounds.json sound-library/hydration.json \
             --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Enforce complete sound hydration
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('sound-library/hydration.json').read_text(encoding='utf-8'))
+          if data.get('unresolved_count') != 0:
+              raise SystemExit(f"Unresolved reference sounds: {data.get('unresolved')}")
+          if data.get('resolved_count') != data.get('requirements_count'):
+              raise SystemExit(f"Reference hydration incomplete: {data}")
+          print(json.dumps(data, indent=2))
+          PY
 
       - name: Cheap preflight full reference
         run: |

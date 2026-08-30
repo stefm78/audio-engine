@@ -5,8 +5,16 @@
       "id": "reference-square-ambience",
       "type": "ambience",
       "query": "city square crowd ambience outdoor",
-      "preferred_tags": ["city", "square", "crowd", "outdoor"],
-      "providers": ["wikimedia-commons", "openverse"],
+      "preferred_tags": [
+        "city",
+        "square",
+        "crowd",
+        "outdoor"
+      ],
+      "providers": [
+        "wikimedia-commons",
+        "openverse"
+      ],
       "limit": 8,
       "min_score": 60
     },
@@ -14,19 +22,33 @@
       "id": "reference-bell",
       "type": "event",
       "query": "200357 bigben12345 pretiosa",
-      "required_tags": ["bell"],
-      "preferred_tags": ["cathedral", "cologne"],
-      "providers": ["wikimedia-commons"],
+      "required_tags": [
+        "bell"
+      ],
+      "preferred_tags": [
+        "cathedral",
+        "cologne"
+      ],
+      "providers": [
+        "wikimedia-commons"
+      ],
       "limit": 5,
       "min_score": 60
     },
     {
       "id": "reference-horse-hooves",
       "type": "event",
-      "query": "horse hoof footsteps cobblestone",
-      "preferred_tags": ["horse", "hoof", "hooves", "cobblestone"],
-      "providers": ["wikimedia-commons", "openverse"],
-      "limit": 8,
+      "query": "WWS Clatterofhorseshoesonthepavement",
+      "preferred_tags": [
+        "horse",
+        "horseshoes",
+        "pavement",
+        "clatter"
+      ],
+      "providers": [
+        "wikimedia-commons"
+      ],
+      "limit": 5,
       "min_score": 60
     }
   ]
