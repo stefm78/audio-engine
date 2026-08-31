@@ -175,7 +175,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          /usr/bin/time -v -o evidence/render-time.txt engine/qwen-c/qwen_tts             -d models/custom             --load-voice voices/claire.qvoice             --icl-only             --int8             -l French             --emotion fear             --seed 42             --max-duration 8             --text "$TEXT"             -o evidence/r0-candidate.wav             2>&1 | tee evidence/render.log
+          pushd engine/qwen-c >/dev/null
+          /usr/bin/time -v -o ../../evidence/render-time.txt ./qwen_tts             -d ../../models/custom             --load-voice ../../voices/claire.qvoice             --icl-only             --int8             -l French             --emotion fear             --seed 42             --max-duration 8             --text "$TEXT"             -o ../../evidence/r0-candidate.wav             2>&1 | tee ../../evidence/render.log
+          popd >/dev/null
           test -s evidence/r0-candidate.wav
           sha256sum evidence/r0-candidate.wav | tee evidence/r0-candidate-sha256.txt
           ffprobe -v error -show_entries stream=sample_rate,channels,duration -of json evidence/r0-candidate.wav | tee evidence/audio-probe.json
