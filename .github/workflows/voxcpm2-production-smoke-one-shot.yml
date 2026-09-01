@@ -1,0 +1,189 @@
+name: VoxCPM2 Production smoke one-shot
+
+on:
+  push:
+    branches:
+      - prod/voxcpm2-provider-v1
+    paths:
+      - .github/workflows/voxcpm2-production-smoke-one-shot.yml
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11.16'
+          cache: pip
+          cache-dependency-path: requirements/voxcpm2-p4-runtime.txt
+
+      - name: Install exact accepted VoxCPM2 runtime
+        run: bash scripts/install_voxcpm2_p4_runtime.sh
+
+      - name: Install current Audio Engine
+        run: python -m pip install --disable-pip-version-check .
+
+      - name: Materialize immutable technical smoke contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p generated/voxcpm2-smoke
+          cat > generated/voxcpm2-smoke/voices.json <<'JSON'
+          {
+            "version": 1,
+            "presets": []
+          }
+          JSON
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+
+          root=Path("generated/voxcpm2-smoke")
+          voice_pack=root/"voices.json"
+          voice_sha=hashlib.sha256(voice_pack.read_bytes()).hexdigest()
+
+          package={
+            "schema_version":1,
+            "id":"voxcpm2-production-technical-smoke-v1",
+            "provider":{"id":"voxcpm2","implementation_version":"1.0.0"},
+            "runtime":{
+              "kind":"python",
+              "python":"3.11.16",
+              "device":"cpu",
+              "dependencies":[
+                {"name":"voxcpm","revision":"ee8161e9e1b7b082cb5721a3a9980da4204401e6"},
+                {"name":"torch","version":"2.7.1+cpu"},
+                {"name":"torchaudio","version":"2.7.1+cpu"},
+                {"name":"pydub","version":"0.25.1"},
+                {"name":"soundfile","version":"0.12.1"},
+                {"name":"huggingface-hub","version":"1.29.0"},
+                {"name":"transformers","version":"5.16.1"},
+                {"name":"funasr","version":"1.4.11"}
+              ],
+              "system_dependencies":[{
+                "name":"ffmpeg",
+                "commands":["ffmpeg","ffprobe"],
+                "reference_version":"7:6.1.1-3ubuntu5"
+              }]
+            },
+            "model":{
+              "id":"openbmb/VoxCPM2",
+              "source":"huggingface",
+              "revision":"32279effe8c19989596f05d353d1447f51d9e915",
+              "integrity":[
+                {"name":".gitattributes","sha256":"11ad7efa24975ee4b0c3c3a38ed18737f0658a5f75a0a96787b576a78a023361"},
+                {"name":"README.md","sha256":"c18d2ffbfb2f0aec770481c967842aee6c200cde65f6b033efd892a849986fda"},
+                {"name":"audiovae.pth","sha256":"94b5d51e107e0507d4acc976cfdadb64edd6fd06d1f751dadbf2fd1594274bf1"},
+                {"name":"config.json","sha256":"405f0dcd92f7feba6011ed4eac5c8d4f74cba9712f07fd5cfa3063bbdd95402c"},
+                {"name":"model.safetensors","sha256":"f7f964cfa9da23653baec6e6f7750719977ad944ed9f95fe52fe3a620506891d"},
+                {"name":"special_tokens_map.json","sha256":"068594063e37662c02b21acf42ebb334ef6a74fb810e68a2368f88f08351de76"},
+                {"name":"tokenization_voxcpm2.py","sha256":"84489ea32b6ee0cae22ed5480cacb6df85c46624c3119be9a2021c3649a12729"},
+                {"name":"tokenizer.json","sha256":"f8984687e4a92a3503d521396d454b7d68e9fdaab2a0288eb3536c7c1aa4bc20"},
+                {"name":"tokenizer_config.json","sha256":"e78a3ebb48a0b9437efd1823b6b726c823da89e49dd8bcc90c02419d9baa772b"}
+              ]
+            },
+            "voice_pack_sha256":voice_sha,
+            "synthesis":{
+              "seed":2026090100,
+              "parameters":{
+                "reference":"claire",
+                "control":"Calm, natural adult French technical reading. Clear diction, no singing, no whisper, no theatrical effect.",
+                "cfg_value":2.0,
+                "inference_timesteps":10,
+                "normalize_model_output":False,
+                "denoise":False,
+                "retry_badcase":False
+              },
+              "normalization":{"target_dbfs":-20.0}
+            },
+            "references":[{
+              "id":"claire",
+              "path":"generated/voxcpm2-smoke/reference-claire.wav",
+              "sha256":"3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe",
+              "source":{
+                "type":"github_release_archive",
+                "repository":"stefm78/audio-engine",
+                "tag":"voice-lab-reference-pack-v1",
+                "asset":"voice-lab-reference-pack-v1.tar.xz",
+                "asset_sha256":"688eaa76d700f6ce5b5410e5fe37fa17877c7673737c31d7a50442304d6a4759",
+                "member_basename":"reference-claire.wav"
+              }
+            }],
+            "fallback":"fail"
+          }
+          (root/"provider.json").write_text(
+              json.dumps(package,ensure_ascii=False,indent=2)+"\n",
+              encoding="utf-8",
+          )
+
+          program={
+            "schema_version":6,
+            "id":"voxcpm2-technical-smoke",
+            "title":"VoxCPM2 technical smoke",
+            "language":"fr-FR",
+            "profile":"speech",
+            "segments":[{
+              "character_id":"technical-reader",
+              "provider":"voxcpm2",
+              "voice":"technical-claire-reference",
+              "text":"Bonjour, ceci est un test technique de production.",
+              "provider_seed":2026090102
+            }]
+          }
+          (root/"program.json").write_text(
+              json.dumps(program,ensure_ascii=False,indent=2)+"\n",
+              encoding="utf-8",
+          )
+          print("VOICE_PACK_SHA256",voice_sha)
+          PY
+
+      - name: Hydrate and verify immutable provider assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg=generated/voxcpm2-smoke/provider.json
+          audio-engine provider-package hydrate-references "$pkg" --workspace-root .
+          audio-engine provider-package hydrate-model "$pkg" --cache-root generated/provider-models
+          audio-engine provider-package validate "$pkg"             --verify-files --workspace-root .             --voice-pack generated/voxcpm2-smoke/voices.json
+
+      - name: Render one technical phrase through Production adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          audio-engine render             generated/voxcpm2-smoke/program.json             --out generated/voxcpm2-smoke/render             --voices generated/voxcpm2-smoke/voices.json             --provider-package generated/voxcpm2-smoke/provider.json             --provider-model-cache generated/provider-models             --workspace-root .
+
+          render_dir=generated/voxcpm2-smoke/render/voxcpm2-technical-smoke
+          test -s "$render_dir/audio.mp3"
+          test -s "$render_dir/manifest.json"
+          test -s "$render_dir/transcript.json"
+
+          audio-engine qa "$render_dir" > generated/voxcpm2-smoke/qa-report.json || {
+            cat generated/voxcpm2-smoke/qa-report.json
+            exit 2
+          }
+
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root=Path("generated/voxcpm2-smoke")
+          render=root/"render"/"voxcpm2-technical-smoke"
+          manifest=json.loads((render/"manifest.json").read_text(encoding="utf-8"))
+          qa=json.loads((root/"qa-report.json").read_text(encoding="utf-8"))
+          assert manifest["status"]=="success", manifest
+          assert [p["name"] for p in manifest["providers"]]==["voxcpm2"], manifest["providers"]
+          assert qa["status"]=="PASS", qa
+          audio=render/"audio.mp3"
+          print(json.dumps({
+            "status":"VOXCPM2_PRODUCTION_SMOKE_PASS",
+            "audio_sha256":hashlib.sha256(audio.read_bytes()).hexdigest(),
+            "bytes":audio.stat().st_size,
+            "provider":manifest["providers"][0],
+            "qa":qa,
+          },ensure_ascii=False,indent=2))
+          PY
