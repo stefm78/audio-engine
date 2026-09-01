@@ -8,7 +8,7 @@ It is deliberately product-agnostic. A consumer may call its units scenes, chapt
 
 - `engine_ref` is an exact 40-character Git commit SHA.
 - Every unit declares a provider. There is no implicit provider fallback.
-- A `ready` unit pins a local Program and local voice pack by SHA-256.
+- A `ready` unit pins a workspace-relative Program and voice pack by SHA-256.
 - A `hold` unit carries an explicit reason and may remain incomplete without blocking unrelated units.
 - Every unit belongs to exactly one assembly.
 - The master includes every assembly exactly once.
@@ -50,8 +50,8 @@ Commands:
 
 ```bash
 audio-engine production validate path/to/production.json
-audio-engine production validate path/to/production.json --verify-files
-audio-engine production plan path/to/production.json
+audio-engine production validate path/to/production.json --verify-files --workspace-root .
+audio-engine production plan path/to/production.json --workspace-root .
 ```
 
 The plan output is designed to feed the same shard executor contract on GitHub-hosted runners or a future persistent worker. Executor selection is operational policy, not manifest semantics.
