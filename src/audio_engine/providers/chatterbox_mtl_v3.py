@@ -220,7 +220,12 @@ class ChatterboxMultilingualV3Provider:
             normalized_wav = temp / "normalized.wav"
             ta.save(str(raw_wav), wav, model.sr)
 
-            audio = AudioSegment.from_file(raw_wav).set_frame_rate(24000).set_channels(1)
+            # raw_wav is authored by torchaudio above; declare its format so
+            # pydub uses its native WAV path instead of requiring system ffprobe.
+            audio = AudioSegment.from_file(
+                raw_wav,
+                format="wav",
+            ).set_frame_rate(24000).set_channels(1)
             if audio.rms > 0:
                 target_dbfs = float(
                     (self.package["synthesis"].get("normalization") or {}).get(
