@@ -116,6 +116,77 @@ class MultiProviderRoutingTests(unittest.TestCase):
             self.assertEqual(alpha.calls, 2)
             self.assertNotEqual(first_fp, second["mix"]["voice_fingerprints"][0])
 
+    def test_performance_provider_can_change_without_recasting_character_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            program = self.write_program(root, {
+                "schema_version": 6,
+                "id": "performance-provider",
+                "title": "Performance provider",
+                "segments": [
+                    {
+                        "character_id": "hero",
+                        "provider": "alpha",
+                        "voice": "voice-a",
+                        "text": "Baseline.",
+                    },
+                    {
+                        "character_id": "hero",
+                        "provider": "alpha",
+                        "performance_provider": "beta",
+                        "voice": "voice-a",
+                        "text": "Expressive.",
+                        "provider_seed": 42,
+                        "provider_parameters": {"temperature": 0.7},
+                    },
+                ],
+            })
+            alpha = ToneProvider("alpha", 440)
+            beta = ToneProvider("beta", 550)
+            manifest = render_program(
+                program,
+                root / "out",
+                providers={"alpha": alpha, "beta": beta},
+            )
+            self.assertEqual(alpha.calls, 1)
+            self.assertEqual(beta.calls, 1)
+            self.assertEqual(manifest["mix"]["voice_providers"], ["alpha", "beta"])
+            transcript = json.loads(
+                (root / "out" / "performance-provider" / "transcript.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            first, second = transcript["segments"]
+            self.assertEqual(first["casting_identity"], "alpha:voice-a")
+            self.assertEqual(second["casting_identity"], "alpha:voice-a")
+            self.assertEqual(second["identity_provider"], "alpha")
+            self.assertEqual(second["provider"], "beta")
+            self.assertEqual(second["performance_provider"], "beta")
+
+    def test_performance_provider_does_not_authorize_identity_provider_change(self):
+        program = {
+            "schema_version": 6,
+            "id": "continuity-performance",
+            "title": "Continuity performance",
+            "segments": [
+                {
+                    "character_id": "hero",
+                    "provider": "alpha",
+                    "voice": "voice-a",
+                    "text": "Première ligne.",
+                },
+                {
+                    "character_id": "hero",
+                    "provider": "beta",
+                    "performance_provider": "gamma",
+                    "voice": "voice-a",
+                    "text": "Deuxième ligne.",
+                },
+            ],
+        }
+        with self.assertRaisesRegex(ValueError, "cannot silently change provider identity"):
+            resolve_segments(program, {"presets": []})
+
     def test_character_provider_identity_cannot_change_silently(self):
         program = {
             "schema_version": 1,
