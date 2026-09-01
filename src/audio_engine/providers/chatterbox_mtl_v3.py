@@ -74,6 +74,7 @@ class ChatterboxMultilingualV3Provider:
     def cache_identity(self):
         payload = {
             "provider": self.name,
+            "adapter_code_sha256": sha256_file(Path(__file__)),
             "implementation_version": self.package["provider"]["implementation_version"],
             "package_sha256": self.package_sha256,
             "model_revision": self.package["model"]["revision"],
