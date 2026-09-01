@@ -1,11 +1,17 @@
 import hashlib
 import json
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
 from audio_engine.contract import ContractError
-from audio_engine.provider_package import provider_package_report, validate_provider_package
+from audio_engine.provider_package import (
+    hydrate_provider_model,
+    provider_package_report,
+    validate_provider_package,
+)
 
 
 def sha(path):
@@ -48,6 +54,46 @@ class ProviderPackageTests(unittest.TestCase):
         package["runtime"]["dependencies"][0]["revision"] = "main"
         with self.assertRaisesRegex(ContractError, "exact 40-char Git SHA"):
             validate_provider_package(package)
+
+    def test_hydrate_exact_huggingface_snapshot_and_verify_hashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            expected = b"locked-model"
+            digest = hashlib.sha256(expected).hexdigest()
+            package = self.package()
+            package["model"] = {
+                "id": "Example/Model",
+                "source": "huggingface",
+                "revision": "4" * 40,
+                "integrity": [{"name": "weights.bin", "sha256": digest}],
+            }
+            package_path = root / "provider.json"
+            package_path.write_text(json.dumps(package), encoding="utf-8")
+
+            calls = []
+            def fake_snapshot_download(**kwargs):
+                calls.append(kwargs)
+                destination = Path(kwargs["local_dir"])
+                destination.mkdir(parents=True, exist_ok=True)
+                (destination / "weights.bin").write_bytes(expected)
+                return str(destination)
+
+            fake_module = types.SimpleNamespace(snapshot_download=fake_snapshot_download)
+            previous = sys.modules.get("huggingface_hub")
+            sys.modules["huggingface_hub"] = fake_module
+            try:
+                report = hydrate_provider_model(package_path, cache_root=root / "cache")
+            finally:
+                if previous is None:
+                    sys.modules.pop("huggingface_hub", None)
+                else:
+                    sys.modules["huggingface_hub"] = previous
+
+            self.assertEqual(report["status"], "ready")
+            self.assertEqual(report["model_revision"], "4" * 40)
+            self.assertEqual(report["verified"][0]["sha256"], digest)
+            self.assertEqual(calls[0]["revision"], "4" * 40)
+            self.assertEqual(calls[0]["allow_patterns"], ["weights.bin"])
 
     def test_verify_voice_pack_and_reference_hashes(self):
         with tempfile.TemporaryDirectory() as tmp:
