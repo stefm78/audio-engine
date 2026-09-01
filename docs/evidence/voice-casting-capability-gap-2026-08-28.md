@@ -194,7 +194,7 @@ Do not reopen unless the external capability itself materially changes.
 - Seed-VC: post-hoc VC/licensing mismatch.
 - MeanVC2: French reject.
 - CosyVoice3 prior killer: technical duration reject.
-- VoxCPM2: identity reject.
+- VoxCPM2: general-purpose lineage/age control reject; historical Stage 2 acting and identity were strong. Reinterpreted 2026-09-01 as admissible for the one-shot P4 Siren role only; see addendum below.
 - Zonos v0.1: emotion reject.
 - Fish S2 Pro: non-commercial license and CPU preflight failures.
 - Wren 0.5B: technical reject and CC-BY-NC.
@@ -306,3 +306,32 @@ The Lab should remain **CAPABILITY GAP / WATCH** until a reopening trigger occur
 When a trigger occurs, restart with a cheap resource/API gate first. Only then authorize one frozen Claire-panic scientific render.
 
 Production remains unchanged.
+
+
+## 2026-09-01 addendum — P4 one-shot role reinterpretation
+
+This document originally retired VoxCPM2 too broadly.
+
+The authoritative historical evidence is:
+
+- #48 killer: acting PASS 2/2, identity PASS 2/2, no French-pronunciation veto;
+- #51 Stage 2 / run `32737983584`: VoxCPM2 won 7/8 acting duels, French was acceptable, identity ABX was 4/4;
+- #52 age-lineage: requested age control failed 1/6, while identity continuity remained 6/6.
+
+Therefore the failed capability was **age/lineage control**, not generic identity or acting.
+
+For a recurring character this remains insufficient. For Odyssée P4, however, the Sirens appear in one bounded scene and do not require age transformation or cross-scene identity continuity.
+
+Under the product constraint `CLOUD_TTS_FORBIDDEN_FOR_ODYSSEE_CRITICAL_CASTING`, VoxCPM2 is authorized for exactly one new P4-specific cell:
+
+- issue #209 / LOCAL-TTS-WP-003;
+- standard public GitHub CPU;
+- immutable Claire reference;
+- immutable H1b-B P4 baseline;
+- replace only the five lead-Siren utterances;
+- two preregistered acting directions;
+- fixed seed schedule;
+- no best-of-N;
+- no post-verdict tuning.
+
+This does **not** reopen VoxCPM2 as a general production provider and does not alter the P6 same-Ulysse identity requirement.

@@ -102,3 +102,29 @@ A private NUC control-plane is not the next task; create it only when a real adm
 ## Production rule
 
 Audioguide, audiobook and learning-kit rendering must continue independently of Voice Lab progress or failure.
+
+
+## 2026-09-01 — Odyssée critical-casting arbitration
+
+Consumer constraint: `CLOUD_TTS_FORBIDDEN_FOR_ODYSSEE_CRITICAL_CASTING`.
+
+For Odyssée P4/P6:
+- no Azure Speech or other cloud TTS dependency is authorized;
+- GitHub-hosted Actions is the primary autonomous execution lane;
+- the NUC is authorized only when an otherwise scientifically admissible local model is blocked solely by GitHub-hosted compute/resource limits;
+- no NUC dependency may be introduced into Production.
+
+### P4 one-shot exception
+
+The Sirens are a bounded one-scene role. Cross-scene identity/age/lineage control is therefore not a P4 acceptance criterion.
+
+This changes the admissibility interpretation of **VoxCPM2**:
+- killer #48: acting 2/2 PASS, identity 2/2 PASS, no French veto;
+- Stage 2 #51 / run 32737983584: acting 7/8 wins, identity 4/4 PASS;
+- age-lineage #52: age control FAIL 1/6, but identity 6/6 PASS.
+
+The age-control failure does not disqualify VoxCPM2 for a one-shot Siren role.
+
+Authorized current work: **LOCAL-TTS-WP-003 / issue #209**, one P4-only VoxCPM2 cell on standard GitHub CPU, preserving H1b-B polyphony and replacing only the five lead-Siren utterances. Two preregistered acting directions, fixed seed schedule, no best-of-N, no post-verdict tuning.
+
+P6 remains strict same-character continuity and is not affected by this exception.
