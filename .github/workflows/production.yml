@@ -37,6 +37,21 @@ on:
         required: false
         default: true
         type: boolean
+      publish_review_release:
+        description: Publish machine-ready scene/block assets for browser review even when the final master is held
+        required: false
+        default: false
+        type: boolean
+      review_release_tag:
+        description: Required when publish_review_release=true; immutable tag for qualified review assets
+        required: false
+        default: ''
+        type: string
+      review_release_prerelease:
+        description: Mark the qualified review release as prerelease
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -713,6 +728,151 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  review_release:
+    needs: [plan, render_units, assemble_blocks]
+    if: >-
+      always() &&
+      inputs.publish_review_release &&
+      needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Require explicit immutable review tag
+        if: inputs.review_release_tag == ''
+        run: |
+          echo "ERROR: review_release_tag is required when publish_review_release=true" >&2
+          exit 2
+
+      - name: Download qualified scene evidence
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: ${{ inputs.artifact_prefix }}-unit-*
+          path: evidence/units
+          merge-multiple: true
+
+      - name: Download qualified block evidence
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: ${{ inputs.artifact_prefix }}-block-*
+          path: evidence/blocks
+          merge-multiple: true
+
+      - name: Build content-addressed browser review payload
+        env:
+          MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
+          ENGINE_REF: ${{ needs.plan.outputs.engine_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p generated/review-release
+          python - <<'PY'
+          import hashlib, json, os, shutil
+          from pathlib import Path
+
+          source=Path("evidence")
+          out=Path("generated/review-release")
+          assets=[]
+
+          def digest(path):
+              h=hashlib.sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024*1024), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          def publish(src, name, kind, item_id):
+              dst=out/name
+              shutil.copy2(src,dst)
+              assets.append({
+                  "name":name,
+                  "kind":kind,
+                  "id":item_id,
+                  "sha256":digest(dst),
+                  "bytes":dst.stat().st_size,
+              })
+
+          units_root=source/"units"
+          if units_root.exists():
+              for result_path in sorted(units_root.glob("*/unit-result.json")):
+                  result=json.loads(result_path.read_text(encoding="utf-8"))
+                  if result.get("state")!="ready":
+                      continue
+                  unit=result["unit_id"]
+                  unit_root=result_path.parent
+                  audio=list(unit_root.glob("*/audio.mp3"))
+                  if len(audio)!=1:
+                      raise SystemExit(f"ready unit {unit} expected one audio.mp3, found {len(audio)}")
+                  publish(audio[0],f"scene-{unit}.mp3","scene",unit)
+                  render_root=audio[0].parent
+                  for src_name,ext in (
+                      ("manifest.json","manifest.json"),
+                      ("qa-report.json","qa-report.json"),
+                      ("transcript.json","transcript.json"),
+                  ):
+                      src=render_root/src_name
+                      if src.is_file():
+                          publish(src,f"scene-{unit}.{ext}","scene-evidence",unit)
+
+          blocks_root=source/"blocks"
+          if blocks_root.exists():
+              for result_path in sorted(blocks_root.glob("*/block-result.json")):
+                  result=json.loads(result_path.read_text(encoding="utf-8"))
+                  if result.get("state")!="ready":
+                      continue
+                  block=result["block_id"]
+                  root=result_path.parent
+                  audio=root/"audio.mp3"
+                  if not audio.is_file():
+                      raise SystemExit(f"ready block {block} missing audio.mp3")
+                  publish(audio,f"block-{block}.mp3","block",block)
+                  for src_name,ext in (
+                      ("manifest.json","manifest.json"),
+                      ("qa-report.json","qa-report.json"),
+                  ):
+                      src=root/src_name
+                      if src.is_file():
+                          publish(src,f"block-{block}.{ext}","block-evidence",block)
+
+          audible=[x for x in assets if x["name"].endswith(".mp3")]
+          if not audible:
+              raise SystemExit("No machine-ready browser-review audio exists; release not created")
+
+          index={
+              "schema_version":1,
+              "status":"machine-ready-review-assets",
+              "production_manifest_sha256":os.environ["MANIFEST_SHA"],
+              "engine_ref":os.environ["ENGINE_REF"],
+              "assets":assets,
+          }
+          index_path=out/"review-index.json"
+          index_path.write_text(json.dumps(index,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+          print(json.dumps(index,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Publish immutable qualified review release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.review_release_tag }}
+          PRERELEASE: ${{ inputs.review_release_prerelease }}
+          MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "ERROR: review release $TAG already exists; immutable review assets will not be replaced." >&2
+            exit 2
+          fi
+          assets=(generated/review-release/*)
+          notes="Machine-qualified review assets from Production Manifest SHA-256: $MANIFEST_SHA. This is not a final master release."
+          pre=""
+          if [[ "$PRERELEASE" == "true" ]]; then pre="--prerelease"; fi
+          gh release create "$TAG" "${assets[@]}" --target "$GITHUB_SHA" $pre \
+            --title "$TAG" --notes "$notes" --repo "$GITHUB_REPOSITORY"
+
   release:
     needs: [plan, master]
     if: >-
@@ -751,10 +911,11 @@ jobs:
           pre=""
           if [[ "$PRERELEASE" == "true" ]]; then pre="--prerelease"; fi
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
-          else
-            gh release create "$TAG" "${assets[@]}" --target "$GITHUB_SHA" $pre               --title "$TAG" --notes "$notes" --repo "$GITHUB_REPOSITORY"
+            echo "ERROR: master release $TAG already exists; immutable master assets will not be replaced." >&2
+            exit 2
           fi
+          gh release create "$TAG" "${assets[@]}" --target "$GITHUB_SHA" $pre \
+            --title "$TAG" --notes "$notes" --repo "$GITHUB_REPOSITORY"
 
   summary:
     needs: [plan, render_units, assemble_blocks, master]
