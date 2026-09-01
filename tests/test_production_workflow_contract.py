@@ -19,6 +19,16 @@ class ProductionWorkflowContractTests(unittest.TestCase):
         self.assertIn('"state")!="ready"', self.workflow)
         self.assertIn("This is not a final master release.", self.workflow)
 
+    def test_scene_cache_restore_is_cross_engine_but_still_content_addressed(self):
+        self.assertIn("scene-v2-${{ matrix.id }}-${{ matrix.program_sha256 }}", self.workflow)
+        self.assertIn("${{ matrix.provider_packages_fingerprint }}", self.workflow)
+        self.assertIn("${{ needs.plan.outputs.engine_ref }}", self.workflow)
+        self.assertIn("restore-keys: |", self.workflow)
+        self.assertIn(
+            "${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}-scene-v2-${{ matrix.id }}-",
+            self.workflow,
+        )
+
     def test_production_releases_never_clobber_existing_assets(self):
         self.assertNotIn("gh release upload", self.workflow)
         self.assertNotIn("--clobber", self.workflow)
