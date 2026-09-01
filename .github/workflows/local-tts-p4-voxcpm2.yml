@@ -1,0 +1,156 @@
+name: LOCAL TTS P4 Sirens VoxCPM2 one-shot
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  VOXCPM_REV: ee8161e9e1b7b082cb5721a3a9980da4204401e6
+  MODEL_ID: openbmb/VoxCPM2
+  MODEL_REV: 32279effe8c19989596f05d353d1447f51d9e915
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  p4-voxcpm2:
+    if: github.head_ref == 'lab/LOCAL-TTS-WP-003-p4-voxcpm2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          df -h /
+
+      - name: Install ffmpeg before any audio operation
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg time xz-utils
+
+      - name: Recover immutable Claire and H1b-B P4 evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/reference-pack inputs/h1b
+
+          gh release download voice-lab-reference-pack-v1             --repo stefm78/audio-engine             -p voice-lab-reference-pack-v1.tar.xz             -D inputs/reference-pack
+
+          test "$(sha256sum inputs/reference-pack/voice-lab-reference-pack-v1.tar.xz | cut -d' ' -f1)" =             "688eaa76d700f6ce5b5410e5fe37fa17877c7673737c31d7a50442304d6a4759"
+
+          mkdir -p inputs/reference-pack/extracted
+          tar -xJf inputs/reference-pack/voice-lab-reference-pack-v1.tar.xz             -C inputs/reference-pack/extracted
+
+          CLAIRE="$(find inputs/reference-pack/extracted -type f -name reference-claire.wav -print -quit)"
+          test -n "$CLAIRE"
+          test "$(sha256sum "$CLAIRE" | cut -d' ' -f1)" =             "3366f993d108f42525627f1be03e71fdec312b559e067616d2019b69da35cafe"
+          cp "$CLAIRE" inputs/reference-claire.wav
+
+          gh release download odyssee-h1b-corrective-review-v1             --repo stefm78/recit-audioguide             -p p4-b.mp3             -p p4-b-report.json             -D inputs/h1b
+
+          test "$(sha256sum inputs/h1b/p4-b.mp3 | cut -d' ' -f1)" =             "14f325e3a1404c260c9a5139b85bcb5267cdd91a60c2458ea80bd66f3d75365d"
+          test "$(sha256sum inputs/h1b/p4-b-report.json | cut -d' ' -f1)" =             "8f3d2e0a63752d09974c2553c25f28fe9e0b5c6ec800fb734d16ae859f65aa06"
+
+      - name: Static protocol gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile lab/voice-casting/p4_voxcpm2_one_shot.py
+          ! grep -R -n -E 'AZURE_SPEECH|edge_tts|EdgeProvider|api\.cognitive|speech\.microsoft'             lab/voice-casting/p4_voxcpm2_one_shot.py
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          p=Path("lab/voice-casting/p4_voxcpm2_one_shot.py")
+          s=p.read_text(encoding="utf-8")
+          tree=ast.parse(s)
+          vals={}
+          for node in tree.body:
+              if isinstance(node,ast.Assign) and len(node.targets)==1 and isinstance(node.targets[0],ast.Name):
+                  if node.targets[0].id in {"CFG_VALUE","INFERENCE_TIMESTEPS","SEED_BASE"}:
+                      vals[node.targets[0].id]=ast.literal_eval(node.value)
+          assert vals=={"CFG_VALUE":2.0,"INFERENCE_TIMESTEPS":10,"SEED_BASE":2026090100}, vals
+          print("P4_PROTOCOL_STATIC_PASS",vals)
+          PY
+
+      - name: Checkout pinned VoxCPM source
+        run: |
+          git clone --filter=blob:none https://github.com/OpenBMB/VoxCPM.git voxcpm-upstream
+          cd voxcpm-upstream
+          git checkout "$VOXCPM_REV"
+          test "$(git rev-parse HEAD)" = "$VOXCPM_REV"
+
+      - name: Install frozen CPU inference environment
+        run: |
+          python -m pip install --disable-pip-version-check             --index-url https://download.pytorch.org/whl/cpu             torch==2.7.1 torchaudio==2.7.1
+          python -m pip install --disable-pip-version-check             pydub==0.25.1 soundfile==0.12.1
+          python -m pip install --disable-pip-version-check -e ./voxcpm-upstream
+          python -m pip check
+
+      - name: Download pinned VoxCPM2 model
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          path=snapshot_download(
+              repo_id=os.environ["MODEL_ID"],
+              revision=os.environ["MODEL_REV"],
+              local_dir="voxcpm2-model",
+          )
+          print(path)
+          PY
+          test -f voxcpm2-model/config.json
+          test -f voxcpm2-model/model.safetensors
+          test -f voxcpm2-model/audiovae.pth
+
+      - name: Render exactly two preregistered P4 candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p generated/p4-voxcpm2
+          /usr/bin/time -v             python lab/voice-casting/p4_voxcpm2_one_shot.py               --model-dir voxcpm2-model               --baseline-audio inputs/h1b/p4-b.mp3               --baseline-report inputs/h1b/p4-b-report.json               --claire inputs/reference-claire.wav               --out generated/p4-voxcpm2             2> >(tee generated/p4-voxcpm2/resource-time.txt >&2)
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path("generated/p4-voxcpm2/manifest.json").read_text())
+          assert m["status"]=="MACHINE_PASS"
+          assert m["cloud_tts"] is False
+          assert m["nuc_required"] is False
+          assert len(m["results"])==2
+          for r in m["results"]:
+              assert r["replacement_indices"]==[2,4,6,8,12]
+              assert len(r["slots"])==5
+              assert all(s["technical_gate"]["status"]=="PASS" for s in r["slots"])
+          print("P4_VOXCPM2_MACHINE_PASS")
+          PY
+
+          sha256sum             generated/p4-voxcpm2/p4-voxcpm2-a.mp3             generated/p4-voxcpm2/p4-voxcpm2-b.mp3             generated/p4-voxcpm2/slots/*.wav             generated/p4-voxcpm2/manifest.json             | tee generated/p4-voxcpm2/SHA256SUMS.txt
+
+      - name: Upload P4 listening bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-tts-p4-voxcpm2-one-shot
+          path: |
+            generated/p4-voxcpm2/p4-voxcpm2-a.mp3
+            generated/p4-voxcpm2/p4-voxcpm2-b.mp3
+            generated/p4-voxcpm2/index.html
+            generated/p4-voxcpm2/manifest.json
+            generated/p4-voxcpm2/SHA256SUMS.txt
+            generated/p4-voxcpm2/resource-time.txt
+            generated/p4-voxcpm2/slots/*.wav
+          if-no-files-found: error
+          retention-days: 14
