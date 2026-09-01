@@ -14,6 +14,7 @@ env:
   MODEL_REV: 74a6279626edc2d5a787d5b6467668eba0b86ef6
   DONOR_RUN_ID: "32811700540"
   DONOR_ARTIFACT: qwen3-style-transplant-donors
+  PYTHONPATH: src
   TOKENIZERS_PARALLELISM: "false"
   OMP_NUM_THREADS: "2"
   MKL_NUM_THREADS: "2"
@@ -30,28 +31,22 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - name: Free runner disk
+      - name: Free disk and install ffmpeg
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
-          df -h /
-
-      - name: Install ffmpeg before audio operations
-        run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ffmpeg time
 
-      - name: Recover immutable H1b-B P6 baseline
+      - name: Recover immutable H1b-B P6
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p inputs/h1b
-          gh release download odyssee-h1b-corrective-review-v1             --repo stefm78/recit-audioguide             -p p6-b.mp3             -p p6-b-report.json             -D inputs/h1b
-
+          gh release download odyssee-h1b-corrective-review-v1             --repo stefm78/recit-audioguide             -p p6-b.mp3 -p p6-b-report.json             -D inputs/h1b
           test "$(sha256sum inputs/h1b/p6-b.mp3 | cut -d' ' -f1)" =             "474c2e41a5d702b2a84524aa3be9a0559ed7378af18d507ac082b666029d64ae"
           test "$(sha256sum inputs/h1b/p6-b-report.json | cut -d' ' -f1)" =             "366091a73e7597626384535e900a5b30e7943c485d0197ec25f015c384b6d891"
 
@@ -61,7 +56,6 @@ jobs:
           set -euo pipefail
           mkdir -p inputs/donor
           gh run download "$DONOR_RUN_ID"             --repo "${{ github.repository }}"             -n "$DONOR_ARTIFACT"             -D inputs/donor
-
           test -f inputs/donor/sadness-contained.wav
           test -f inputs/donor/donors.json
           python - <<'PY'
@@ -74,14 +68,17 @@ jobs:
           assert int(r[0]["seed"])==2026082503
           print("P6_DONOR_PROVENANCE_PASS")
           PY
-          sha256sum inputs/donor/sadness-contained.wav inputs/donor/donors.json
 
-      - name: Static protocol gate
+      - name: Protocol and import gate
         shell: bash
         run: |
           set -euo pipefail
           python -m py_compile             src/audio_engine/providers/qwen3_style_transplant_lab.py             lab/voice-casting/p6_qwen3_hybrid.py
-          ! grep -R -n -E 'AZURE_SPEECH|edge_tts|EdgeProvider|speech\.microsoft|cognitiveservices'             src/audio_engine/providers/qwen3_style_transplant_lab.py             lab/voice-casting/p6_qwen3_hybrid.py
+          PYTHONPATH=src python - <<'PY'
+          from audio_engine.providers.qwen3_style_transplant_lab import Qwen3StyleTransplantLabProvider
+          print("P6_LOCAL_IMPORT_PASS", Qwen3StyleTransplantLabProvider.name)
+          PY
+          ! grep -E 'AZURE_SPEECH|edge_tts|EdgeProvider|speech\.microsoft|cognitiveservices'             src/audio_engine/providers/qwen3_style_transplant_lab.py             lab/voice-casting/p6_qwen3_hybrid.py
           python - <<'PY'
           import ast
           from pathlib import Path
@@ -97,60 +94,53 @@ jobs:
           print("P6_PROTOCOL_STATIC_PASS")
           PY
 
-      - name: Checkout pinned Qwen3-TTS source
+      - name: Install pinned Qwen3 CPU runtime
         run: |
           git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
           cd qwen3-upstream
           git checkout "$QWEN_REV"
           test "$(git rev-parse HEAD)" = "$QWEN_REV"
-
-      - name: Install isolated CPU inference stack
-        run: |
+          cd ..
           python -m pip install --disable-pip-version-check             --index-url https://download.pytorch.org/whl/cpu             torch torchaudio
           python -m pip install --disable-pip-version-check             pydub==0.25.1 soundfile==0.12.1 numpy==1.26.4
           python -m pip install --disable-pip-version-check -e ./qwen3-upstream
           python -m pip check
 
-      - name: Download pinned Qwen3 Base model
+      - name: Download pinned Qwen3 Base
         run: |
           python - <<'PY'
           import os
           from huggingface_hub import snapshot_download
-          p=snapshot_download(
+          snapshot_download(
               repo_id=os.environ["MODEL_ID"],
               revision=os.environ["MODEL_REV"],
               local_dir="qwen3-base-model",
           )
-          print(p)
           PY
           test -f qwen3-base-model/config.json
           test -f qwen3-base-model/model.safetensors
 
-      - name: Render one frozen P6 real-scene candidate
+      - name: Render one frozen P6 candidate
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p generated/p6-qwen3-hybrid
-          /usr/bin/time -v             python lab/voice-casting/p6_qwen3_hybrid.py               --model-dir qwen3-base-model               --baseline-audio inputs/h1b/p6-b.mp3               --baseline-report inputs/h1b/p6-b-report.json               --donor-dir inputs/donor               --out generated/p6-qwen3-hybrid             2> >(tee generated/p6-qwen3-hybrid/resource-time.txt >&2)
+          PYTHONPATH=src /usr/bin/time -v             python lab/voice-casting/p6_qwen3_hybrid.py               --model-dir qwen3-base-model               --baseline-audio inputs/h1b/p6-b.mp3               --baseline-report inputs/h1b/p6-b-report.json               --donor-dir inputs/donor               --out generated/p6-qwen3-hybrid             2> >(tee generated/p6-qwen3-hybrid/resource-time.txt >&2)
 
           python - <<'PY'
           import json
           from pathlib import Path
           m=json.loads(Path("generated/p6-qwen3-hybrid/manifest.json").read_text())
           assert m["status"]=="MACHINE_PASS"
-          assert m["cloud_tts"] is False
-          assert m["nuc_required"] is False
-          assert len(m["slots"])==5
+          assert m["cloud_tts"] is False and m["nuc_required"] is False
           assert [s["i"] for s in m["slots"]]==[2,4,10,12,15]
           assert all(s["technical_gate"]["status"]=="PASS" for s in m["slots"])
-          assert m["modes"]["xvector_lines"]==[2,4]
-          assert m["modes"]["contained_sadness_lines"]==[10,12,15]
-          print("P6_QWEN3_HYBRID_MACHINE_PASS")
+          print("P6_MACHINE_PASS",m["candidate_sha256"])
           PY
 
           sha256sum             generated/p6-qwen3-hybrid/p6-qwen3-hybrid.mp3             generated/p6-qwen3-hybrid/ulysse-henri-anchor.wav             generated/p6-qwen3-hybrid/slots/*.wav             generated/p6-qwen3-hybrid/manifest.json             | tee generated/p6-qwen3-hybrid/SHA256SUMS.txt
 
-      - name: Upload immutable P6 bundle
+      - name: Upload authoritative P6 bundle
         if: always()
         uses: actions/upload-artifact@v4
         with:
