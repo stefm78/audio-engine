@@ -1,6 +1,7 @@
 import hashlib
 import inspect
 import json
+import shutil
 from pathlib import Path
 
 from ..audio import probe_duration_seconds, run_ffmpeg
@@ -104,6 +105,22 @@ def _normalize_voice_edges(source, destination):
         raise RuntimeError("Voice edge normalization produced no usable audio")
 
 
+def _edge_silence_normalization_enabled(provider):
+    return bool(getattr(provider, "edge_silence_normalization", True))
+
+
+def _materialize_provider_audio(source, destination, provider):
+    if _edge_silence_normalization_enabled(provider):
+        _normalize_voice_edges(source, destination)
+    else:
+        source = Path(source)
+        destination = Path(destination)
+        destination.unlink(missing_ok=True)
+        shutil.copyfile(source, destination)
+        if not destination.exists() or destination.stat().st_size <= 0:
+            raise RuntimeError("Voice provider produced no usable audio")
+
+
 def _timing_metadata(segment, provider, fingerprint, path):
     duration = probe_duration_seconds(path)
     if duration is None:
@@ -119,7 +136,7 @@ def _timing_metadata(segment, provider, fingerprint, path):
         "volume": segment.get("volume", "+0%"),
         "text_chars": len(text),
         "text_words": len(text.split()),
-        "edge_silence_normalized": True,
+        "edge_silence_normalized": _edge_silence_normalization_enabled(provider),
         "measured_duration_ms": round(duration * 1000.0, 3),
     }
 
@@ -132,7 +149,8 @@ def _ensure_timing_metadata(segment, provider, fingerprint, path):
             if (
                 data.get("fingerprint") == fingerprint
                 and data.get("measured_duration_ms")
-                and data.get("edge_silence_normalized") is True
+                and data.get("edge_silence_normalized")
+                is _edge_silence_normalization_enabled(provider)
             ):
                 return data
         except Exception:
@@ -165,7 +183,7 @@ def render_voice_clip(segment, provider, cache_root, fallback_fingerprints=None)
             continue
         legacy = cache_root / f"{fallback}.mp3"
         if legacy.exists() and legacy.stat().st_size > 0:
-            _normalize_voice_edges(legacy, path)
+            _materialize_provider_audio(legacy, path, provider)
             _ensure_timing_metadata(segment, provider, fingerprint, path)
             return path, True, fingerprint
 
@@ -177,7 +195,7 @@ def render_voice_clip(segment, provider, cache_root, fallback_fingerprints=None)
         provider.synthesize(segment, raw)
         if not raw.exists() or raw.stat().st_size <= 0:
             raise RuntimeError("Voice provider produced no audio")
-        _normalize_voice_edges(raw, normalized)
+        _materialize_provider_audio(raw, normalized, provider)
         normalized.replace(path)
     finally:
         raw.unlink(missing_ok=True)
