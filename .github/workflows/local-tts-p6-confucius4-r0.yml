@@ -1,0 +1,172 @@
+name: LOCAL TTS P6 Confucius4 R0
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CONFUCIUS_SOURCE_REV: 45f83890b72ba26d1954dab5001600301ebe8dd3
+  CONFUCIUS_HF_REV: 696981f
+  W2V_HF_REV: da985ba
+  CAMPPLUS_HF_REV: e4b6ede
+  BIGVGAN_HF_REV: 633ff70
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  confucius4-r0:
+    if: github.head_ref == 'lab/LOCAL-TTS-WP-005-p6-confucius4-r0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Free disk and install system tools
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg time
+          df -h /
+          free -h
+
+      - name: Recover immutable H1b-B P6 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/h1b
+          gh release download odyssee-h1b-corrective-review-v1             --repo stefm78/recit-audioguide             -p p6-b.mp3 -p p6-b-report.json             -D inputs/h1b
+          test "$(sha256sum inputs/h1b/p6-b.mp3 | cut -d' ' -f1)" =             "474c2e41a5d702b2a84524aa3be9a0559ed7378af18d507ac082b666029d64ae"
+          test "$(sha256sum inputs/h1b/p6-b-report.json | cut -d' ' -f1)" =             "366091a73e7597626384535e900a5b30e7943c485d0197ec25f015c384b6d891"
+
+      - name: Checkout pinned Confucius4 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/netease-youdao/Confucius4-TTS.git confucius-src
+          cd confucius-src
+          git checkout "$CONFUCIUS_SOURCE_REV"
+          test "$(git rev-parse HEAD)" = "$CONFUCIUS_SOURCE_REV"
+
+      - name: Install pinned CPU inference environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check             --index-url https://download.pytorch.org/whl/cpu             torch==2.7.0 torchaudio==2.7.0
+
+          grep -Ev '^(torch|torchaudio)==' confucius-src/requirements.txt > /tmp/confucius-requirements.txt
+          python -m pip install --disable-pip-version-check -r /tmp/confucius-requirements.txt
+          python -m pip check
+
+      - name: Download exact open model snapshots
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/models
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download, hf_hub_download
+
+          snapshot_download(
+              repo_id="netease-youdao/Confucius4-TTS",
+              revision=os.environ["CONFUCIUS_HF_REV"],
+              local_dir="inputs/models/confucius4",
+          )
+          snapshot_download(
+              repo_id="facebook/w2v-bert-2.0",
+              revision=os.environ["W2V_HF_REV"],
+              local_dir="inputs/models/w2v-bert-2.0",
+          )
+          snapshot_download(
+              repo_id="nvidia/bigvgan_v2_22khz_80band_256x",
+              revision=os.environ["BIGVGAN_HF_REV"],
+              local_dir="inputs/models/bigvgan",
+          )
+          hf_hub_download(
+              repo_id="funasr/campplus",
+              filename="campplus_cn_common.bin",
+              revision=os.environ["CAMPPLUS_HF_REV"],
+              local_dir="inputs/models/campplus",
+          )
+          PY
+
+          test -f inputs/models/confucius4/t2s_model.safetensors
+          test -f inputs/models/confucius4/s2a_model.pt
+          test -f inputs/models/confucius4/wav2vec2bert_stats.pt
+          test -f inputs/models/w2v-bert-2.0/config.json
+          test -f inputs/models/bigvgan/config.json
+          test -f inputs/models/campplus/campplus_cn_common.bin
+          du -sh inputs/models/*
+          df -h /
+
+      - name: Static R0 protocol gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile lab/voice-casting/confucius4_r0.py
+          ! grep -E 'AZURE_SPEECH|edge_tts|EdgeProvider|speech\.microsoft|cognitiveservices'             lab/voice-casting/confucius4_r0.py
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          t=ast.parse(Path("lab/voice-casting/confucius4_r0.py").read_text())
+          vals={}
+          for n in t.body:
+              if isinstance(n, ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0], ast.Name):
+                  if n.targets[0].id in {"CALIBRATION_TEXT","LANG","SEED","ANCHOR_SEGMENTS"}:
+                      vals[n.targets[0].id]=ast.literal_eval(n.value)
+          assert vals["CALIBRATION_TEXT"]=="Je suis revenu à Ithaque."
+          assert vals["LANG"]=="fr"
+          assert vals["SEED"]==2026090101
+          assert vals["ANCHOR_SEGMENTS"]==(6,7,8)
+          print("CONFUCIUS4_R0_PROTOCOL_PASS")
+          PY
+
+      - name: Load stack and render exactly one neutral French calibration
+        shell: bash
+        env:
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p generated/confucius4-r0
+          /usr/bin/time -v             python lab/voice-casting/confucius4_r0.py               --source-dir confucius-src               --confucius-model-dir inputs/models/confucius4               --w2v-dir inputs/models/w2v-bert-2.0               --campplus-dir inputs/models/campplus               --bigvgan-dir inputs/models/bigvgan               --baseline-audio inputs/h1b/p6-b.mp3               --baseline-report inputs/h1b/p6-b-report.json               --out generated/confucius4-r0             2> >(tee generated/confucius4-r0/resource-time.txt >&2)
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path("generated/confucius4-r0/manifest.json").read_text())
+          assert m["status"]=="RESOURCE_GATE_PASS"
+          assert m["artistic_candidate"] is False
+          assert m["human_review"] is False
+          assert m["cloud_tts"] is False
+          assert m["render"]["technical_gate"]["status"]=="PASS"
+          print("CONFUCIUS4_R0_PASS",m["render"]["output_sha256"])
+          PY
+
+          sha256sum             generated/confucius4-r0/confucius4-r0.wav             generated/confucius4-r0/ulysse-henri-anchor.wav             generated/confucius4-r0/manifest.json             | tee generated/confucius4-r0/SHA256SUMS.txt
+
+      - name: Upload R0 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-tts-p6-confucius4-r0
+          path: |
+            generated/confucius4-r0/confucius4-r0.wav
+            generated/confucius4-r0/ulysse-henri-anchor.wav
+            generated/confucius4-r0/manifest.json
+            generated/confucius4-r0/SHA256SUMS.txt
+            generated/confucius4-r0/resource-time.txt
+          if-no-files-found: warn
+          retention-days: 14
