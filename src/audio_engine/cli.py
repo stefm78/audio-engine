@@ -12,6 +12,7 @@ from .contract import ContractError, load_json, validate_assembly, validate_prog
 from .effects import load_capabilities, public_capabilities
 from .preflight import preflight_program
 from .preview import preview_program
+from .production import production_plan, validate_production_manifest
 from .render import render_program
 from .sound.acquisition import DEFAULT_PROVIDERS, ensure_sound
 from .sound.catalog import SOUND_TYPES, public_catalog as public_sound_catalog, sound_info
@@ -112,6 +113,23 @@ def build_parser():
     preflight.add_argument("program")
     preflight.add_argument("--voices", default=None)
     preflight.add_argument("--sounds", default=None)
+
+    production = sub.add_parser(
+        "production",
+        help="Validate and plan an immutable Production Manifest v1",
+    )
+    production_sub = production.add_subparsers(dest="production_command", required=True)
+    production_validate = production_sub.add_parser(
+        "validate",
+        help="Validate a Production Manifest v1 without rendering",
+    )
+    production_validate.add_argument("manifest")
+    production_validate.add_argument("--verify-files", action="store_true")
+    production_plan_parser = production_sub.add_parser(
+        "plan",
+        help="Verify ready inputs and emit an executor-neutral shard/fan-in plan",
+    )
+    production_plan_parser.add_argument("manifest")
 
     validate = sub.add_parser("validate", help="Validate a JSON contract")
     validate.add_argument("file")
@@ -229,6 +247,16 @@ def main(argv=None):
                 voices_path=args.voices,
                 sounds_path=args.sounds,
             )
+        elif args.command == "production":
+            if args.production_command == "validate":
+                manifest = load_json(args.manifest)
+                result = validate_production_manifest(
+                    manifest,
+                    manifest_path=args.manifest,
+                    verify_files=args.verify_files,
+                )
+            else:
+                result = production_plan(args.manifest)
         elif args.command == "batch":
             result = render_batch(args.pattern, args.out, voices_path=args.voices, sounds_path=args.sounds)
         elif args.command == "assemble":
