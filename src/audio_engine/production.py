@@ -69,7 +69,7 @@ def _unit_providers(unit, label, errors):
     return providers
 
 
-def _validate_provider_packages(unit, providers, label, errors):
+def _validate_provider_packages(unit, providers, label, errors, require_complete=True):
     packages = unit.get("provider_packages", [])
     if not isinstance(packages, list):
         errors.append(f"{label}.provider_packages must be an array")
@@ -93,7 +93,7 @@ def _validate_provider_packages(unit, providers, label, errors):
         _validate_sha256(item.get("package_sha256"), f"{item_label}.package_sha256", errors)
 
     missing = sorted(set(providers) - {"edge"} - seen)
-    if missing:
+    if require_complete and missing:
         errors.append(
             f"{label} needs provider_packages for every non-edge provider: {missing}"
         )
@@ -136,7 +136,13 @@ def validate_production_manifest(manifest, manifest_path=None, workspace_root=".
         if state not in _UNIT_STATES:
             errors.append(f"{label}.state must be one of {', '.join(_UNIT_STATES)}")
         providers = _unit_providers(unit, label, errors)
-        provider_packages = _validate_provider_packages(unit, providers, label, errors)
+        provider_packages = _validate_provider_packages(
+            unit,
+            providers,
+            label,
+            errors,
+            require_complete=(state == "ready"),
+        )
 
         if state == "hold":
             if not _non_empty(unit.get("hold_reason")):
