@@ -39,7 +39,7 @@ def assemble_plan(plan_path, output_root):
             pause = silence_file(temp_dir, item.get("pause_after_ms", 0), silence_cache)
             if pause:
                 parts.append(pause)
-        encode_concat(parts, audio_path, profile)
+        peak_guard = encode_concat(parts, audio_path, profile)
 
     engine_code_sha = sha256_file(Path(__file__))
     fingerprint_payload = {
@@ -74,6 +74,7 @@ def assemble_plan(plan_path, output_root):
         "assembly": {
             "input_count": len(input_evidence),
             "inputs": input_evidence,
+            "encoding_peak_guard": peak_guard,
         },
         "warnings": [],
     }
