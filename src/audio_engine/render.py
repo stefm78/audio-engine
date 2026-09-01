@@ -10,13 +10,13 @@ from .audio import probe_duration_seconds
 from .contract import load_json, sha256_file, validate_program
 from .mix.render import render_master, render_speech_track, stereo_required
 from .profiles import get_profile
-from .providers.edge import EdgeProvider
+from .providers.registry import ProviderRegistry
 from .sound.render import (
     render_soundscape,
     scene_space_requirements,
     soundscape_source_sha256,
 )
-from .voice.render import render_voice_clip, voice_content_key
+from .voice.render import provider_cache_identity, render_voice_clip, voice_content_key
 from .voices import load_voice_config, resolve_segments
 
 
@@ -31,6 +31,7 @@ def engine_code_sha256():
         root / "profiles.py",
         root / "voices.py",
         root / "providers" / "edge.py",
+        root / "providers" / "registry.py",
         root / "voice" / "render.py",
         root / "ambience" / "prepare.py",
         root / "sound" / "catalog.py",
@@ -47,7 +48,7 @@ def render_fingerprint(
     source_sha,
     voice_config_sha,
     engine_code_sha,
-    provider_name,
+    provider_records,
     profile_name,
     ambience_source_sha=None,
     soundscape_source_sha=None,
@@ -56,7 +57,7 @@ def render_fingerprint(
         "source_sha256": source_sha,
         "voice_config_sha256": voice_config_sha,
         "engine_code_sha256": engine_code_sha,
-        "provider": provider_name,
+        "providers": provider_records,
         "profile": profile_name,
         "ambience_source_sha256": ambience_source_sha,
         "soundscape_source_sha256": soundscape_source_sha,
@@ -87,12 +88,8 @@ def cached_manifest(output_dir, expected_fingerprint):
     return manifest
 
 
-def _previous_voice_cache_map(output_dir, provider_name):
-    """Map unchanged synthesis content to prior fingerprints from the last output.
-
-    This lets a new engine/cache-wrapper release re-key existing dry voice clips
-    locally instead of calling the remote TTS provider again.
-    """
+def _previous_voice_cache_map(output_dir):
+    """Map unchanged synthesis content to prior fingerprints across providers."""
     manifest_path = Path(output_dir) / "manifest.json"
     transcript_path = Path(output_dir) / "transcript.json"
     if not manifest_path.exists() or not transcript_path.exists():
@@ -102,21 +99,24 @@ def _previous_voice_cache_map(output_dir, provider_name):
         transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    if (manifest.get("provider") or {}).get("name") != provider_name:
-        return {}
+    default_provider = (manifest.get("provider") or {}).get("name")
     fingerprints = (manifest.get("mix") or {}).get("voice_fingerprints") or []
     segments = transcript.get("segments") or []
     if len(fingerprints) != len(segments):
         return {}
     result = {}
     for segment, fingerprint in zip(segments, fingerprints):
-        if isinstance(segment, dict) and isinstance(fingerprint, str) and fingerprint:
-            try:
-                result.setdefault(voice_content_key(segment, provider_name), []).append(fingerprint)
-            except (KeyError, TypeError):
-                continue
+        if not isinstance(segment, dict) or not isinstance(fingerprint, str) or not fingerprint:
+            continue
+        provider_name = segment.get("provider") or default_provider
+        if not provider_name or provider_name == "multi":
+            continue
+        try:
+            key = (provider_name, voice_content_key(segment, provider_name))
+            result.setdefault(key, []).append(fingerprint)
+        except (KeyError, TypeError):
+            continue
     return result
-
 
 def _resolve_relative_sound_intent(soundscape, schema_version, timeline):
     if schema_version < 6 or not soundscape:
@@ -159,14 +159,46 @@ def _resolve_relative_sound_intent(soundscape, schema_version, timeline):
     return resolved, resolutions
 
 
-def render_program(program_path, output_root, voices_path=None, provider=None, sounds_path=None):
+def render_program(
+    program_path,
+    output_root,
+    voices_path=None,
+    provider=None,
+    providers=None,
+    sounds_path=None,
+):
     program_path = Path(program_path)
     program = validate_program(load_json(program_path))
     profile_name = program.get("profile", "speech")
     needs_stereo = stereo_required(program)
     profile = get_profile(profile_name, stereo=needs_stereo)
     voice_config, voice_config_path = load_voice_config(voices_path)
-    provider = provider or EdgeProvider()
+    resolved = resolve_segments(program, voice_config)
+
+    if provider is not None and providers is not None:
+        raise ValueError("Use provider or providers, not both")
+    if provider is not None:
+        declared = {segment["provider"] for segment in resolved}
+        if declared - {"edge", provider.name}:
+            raise ValueError(
+                f"Single-provider injection {provider.name!r} cannot satisfy declared providers "
+                f"{sorted(declared)}"
+            )
+        resolved = [{**segment, "provider": provider.name} for segment in resolved]
+        registry = ProviderRegistry({provider.name: provider}, include_edge=False)
+    else:
+        registry = ProviderRegistry(providers or {}, include_edge=True)
+
+    provider_names = sorted({segment["provider"] for segment in resolved})
+    provider_objects = {name: registry.get(name) for name in provider_names}
+    provider_records = [
+        {
+            "name": name,
+            "processing": getattr(provider_objects[name], "processing", "unknown"),
+            "cache_identity": provider_cache_identity(provider_objects[name]),
+        }
+        for name in provider_names
+    ]
 
     source_sha = sha256_file(program_path)
     voice_config_sha = sha256_file(voice_config_path)
@@ -183,7 +215,7 @@ def render_program(program_path, output_root, voices_path=None, provider=None, s
         source_sha,
         voice_config_sha,
         engine_sha,
-        provider.name,
+        provider_records,
         profile_name,
         ambience_sha,
         soundscape_sha,
@@ -196,19 +228,23 @@ def render_program(program_path, output_root, voices_path=None, provider=None, s
     if cached:
         return {**cached, "cache_hit": True}
 
-    previous_voice_cache = _previous_voice_cache_map(output_dir, provider.name)
-    resolved = resolve_segments(program, voice_config)
+    previous_voice_cache = _previous_voice_cache_map(output_dir)
     voice_cache_root = output_root / ".cache" / "voices"
     voice_clips = []
     voice_cache_hits = 0
     voice_fingerprints = []
     for segment in resolved:
+        segment_provider = provider_objects[segment["provider"]]
         fallback_fingerprints = previous_voice_cache.get(
-            voice_content_key(segment, provider.name), []
+            (
+                segment_provider.name,
+                voice_content_key(segment, segment_provider.name),
+            ),
+            [],
         )
         clip, cache_hit, voice_fingerprint = render_voice_clip(
             segment,
-            provider,
+            segment_provider,
             voice_cache_root,
             fallback_fingerprints=fallback_fingerprints,
         )
@@ -312,10 +348,15 @@ def render_program(program_path, output_root, voices_path=None, provider=None, s
         "engine_code_sha256": engine_sha,
         "render_fingerprint": fingerprint,
         "engine_version": __version__,
-        "provider": {
-            "name": provider.name,
-            "processing": getattr(provider, "processing", "unknown"),
-        },
+        "provider": (
+            {
+                "name": provider_records[0]["name"],
+                "processing": provider_records[0]["processing"],
+            }
+            if len(provider_records) == 1
+            else {"name": "multi", "processing": "mixed"}
+        ),
+        "providers": provider_records,
         "profile": profile_name,
         "audio": {
             "file": "audio.mp3",
@@ -330,6 +371,7 @@ def render_program(program_path, output_root, voices_path=None, provider=None, s
             "voice_clip_count": len(resolved),
             "voice_cache_hits": voice_cache_hits,
             "voice_fingerprints": voice_fingerprints,
+            "voice_providers": [segment["provider"] for segment in resolved],
             "ambience": ambience_manifest,
             "ambience_cache_hit": ambience_cache_hit,
             "soundscape": soundscape_manifest,
