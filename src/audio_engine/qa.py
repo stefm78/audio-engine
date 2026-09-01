@@ -161,6 +161,156 @@ def _timeline_checks(manifest, transcript, duration_seconds):
     }
 
 
+
+def _qa_assembly(render_dir, manifest, manifest_path):
+    checks = []
+    audio_name = (manifest.get("audio") or {}).get("file")
+    audio_path = render_dir / audio_name if audio_name else None
+    files_ok = bool(audio_path and audio_path.is_file() and manifest.get("status") == "success")
+    _check(
+        checks,
+        "files",
+        files_ok,
+        "assembly manifest and audio are present" if files_ok else "required assembly files are missing",
+        {"manifest": str(manifest_path), "audio": str(audio_path) if audio_path else None},
+    )
+    if not files_ok:
+        report = {
+            "schema_version": 1,
+            "status": "FAIL",
+            "render_id": manifest.get("id"),
+            "kind": "assembly",
+            "failed_checks": ["files"],
+            "checks": checks,
+        }
+        (render_dir / "qa-report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return report
+
+    duration = probe_duration_seconds(audio_path)
+    declared_duration = (manifest.get("audio") or {}).get("duration_seconds")
+    duration_ok = (
+        isinstance(duration, (int, float))
+        and duration > 0.2
+        and isinstance(declared_duration, (int, float))
+        and abs(float(duration) - float(declared_duration)) <= 0.15
+    )
+    _check(
+        checks,
+        "duration",
+        duration_ok,
+        "measured duration matches assembly manifest" if duration_ok else "assembly duration is missing or differs",
+        {"measured_seconds": duration, "manifest_seconds": declared_duration},
+    )
+
+    hashes = {
+        "audio_sha256": _sha256(audio_path),
+        "manifest_sha256": _sha256(manifest_path),
+    }
+    _check(checks, "sha256", all(_HASH_RE.fullmatch(v) for v in hashes.values()), "SHA-256 digests computed for assembly evidence", hashes)
+
+    assembly = manifest.get("assembly") or {}
+    inputs = assembly.get("inputs") or []
+    input_count = assembly.get("input_count")
+    inputs_ok = (
+        isinstance(inputs, list)
+        and len(inputs) > 0
+        and input_count == len(inputs)
+        and all(
+            isinstance(item, dict)
+            and _HASH_RE.fullmatch(str(item.get("sha256") or ""))
+            and isinstance(item.get("duration_seconds"), (int, float))
+            and item["duration_seconds"] > 0
+            and isinstance(item.get("file"), str)
+            and bool(item["file"])
+            for item in inputs
+        )
+    )
+    _check(
+        checks,
+        "assembly_inputs",
+        inputs_ok,
+        "assembly inputs are content-hashed and duration-qualified" if inputs_ok else "assembly input evidence is incomplete",
+        {"input_count": input_count, "inputs": inputs},
+    )
+
+    profile_name = manifest.get("profile", "speech")
+    channels = int((manifest.get("audio") or {}).get("channels") or 1)
+    profile = get_profile(profile_name, stereo=channels == 2)
+    loudness = _loudness_metrics(audio_path)
+    clipping_ok = loudness["true_peak_dbtp"] <= -0.1
+    _check(checks, "clipping", clipping_ok, "no near-zero-dBTP clipping detected" if clipping_ok else "true peak is at or near clipping", loudness)
+
+    loudness_delta = abs(loudness["integrated_lufs"] - float(profile["loudness_lufs"]))
+    peak_margin = loudness["true_peak_dbtp"] - float(profile["true_peak_db"])
+    levels_ok = loudness_delta <= 2.0 and peak_margin <= 1.5
+    _check(
+        checks,
+        "levels",
+        levels_ok,
+        "assembly loudness is within production tolerance" if levels_ok else "assembly loudness or true peak is outside tolerance",
+        {
+            **loudness,
+            "target_lufs": profile["loudness_lufs"],
+            "target_true_peak_dbtp": profile["true_peak_db"],
+            "loudness_delta_lu": round(loudness_delta, 3),
+            "true_peak_margin_db": round(peak_margin, 3),
+        },
+    )
+
+    silence = _silence_metrics(audio_path, float(duration or 0))
+    declared_pauses = [float(item.get("pause_after_ms", 0)) for item in inputs if isinstance(item, dict)]
+    allowed_longest = max(4.0, (max(declared_pauses, default=0.0) / 1000.0) + 2.0)
+    silence_ok = silence["longest_seconds"] <= allowed_longest and silence["ratio"] <= 0.55
+    _check(
+        checks,
+        "silence",
+        silence_ok,
+        "no abnormal assembly silence detected" if silence_ok else "abnormal assembly silence detected",
+        {**silence, "allowed_longest_seconds": round(allowed_longest, 3)},
+    )
+
+    provenance = {
+        "source_sha256": manifest.get("source_sha256"),
+        "engine_code_sha256": manifest.get("engine_code_sha256"),
+        "render_fingerprint": manifest.get("render_fingerprint"),
+        "engine_version": manifest.get("engine_version"),
+    }
+    provenance_ok = (
+        all(_HASH_RE.fullmatch(str(provenance[key] or "")) for key in ("source_sha256", "engine_code_sha256", "render_fingerprint"))
+        and bool(provenance["engine_version"])
+        and inputs_ok
+    )
+    _check(
+        checks,
+        "provenance",
+        provenance_ok,
+        "assembly is strongly traceable to plan, engine code and content-hashed inputs" if provenance_ok else "assembly provenance is incomplete",
+        provenance,
+    )
+
+    failed = [check["id"] for check in checks if check["status"] != "PASS"]
+    report = {
+        "schema_version": 1,
+        "status": "PASS" if not failed else "FAIL",
+        "render_id": manifest.get("id"),
+        "kind": "assembly",
+        "failed_checks": failed,
+        "reproducibility": {
+            "grade": "traceable-local-assembly",
+            "bit_exact_rerender_verified": False,
+            "note": "QA binds the assembly to exact input hashes and engine code; it does not claim cross-runtime bit-exact encoder output.",
+        },
+        "checks": checks,
+    }
+    (render_dir / "qa-report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return report
+
 def qa_render(render_dir):
     render_dir = Path(render_dir)
     checks = []
@@ -168,6 +318,8 @@ def qa_render(render_dir):
     if not manifest_path.is_file():
         raise FileNotFoundError(f"Missing render manifest: {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("assembly") is not None and not manifest.get("transcript"):
+        return _qa_assembly(render_dir, manifest, manifest_path)
 
     audio_name = (manifest.get("audio") or {}).get("file")
     transcript_name = manifest.get("transcript")
