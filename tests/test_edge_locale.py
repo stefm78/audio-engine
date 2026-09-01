@@ -20,6 +20,47 @@ class EdgeLocaleTests(unittest.TestCase):
         )
         self.assertEqual(_speech_locale(communicate), "fr-FR")
 
+    def test_unavailable_voice_is_reported_explicitly_after_provider_retries(self):
+        class FakeNoAudioReceived(Exception):
+            pass
+
+        class FakeCommunicate:
+            def __init__(self, text, voice, rate, pitch, volume):
+                self.voice = voice
+
+            async def save(self, path):
+                raise FakeNoAudioReceived("no audio")
+
+        async def fake_list_voices():
+            return [
+                {"ShortName": "fr-FR-HenriNeural", "Locale": "fr-FR"},
+                {"ShortName": "fr-FR-DeniseNeural", "Locale": "fr-FR"},
+            ]
+
+        with tempfile.TemporaryDirectory() as temp_value:
+            output = Path(temp_value) / "voice.mp3"
+            with (
+                patch("audio_engine.providers.edge.edge_tts.Communicate", FakeCommunicate),
+                patch(
+                    "audio_engine.providers.edge.edge_tts.exceptions.NoAudioReceived",
+                    FakeNoAudioReceived,
+                ),
+                patch("audio_engine.providers.edge.edge_tts.list_voices", fake_list_voices),
+                patch("audio_engine.providers.edge.asyncio.sleep", return_value=None),
+            ):
+                provider = EdgeProvider()
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Edge voice is unavailable.*fr-FR-AlainNeural.*No fallback",
+                ):
+                    asyncio.run(provider.synthesize_async({
+                        "text": "Bonjour.",
+                        "voice": "fr-FR-AlainNeural",
+                        "rate": "+0%",
+                        "pitch": "+0Hz",
+                        "volume": "+0%",
+                    }, output))
+
     def test_provider_attaches_explicit_language_locale_before_save(self):
         captured = {}
 
