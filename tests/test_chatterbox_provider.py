@@ -86,10 +86,10 @@ class ChatterboxProviderTests(unittest.TestCase):
                 stdout="ffmpeg version 6.1.1\n",
             )
             with patch(
-                "audio_engine.providers.chatterbox_mtl_v3.shutil.which",
+                "audio_engine.providers.local_runtime.shutil.which",
                 side_effect=lambda command: None if command == "ffprobe" else "/usr/bin/ffmpeg",
             ), patch(
-                "audio_engine.providers.chatterbox_mtl_v3.subprocess.run",
+                "audio_engine.providers.local_runtime.subprocess.run",
                 return_value=fake_probe,
             ):
                 with self.assertRaisesRegex(
@@ -115,10 +115,10 @@ class ChatterboxProviderTests(unittest.TestCase):
             def make_provider(version):
                 fake = types.SimpleNamespace(returncode=0, stdout=version + "\n")
                 with patch(
-                    "audio_engine.providers.chatterbox_mtl_v3.shutil.which",
+                    "audio_engine.providers.local_runtime.shutil.which",
                     side_effect=lambda command: f"/usr/bin/{command}",
                 ), patch(
-                    "audio_engine.providers.chatterbox_mtl_v3.subprocess.run",
+                    "audio_engine.providers.local_runtime.subprocess.run",
                     return_value=fake,
                 ):
                     return ChatterboxMultilingualV3Provider(

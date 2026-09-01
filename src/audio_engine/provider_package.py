@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import re
+import tarfile
 import urllib.request
 from pathlib import Path
 
@@ -165,12 +166,25 @@ def validate_provider_package(package, package_path=None, workspace_root=".", ve
         if source is not None:
             if not isinstance(source, dict):
                 errors.append(f"references[{i}].source must be an object")
-            elif source.get("type") != "github_release":
-                errors.append(f"references[{i}].source.type must be 'github_release'")
+            elif source.get("type") not in ("github_release", "github_release_archive"):
+                errors.append(
+                    f"references[{i}].source.type must be 'github_release' "
+                    "or 'github_release_archive'"
+                )
             else:
                 for field in ("repository", "tag", "asset"):
                     if not _non_empty(source.get(field)):
                         errors.append(f"references[{i}].source.{field} is required")
+                if source.get("type") == "github_release_archive":
+                    _validate_sha(
+                        source.get("asset_sha256"),
+                        f"references[{i}].source.asset_sha256",
+                        errors,
+                    )
+                    if not _non_empty(source.get("member_basename")):
+                        errors.append(
+                            f"references[{i}].source.member_basename is required"
+                        )
 
     if verify_files:
         root = Path(workspace_root).resolve()
@@ -348,7 +362,9 @@ def hydrate_provider_references(path, workspace_root="."):
         url = f"https://github.com/{repository}/releases/download/{tag}/{asset}"
         target.parent.mkdir(parents=True, exist_ok=True)
         temp = target.with_suffix(target.suffix + ".download")
+        extracted = target.with_suffix(target.suffix + ".extracted")
         temp.unlink(missing_ok=True)
+        extracted.unlink(missing_ok=True)
         request = urllib.request.Request(
             url,
             headers={"User-Agent": "recit-audio-engine-provider-hydration/1"},
@@ -360,15 +376,51 @@ def hydrate_provider_references(path, workspace_root="."):
                     if not chunk:
                         break
                     handle.write(chunk)
-            actual = _sha256(temp)
+
+            if source["type"] == "github_release_archive":
+                archive_actual = _sha256(temp)
+                if archive_actual != source["asset_sha256"]:
+                    raise ContractError(
+                        f"reference archive SHA-256 mismatch for {item['id']}: "
+                        f"{archive_actual} != {source['asset_sha256']}"
+                    )
+                basename = source["member_basename"]
+                with tarfile.open(temp, mode="r:*") as archive:
+                    members = [
+                        member
+                        for member in archive.getmembers()
+                        if member.isfile() and Path(member.name).name == basename
+                    ]
+                    if len(members) != 1:
+                        raise ContractError(
+                            f"reference archive member {basename!r} must resolve exactly once; "
+                            f"found {len(members)}"
+                        )
+                    handle = archive.extractfile(members[0])
+                    if handle is None:
+                        raise ContractError(
+                            f"reference archive member could not be read: {basename!r}"
+                        )
+                    with extracted.open("wb") as output:
+                        while True:
+                            chunk = handle.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            output.write(chunk)
+                source_file = extracted
+            else:
+                source_file = temp
+
+            actual = _sha256(source_file)
             if actual != item["sha256"]:
                 raise ContractError(
                     f"hydrated reference SHA-256 mismatch for {item['id']}: "
                     f"{actual} != {item['sha256']}"
                 )
-            temp.replace(target)
+            source_file.replace(target)
         finally:
             temp.unlink(missing_ok=True)
+            extracted.unlink(missing_ok=True)
 
         hydrated.append({
             "id": item["id"],
@@ -376,6 +428,7 @@ def hydrate_provider_references(path, workspace_root="."):
             "sha256": item["sha256"],
             "cache_hit": False,
             "source": url,
+            "source_type": source["type"],
         })
 
     return {

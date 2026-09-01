@@ -29,6 +29,13 @@ class ProductionWorkflowContractTests(unittest.TestCase):
             self.workflow,
         )
 
+    def test_local_provider_runtime_installers_are_explicit(self):
+        self.assertIn("install_chatterbox_mtl_v3_h1b.sh", self.workflow)
+        self.assertIn("install_voxcpm2_p4_runtime.sh", self.workflow)
+        self.assertIn("requirements/chatterbox-mtl-v3-h1b-runtime.txt", self.workflow)
+        self.assertIn("requirements/voxcpm2-p4-runtime.txt", self.workflow)
+        self.assertIn("voxcpm2)", self.workflow)
+
     def test_production_releases_never_clobber_existing_assets(self):
         self.assertNotIn("gh release upload", self.workflow)
         self.assertNotIn("--clobber", self.workflow)

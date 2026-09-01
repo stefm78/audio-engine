@@ -1,6 +1,8 @@
 import hashlib
+import io
 import json
 import sys
+import tarfile
 import tempfile
 import types
 import unittest
@@ -165,6 +167,57 @@ class ProviderPackageTests(unittest.TestCase):
                 cached = hydrate_provider_references(path, workspace_root=root)
             self.assertTrue(cached["references"][0]["cache_hit"])
             second.assert_not_called()
+
+    def test_hydrate_reference_from_hashed_release_archive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            payload = b"immutable-reference"
+            payload_sha = hashlib.sha256(payload).hexdigest()
+
+            archive_buffer = io.BytesIO()
+            with tarfile.open(fileobj=archive_buffer, mode="w:xz") as archive:
+                info = tarfile.TarInfo("nested/reference-claire.wav")
+                info.size = len(payload)
+                archive.addfile(info, io.BytesIO(payload))
+            archive_bytes = archive_buffer.getvalue()
+            archive_sha = hashlib.sha256(archive_bytes).hexdigest()
+
+            package = self.package()
+            package["references"] = [{
+                "id": "claire",
+                "path": "refs/reference-claire.wav",
+                "sha256": payload_sha,
+                "source": {
+                    "type": "github_release_archive",
+                    "repository": "owner/repo",
+                    "tag": "reference-pack-v1",
+                    "asset": "reference-pack-v1.tar.xz",
+                    "asset_sha256": archive_sha,
+                    "member_basename": "reference-claire.wav",
+                },
+            }]
+            path = root / "provider.json"
+            path.write_text(json.dumps(package), encoding="utf-8")
+
+            class Response:
+                def __enter__(self):
+                    self.stream = io.BytesIO(archive_bytes)
+                    return self
+                def __exit__(self, *args):
+                    return False
+                def read(self, size=-1):
+                    return self.stream.read(size)
+
+            with patch(
+                "audio_engine.provider_package.urllib.request.urlopen",
+                return_value=Response(),
+            ):
+                report = hydrate_provider_references(path, workspace_root=root)
+
+            target = root / "refs" / "reference-claire.wav"
+            self.assertEqual(target.read_bytes(), payload)
+            self.assertEqual(report["references"][0]["source_type"], "github_release_archive")
+            self.assertFalse(report["references"][0]["cache_hit"])
 
     def test_verify_voice_pack_and_reference_hashes(self):
         with tempfile.TemporaryDirectory() as tmp:

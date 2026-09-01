@@ -172,7 +172,9 @@ jobs:
         with:
           python-version: '${{ matrix.python_version }}'
           cache: pip
-          cache-dependency-path: .audio-engine/requirements/chatterbox-mtl-v3-h1b-runtime.txt
+          cache-dependency-path: |
+            .audio-engine/requirements/chatterbox-mtl-v3-h1b-runtime.txt
+            .audio-engine/requirements/voxcpm2-p4-runtime.txt
 
       - name: Restore optional promoted-model cache
         if: matrix.provider_package_count != 0
@@ -207,6 +209,12 @@ jobs:
               chatterbox-multilingual-v3)
                 if [[ " ${installed[*]} " != *" $provider_id "* ]]; then
                   bash .audio-engine/scripts/install_chatterbox_mtl_v3_h1b.sh
+                  installed+=("$provider_id")
+                fi
+                ;;
+              voxcpm2)
+                if [[ " ${installed[*]} " != *" $provider_id "* ]]; then
+                  bash .audio-engine/scripts/install_voxcpm2_p4_runtime.sh
                   installed+=("$provider_id")
                 fi
                 ;;

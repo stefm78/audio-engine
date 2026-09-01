@@ -3,6 +3,7 @@ from pathlib import Path
 from ..contract import ContractError, load_json
 from ..provider_package import validate_provider_package
 from .chatterbox_mtl_v3 import ChatterboxMultilingualV3Provider
+from .voxcpm2 import VoxCPM2Provider
 
 
 def build_promoted_providers(
@@ -25,6 +26,13 @@ def build_promoted_providers(
         if provider_id == "chatterbox-multilingual-v3":
             model_dir = cache_root / provider_id / package["model"]["revision"]
             provider = ChatterboxMultilingualV3Provider(
+                package_path,
+                workspace_root=workspace_root,
+                model_dir=model_dir,
+            )
+        elif provider_id == "voxcpm2":
+            model_dir = cache_root / provider_id / package["model"]["revision"]
+            provider = VoxCPM2Provider(
                 package_path,
                 workspace_root=workspace_root,
                 model_dir=model_dir,
