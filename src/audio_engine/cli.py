@@ -13,6 +13,7 @@ from .effects import load_capabilities, public_capabilities
 from .preflight import preflight_program
 from .preview import preview_program
 from .production import production_plan, validate_production_manifest
+from .provider_package import provider_package_report
 from .qa import qa_render
 from .render import render_program
 from .sound.acquisition import DEFAULT_PROVIDERS, ensure_sound
@@ -268,6 +269,13 @@ def main(argv=None):
                 )
             else:
                 result = production_plan(args.manifest, workspace_root=args.workspace_root)
+        elif args.command == "provider-package":
+            result = provider_package_report(
+                args.package,
+                workspace_root=args.workspace_root,
+                verify_files=args.verify_files,
+                voice_pack_path=args.voice_pack,
+            )
         elif args.command == "batch":
             result = render_batch(args.pattern, args.out, voices_path=args.voices, sounds_path=args.sounds)
         elif args.command == "qa":
