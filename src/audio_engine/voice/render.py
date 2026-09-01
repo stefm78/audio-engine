@@ -40,6 +40,8 @@ def voice_content_key(segment, provider_name):
         "rate": segment.get("rate", "+0%"),
         "pitch": segment.get("pitch", "+0Hz"),
         "volume": segment.get("volume", "+0%"),
+        "provider_parameters": segment.get("provider_parameters"),
+        "provider_seed": segment.get("provider_seed"),
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
