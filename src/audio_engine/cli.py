@@ -125,11 +125,13 @@ def build_parser():
     )
     production_validate.add_argument("manifest")
     production_validate.add_argument("--verify-files", action="store_true")
+    production_validate.add_argument("--workspace-root", default=".")
     production_plan_parser = production_sub.add_parser(
         "plan",
         help="Verify ready inputs and emit an executor-neutral shard/fan-in plan",
     )
     production_plan_parser.add_argument("manifest")
+    production_plan_parser.add_argument("--workspace-root", default=".")
 
     validate = sub.add_parser("validate", help="Validate a JSON contract")
     validate.add_argument("file")
@@ -253,10 +255,11 @@ def main(argv=None):
                 result = validate_production_manifest(
                     manifest,
                     manifest_path=args.manifest,
+                    workspace_root=args.workspace_root,
                     verify_files=args.verify_files,
                 )
             else:
-                result = production_plan(args.manifest)
+                result = production_plan(args.manifest, workspace_root=args.workspace_root)
         elif args.command == "batch":
             result = render_batch(args.pattern, args.out, voices_path=args.voices, sounds_path=args.sounds)
         elif args.command == "assemble":
