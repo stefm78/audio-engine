@@ -331,8 +331,17 @@ def main(argv=None):
                     workspace_root=args.workspace_root,
                     verify_files=args.verify_files,
                 )
+            elif args.production_command == "plan":
+                result = production_plan(
+                    args.manifest,
+                    workspace_root=args.workspace_root,
+                )
             else:
-                result = production_plan(args.manifest, workspace_root=args.workspace_root)
+                result = hydrate_production_unit_assets(
+                    args.manifest,
+                    args.unit,
+                    workspace_root=args.workspace_root,
+                )
         elif args.command == "provider-package":
             if args.provider_package_command == "validate":
                 result = provider_package_report(
