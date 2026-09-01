@@ -251,14 +251,17 @@ jobs:
               --verify-files --workspace-root . --voice-pack "$VOICE_PACK"
           done
 
-      - name: Restore optional scene cache
+      - name: Restore optional content-addressed scene cache
         uses: actions/cache@v4
         with:
           path: generated/work/${{ matrix.id }}/.cache
           key: >-
             ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}-
-            ${{ needs.plan.outputs.engine_ref }}-${{ matrix.id }}-
-            ${{ matrix.program_sha256 }}-${{ matrix.voice_pack_sha256 }}
+            scene-v2-${{ matrix.id }}-${{ matrix.program_sha256 }}-
+            ${{ matrix.voice_pack_sha256 }}-${{ matrix.provider_packages_fingerprint }}-
+            ${{ needs.plan.outputs.engine_ref }}
+          restore-keys: |
+            ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}-scene-v2-${{ matrix.id }}-
 
       - id: produce
         name: Render and machine-qualify scene shard
