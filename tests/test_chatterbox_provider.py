@@ -81,9 +81,16 @@ class ChatterboxProviderTests(unittest.TestCase):
                 "reference_version": "7:6.1.1-3ubuntu5",
             }]
             package_path.write_text(json.dumps(package), encoding="utf-8")
+            fake_probe = types.SimpleNamespace(
+                returncode=0,
+                stdout="ffmpeg version 6.1.1\n",
+            )
             with patch(
                 "audio_engine.providers.chatterbox_mtl_v3.shutil.which",
                 side_effect=lambda command: None if command == "ffprobe" else "/usr/bin/ffmpeg",
+            ), patch(
+                "audio_engine.providers.chatterbox_mtl_v3.subprocess.run",
+                return_value=fake_probe,
             ):
                 with self.assertRaisesRegex(
                     ContractError,
