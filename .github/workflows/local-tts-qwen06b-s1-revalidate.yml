@@ -1,0 +1,161 @@
+name: LOCAL TTS Qwen 0.6B S1 immutable emotion revalidation
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SOURCE_RUN_ID: "32823632721"
+  SOURCE_ARTIFACT: voice-casting-qwen3-contrast-emotion-killer-recovery
+  S1_RUN_ID: "33493429590"
+  S1_ARTIFACT: local-tts-qwen06b-s1-render
+  CANDIDATE_SHA256: a34e6a4d59af6607f1743786e27298f316c80349b6146e8db90049126b7a6157
+  PANIC_SHA256: ac92fd1f8346b981ac7518e1e698cf8b1c31a96dff069ad60a2d017a17ff9d7f
+  SAD_SHA256: d2091868592c3c8691c2c0c6a39adaa3613d4941d087c36e4be69e5395a19c84
+  SUPERB_REPO: superb/wav2vec2-base-superb-er
+  SUPERB_REV: 54057c4c97e3d100390e1f3c30c3298b552109bd
+  SUPERB_MODEL_SHA256: dac0f46128deec048751ce33eb1a9caecb570904d3d6cf732d6ec345cd6c2e1b
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+
+jobs:
+  validate-immutable:
+    if: github.head_ref == 'lab/LOCAL-TTS-WP-002-s1-emotion-revalidate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Recover exact immutable candidate and reference clips
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence source weights
+          gh run download "$S1_RUN_ID" --repo "${{ github.repository }}" -n "$S1_ARTIFACT" -D evidence
+          gh run download "$SOURCE_RUN_ID" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D source
+          test "$(sha256sum evidence/candidate.wav | cut -d' ' -f1)" = "$CANDIDATE_SHA256"
+          test "$(sha256sum source/clips/claire--panic.wav | cut -d' ' -f1)" = "$PANIC_SHA256"
+          test "$(sha256sum source/clips/claire--sadness-contained.wav | cut -d' ' -f1)" = "$SAD_SHA256"
+          printf '%s\n'             "candidate=$CANDIDATE_SHA256"             "panic=$PANIC_SHA256"             "sadness=$SAD_SHA256"             "synthesis_rerun=false" > evidence/revalidation-provenance.txt
+
+      - name: Install frozen validation runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libsndfile1 curl
+          python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.7.1
+          python -m pip install --disable-pip-version-check numpy==1.26.4 scipy==1.11.4 soundfile==0.12.1 transformers==4.40.1
+
+      - name: Download exact SUPERB checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://huggingface.co/$SUPERB_REPO/resolve/$SUPERB_REV"
+          for F in config.json preprocessor_config.json pytorch_model.bin; do
+            curl --fail --location --retry 6 --retry-all-errors "$BASE/$F?download=true" -o "weights/$F"
+          done
+          test "$(sha256sum weights/pytorch_model.bin | cut -d' ' -f1)" = "$SUPERB_MODEL_SHA256"
+
+      - name: Strict same-runtime source-relative emotion gate
+        id: emotion
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          import numpy as np,soundfile as sf,torch
+          from scipy.signal import resample_poly
+          from transformers import AutoConfig,AutoFeatureExtractor,AutoModelForAudioClassification
+
+          torch.manual_seed(0)
+          torch.set_num_threads(2)
+          root=Path("weights")
+          cfg=AutoConfig.from_pretrained(root,local_files_only=True)
+          ex=AutoFeatureExtractor.from_pretrained(root,local_files_only=True)
+
+          state=torch.load(root/"pytorch_model.bin",map_location="cpu",weights_only=True)
+          renames={
+            "wav2vec2.encoder.pos_conv_embed.conv.weight_g":
+              "wav2vec2.encoder.pos_conv_embed.conv.parametrizations.weight.original0",
+            "wav2vec2.encoder.pos_conv_embed.conv.weight_v":
+              "wav2vec2.encoder.pos_conv_embed.conv.parametrizations.weight.original1",
+          }
+          applied={}
+          for old,new in renames.items():
+              if old in state:
+                  if new in state: raise SystemExit("both legacy and parametrized keys present")
+                  state[new]=state.pop(old); applied[old]=new
+
+          model=AutoModelForAudioClassification.from_config(cfg)
+          incompatible=model.load_state_dict(state,strict=False)
+          missing=list(incompatible.missing_keys); unexpected=list(incompatible.unexpected_keys)
+          load_ok=(len(applied)==2 and not missing and not unexpected)
+          load_info={"renames":applied,"missing_keys":missing,"unexpected_keys":unexpected,"strict_equivalent":load_ok}
+          Path("evidence/superb-load.json").write_text(json.dumps(load_info,indent=2)+"\n")
+          print(json.dumps(load_info,indent=2))
+          if not load_ok: raise SystemExit("SUPERB_STRICT_LOAD_REJECT")
+          model.eval()
+
+          def profile(path):
+              y,sr=sf.read(path,dtype="float32")
+              y=np.asarray(y,dtype=np.float32)
+              if y.ndim==2: y=y.mean(1)
+              if sr!=16000:
+                  g=int(np.gcd(sr,16000))
+                  y=resample_poly(y,16000//g,sr//g).astype(np.float32)
+              x=ex(y,sampling_rate=16000,return_tensors="pt",padding=False)
+              with torch.inference_mode():
+                  raw=torch.softmax(model(**x).logits[0],dim=-1).cpu().numpy().astype(np.float64)
+              norm=float(np.linalg.norm(raw))
+              if not np.isfinite(raw).all() or norm<=0: raise SystemExit(f"bad profile {path}")
+              return raw,raw/norm
+
+          c,cn=profile("evidence/candidate.wav")
+          p,pn=profile("source/clips/claire--panic.wav")
+          s,sn=profile("source/clips/claire--sadness-contained.wav")
+          cp=float(cn@pn); cs=float(cn@sn); margin=cp-cs; ok=margin>0
+          out={
+            "schema":"local-tts-qwen06b-s1-emotion-revalidation-v1",
+            "status":"pass" if ok else "reject",
+            "candidate_sha256":"a34e6a4d59af6607f1743786e27298f316c80349b6146e8db90049126b7a6157",
+            "candidate_profile":[float(v) for v in c],
+            "panic_reference_profile":[float(v) for v in p],
+            "sadness_reference_profile":[float(v) for v in s],
+            "similarity_panic":cp,
+            "similarity_sadness":cs,
+            "target_margin":margin,
+            "rule":"same fully-loaded model runtime; candidate closer to immutable panic than immutable contained-sadness",
+            "threshold_changed":False,
+            "candidate_regenerated":False,
+            "semantic_label_claim":False,
+          }
+          Path("evidence/emotion-revalidated.json").write_text(json.dumps(out,indent=2)+"\n")
+          print(json.dumps(out,indent=2))
+          with open(__import__("os").environ["GITHUB_OUTPUT"],"a") as f:
+              f.write("pass="+("true" if ok else "false")+"\n")
+          PY
+
+      - name: Upload immutable revalidation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-tts-qwen06b-s1-emotion-revalidation
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Surface corrected verdict
+        if: always()
+        shell: bash
+        run: |
+          test "${{ steps.emotion.outputs.pass }}" = "true"
+          echo LOCAL_TTS_QWEN06B_S1_EMOTION_REVALIDATED_PASS
