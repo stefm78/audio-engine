@@ -1,0 +1,25 @@
+name: Chatterbox tokenizer fingerprint one-shot
+
+on:
+  push:
+    branches:
+      - prod/chatterbox-mtl-v3-provider-v1
+    paths:
+      - .github/workflows/chatterbox-tokenizer-fingerprint.yml
+
+permissions:
+  contents: read
+
+jobs:
+  fingerprint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download exact tokenizer revision and hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://huggingface.co/ResembleAI/chatterbox/resolve/5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18/grapheme_mtl_merged_expanded_v1.json?download=true"
+          curl --fail --location --retry 3 --output tokenizer.json "$url"
+          test "$(wc -c < tokenizer.json)" -gt 60000
+          sha256sum tokenizer.json
