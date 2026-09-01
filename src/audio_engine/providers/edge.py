@@ -92,6 +92,20 @@ class EdgeProvider:
                 last_error = exc
                 if attempt == 0:
                     await asyncio.sleep(1.5)
+        if isinstance(last_error, edge_tts.exceptions.NoAudioReceived):
+            try:
+                voices = await edge_tts.list_voices()
+                available = {
+                    item.get("ShortName") or item.get("Name")
+                    for item in voices
+                }
+            except Exception:
+                available = None
+            if available is not None and segment["voice"] not in available:
+                raise RuntimeError(
+                    f"Edge voice is unavailable in the current provider catalog: "
+                    f"{segment['voice']!r}. No fallback is allowed."
+                ) from last_error
         raise last_error
 
     def synthesize(self, segment, path):
