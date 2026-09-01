@@ -139,9 +139,71 @@ jobs:
           set -euo pipefail
           engine/qwen-c/qwen_tts             -d models/base             --ref-audio source/reference-claire-24k.wav             -l French             --save-voice voices/claire.qvoice             --voice-name Claire             2>&1 | tee evidence/base-extract.log
           test -s voices/claire.qvoice
-          test "$(sha256sum voices/claire.qvoice | cut -d' ' -f1)" = "$EXPECTED_QVOICE_SHA256"
-          python3 engine/qwen-c/tests/qvoice_anatomy.py voices/claire.qvoice | tee evidence/claire-qvoice-anatomy.txt
           sha256sum voices/claire.qvoice | tee evidence/claire-qvoice-sha256.txt
+          python3 engine/qwen-c/tests/qvoice_anatomy.py voices/claire.qvoice | tee evidence/claire-qvoice-anatomy.txt
+          python3 - <<'PY'
+          import hashlib,json,math,os,struct
+          from pathlib import Path
+          p=Path("voices/claire.qvoice")
+          b=p.read_bytes()
+          actual=hashlib.sha256(b).hexdigest()
+          expected=os.environ["EXPECTED_QVOICE_SHA256"]
+          off=0
+          def take(n):
+              global off
+              if off+n>len(b): raise SystemExit("QVOICE_TRUNCATED")
+              v=b[off:off+n]; off+=n; return v
+          def u32(): return struct.unpack("<I",take(4))[0]
+          def f32(): return struct.unpack("<f",take(4))[0]
+          if take(4)!=b"QVCE": raise SystemExit("QVOICE_BAD_MAGIC")
+          version=u32()
+          enc_dim=u32() if version>=2 else 1024
+          emb=struct.unpack("<"+"f"*enc_dim,take(enc_dim*4))
+          ref_text_len=u32(); ref_text=take(ref_text_len).decode("utf-8","strict")
+          n_ref_frames=u32(); take(n_ref_frames*16*4)
+          if take(4)!=b"META": raise SystemExit("QVOICE_META_MISSING")
+          lang_id=u32()
+          lang_name=take(16).split(b"\0",1)[0].decode("utf-8","strict")
+          model_size=u32(); source_enc_dim=u32(); ref_duration=f32()
+          voice_name=take(64).split(b"\0",1)[0].decode("utf-8","strict")
+          flags=u32()
+          if take(4)!=b"TPAD": raise SystemExit("QVOICE_TPAD_MISSING")
+          tpad_hidden=u32(); take(3*tpad_hidden*4)
+          if take(4)!=b"WOVR": raise SystemExit("QVOICE_WOVR_MISSING")
+          wh=u32(); wth=u32(); wcv=u32()
+          wovr_body=wth*wth*2 + wth*4 + wh*wth*2 + wh*4 + wcv*wh*2
+          take(wovr_body)
+          checks={
+            "version_v3":version==3,
+            "enc_dim_1024":enc_dim==1024,
+            "embedding_finite":all(math.isfinite(x) for x in emb),
+            "embedding_nonzero":sum(x*x for x in emb)>1e-8,
+            "xvector_only_no_ref_text":ref_text_len==0 and ref_text=="",
+            "xvector_only_no_ref_codes":n_ref_frames==0,
+            "language_french":lang_name=="French",
+            "voice_claire":voice_name=="Claire",
+            "source_enc_dim_1024":source_enc_dim==1024,
+            "xvector_flag":bool(flags & 1),
+            "tpad_hidden_1024":tpad_hidden==1024,
+            "wovr_dims_expected":[wh,wth,wcv]==[1024,2048,2048],
+            "no_unparsed_tail":off==len(b),
+          }
+          out={
+            "status":"pass" if all(checks.values()) else "reject",
+            "checks":checks,
+            "actual_sha256":actual,
+            "r0_reference_sha256":expected,
+            "binary_sha_matches_r0":actual==expected,
+            "binary_sha_policy":"record-only across GitHub-hosted runners; provenance and structural invariants are authoritative",
+            "version":version,"enc_dim":enc_dim,"lang_id":lang_id,"language":lang_name,
+            "model_size_field":model_size,"source_enc_dim":source_enc_dim,
+            "ref_duration_field":ref_duration,"voice_name":voice_name,"flags":flags,
+            "tpad_hidden":tpad_hidden,"wovr_dims":[wh,wth,wcv],"bytes":len(b),
+          }
+          Path("evidence/qvoice-provenance.json").write_text(json.dumps(out,indent=2)+"\n")
+          print(json.dumps(out,indent=2))
+          if out["status"]!="pass": raise SystemExit("QVOICE_PROVENANCE_REJECT")
+          PY
           rm -rf models/base
           rm -rf ~/.cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-0.6B-Base || true
 
