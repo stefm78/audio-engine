@@ -13,7 +13,11 @@ from .effects import load_capabilities, public_capabilities
 from .preflight import preflight_program
 from .preview import preview_program
 from .providers.factory import build_promoted_providers
-from .production import production_plan, validate_production_manifest
+from .production import (
+    hydrate_production_unit_assets,
+    production_plan,
+    validate_production_manifest,
+)
 from .provider_package import (
     hydrate_provider_model,
     hydrate_provider_references,
@@ -147,6 +151,13 @@ def build_parser():
     )
     production_plan_parser.add_argument("manifest")
     production_plan_parser.add_argument("--workspace-root", default=".")
+    production_assets = production_sub.add_parser(
+        "hydrate-assets",
+        help="Materialize content-addressed assets for one Production unit",
+    )
+    production_assets.add_argument("manifest")
+    production_assets.add_argument("--unit", required=True)
+    production_assets.add_argument("--workspace-root", default=".")
 
     provider_package = sub.add_parser(
         "provider-package",
