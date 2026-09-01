@@ -327,6 +327,13 @@ def production_plan(manifest_path, workspace_root=".", verify_files=True):
                 voice_pack_sha256=unit["voice_pack_sha256"],
                 provider_packages=package_records,
                 provider_package_count=len(package_records),
+                provider_packages_fingerprint=hashlib.sha256(
+                    json.dumps(
+                        package_records,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
                 python_version=(next(iter(python_versions)) if python_versions else "3.12"),
             )
             ready_units.append(item)
