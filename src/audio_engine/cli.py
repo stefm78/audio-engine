@@ -13,7 +13,7 @@ from .effects import load_capabilities, public_capabilities
 from .preflight import preflight_program
 from .preview import preview_program
 from .production import production_plan, validate_production_manifest
-from .provider_package import provider_package_report
+from .provider_package import hydrate_provider_model, provider_package_report
 from .qa import qa_render
 from .render import render_program
 from .sound.acquisition import DEFAULT_PROVIDERS, ensure_sound
@@ -134,6 +134,29 @@ def build_parser():
     )
     production_plan_parser.add_argument("manifest")
     production_plan_parser.add_argument("--workspace-root", default=".")
+
+    provider_package = sub.add_parser(
+        "provider-package",
+        help="Validate and hydrate immutable promoted provider packages",
+    )
+    provider_package_sub = provider_package.add_subparsers(
+        dest="provider_package_command",
+        required=True,
+    )
+    provider_package_validate = provider_package_sub.add_parser(
+        "validate",
+        help="Validate provider/model/runtime/integrity/fallback declarations",
+    )
+    provider_package_validate.add_argument("package")
+    provider_package_validate.add_argument("--verify-files", action="store_true")
+    provider_package_validate.add_argument("--workspace-root", default=".")
+    provider_package_validate.add_argument("--voice-pack", default=None)
+    provider_package_hydrate = provider_package_sub.add_parser(
+        "hydrate-model",
+        help="Download an exact model snapshot and verify every declared SHA-256",
+    )
+    provider_package_hydrate.add_argument("package")
+    provider_package_hydrate.add_argument("--cache-root", default=".provider-models")
 
     qa = sub.add_parser(
         "qa",
@@ -270,12 +293,18 @@ def main(argv=None):
             else:
                 result = production_plan(args.manifest, workspace_root=args.workspace_root)
         elif args.command == "provider-package":
-            result = provider_package_report(
-                args.package,
-                workspace_root=args.workspace_root,
-                verify_files=args.verify_files,
-                voice_pack_path=args.voice_pack,
-            )
+            if args.provider_package_command == "validate":
+                result = provider_package_report(
+                    args.package,
+                    workspace_root=args.workspace_root,
+                    verify_files=args.verify_files,
+                    voice_pack_path=args.voice_pack,
+                )
+            else:
+                result = hydrate_provider_model(
+                    args.package,
+                    cache_root=args.cache_root,
+                )
         elif args.command == "batch":
             result = render_batch(args.pattern, args.out, voices_path=args.voices, sounds_path=args.sounds)
         elif args.command == "qa":
