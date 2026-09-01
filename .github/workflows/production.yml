@@ -1,0 +1,746 @@
+name: Production fan-out / fan-in
+
+on:
+  workflow_call:
+    inputs:
+      manifest_path:
+        description: Workspace-relative immutable Production Manifest v1
+        required: true
+        type: string
+      artifact_prefix:
+        description: Prefix for production artifacts
+        required: false
+        default: production
+        type: string
+      cache_namespace:
+        description: Cache namespace; cache never affects correctness
+        required: false
+        default: production-v1
+        type: string
+      max_parallel:
+        description: Maximum concurrent scene renders
+        required: false
+        default: 12
+        type: number
+      publish_release:
+        description: Publish a GitHub Release only when the master is machine-ready
+        required: false
+        default: false
+        type: boolean
+      release_tag:
+        description: Required when publish_release=true
+        required: false
+        default: ''
+        type: string
+      release_prerelease:
+        description: Mark the published release as prerelease
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      engine_ref: ${{ steps.emit.outputs.engine_ref }}
+      ready_units: ${{ steps.emit.outputs.ready_units }}
+      ready_unit_count: ${{ steps.emit.outputs.ready_unit_count }}
+      ready_assemblies: ${{ steps.emit.outputs.ready_assemblies }}
+      ready_assembly_count: ${{ steps.emit.outputs.ready_assembly_count }}
+      master_ready: ${{ steps.emit.outputs.master_ready }}
+      manifest_sha256: ${{ steps.emit.outputs.manifest_sha256 }}
+    steps:
+      - name: Checkout caller
+        uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - id: pin
+        name: Read exact engine pin
+        shell: bash
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+        run: |
+          set -euo pipefail
+          engine_ref="$(python - <<'PY'
+          import json, os
+          data=json.load(open(os.environ["MANIFEST_PATH"], encoding="utf-8"))
+          value=data.get("engine_ref")
+          if not isinstance(value,str) or len(value)!=40:
+              raise SystemExit("Production manifest engine_ref must be an exact 40-char SHA")
+          print(value)
+          PY
+          )"
+          echo "engine_ref=$engine_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout pinned Audio Engine
+        uses: actions/checkout@v6
+        with:
+          repository: stefm78/audio-engine
+          ref: ${{ steps.pin.outputs.engine_ref }}
+          path: .audio-engine
+
+      - name: Install pinned Audio Engine
+        run: python -m pip install --disable-pip-version-check ./.audio-engine
+
+      - name: Verify immutable inputs and build plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p generated/production-plan
+          audio-engine production plan "${{ inputs.manifest_path }}" --workspace-root .             > generated/production-plan/production-plan.json
+
+      - id: emit
+        name: Emit shard and fan-in matrices
+        shell: bash
+        env:
+          PLAN: generated/production-plan/production-plan.json
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          plan=json.load(open(os.environ["PLAN"], encoding="utf-8"))
+          ready_units=plan["ready_units"]
+          ready_assemblies=[a for a in plan["assemblies"] if a["state"]=="ready"]
+          values={
+              "engine_ref": plan["engine_ref"],
+              "ready_units": json.dumps(ready_units,separators=(",",":")),
+              "ready_unit_count": str(len(ready_units)),
+              "ready_assemblies": json.dumps(ready_assemblies,separators=(",",":")),
+              "ready_assembly_count": str(len(ready_assemblies)),
+              "master_ready": "true" if plan["master"]["state"]=="ready" else "false",
+              "manifest_sha256": plan["manifest_sha256"],
+          }
+          output=Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8") as handle:
+              for key,value in values.items():
+                  handle.write(f"{key}={value}\n")
+          PY
+
+      - name: Upload immutable production plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_prefix }}-plan
+          path: generated/production-plan/production-plan.json
+          if-no-files-found: error
+          retention-days: 14
+
+  render_units:
+    needs: plan
+    if: needs.plan.outputs.ready_unit_count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.ready_units) }}
+    steps:
+      - name: Checkout caller
+        uses: actions/checkout@v6
+
+      - name: Checkout exact Audio Engine
+        uses: actions/checkout@v6
+        with:
+          repository: stefm78/audio-engine
+          ref: ${{ needs.plan.outputs.engine_ref }}
+          path: .audio-engine
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install exact Audio Engine
+        run: python -m pip install --disable-pip-version-check ./.audio-engine
+
+      - name: Refuse unsupported Production provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.provider }}" != "edge" ]]; then
+            echo "ERROR: Production provider '${{ matrix.provider }}' is not promoted by this engine runtime." >&2
+            echo "No fallback is allowed." >&2
+            exit 2
+          fi
+
+      - name: Restore optional scene cache
+        uses: actions/cache@v4
+        with:
+          path: generated/work/${{ matrix.id }}/.cache
+          key: >-
+            ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}-
+            ${{ needs.plan.outputs.engine_ref }}-${{ matrix.id }}-
+            ${{ matrix.program_sha256 }}-${{ matrix.voice_pack_sha256 }}
+
+      - id: produce
+        name: Render and machine-qualify scene shard
+        shell: bash
+        env:
+          UNIT_ID: ${{ matrix.id }}
+          ASSEMBLY_ID: ${{ matrix.assembly }}
+          PROGRAM: ${{ matrix.program }}
+          PROGRAM_SHA: ${{ matrix.program_sha256 }}
+          VOICE_PACK: ${{ matrix.voice_pack }}
+          VOICE_PACK_SHA: ${{ matrix.voice_pack_sha256 }}
+          PROVIDER: ${{ matrix.provider }}
+          ENGINE_REF: ${{ needs.plan.outputs.engine_ref }}
+          MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
+        run: |
+          set -u
+          work="generated/work/$UNIT_ID"
+          publish="generated/unit-artifacts/$UNIT_ID"
+          mkdir -p "$work" "$publish"
+
+          program_id="$(python - <<'PY'
+          import json, os
+          print(json.load(open(os.environ["PROGRAM"], encoding="utf-8"))["id"])
+          PY
+          )"
+          render_dir="$work/$program_id"
+
+          state="failed"
+          reason=""
+          set +e
+          audio-engine render "$PROGRAM" --out "$work" --voices "$VOICE_PACK"
+          render_rc=$?
+          set -e
+          if [[ $render_rc -ne 0 ]]; then
+            reason="render_failed_rc_$render_rc"
+          else
+            set +e
+            python - "$render_dir/manifest.json" <<'PY'
+          import json, os, sys
+          m=json.load(open(sys.argv[1], encoding="utf-8"))
+          expected={
+              "source_sha256": os.environ["PROGRAM_SHA"],
+              "voice_config_sha256": os.environ["VOICE_PACK_SHA"],
+          }
+          for key,value in expected.items():
+              if m.get(key)!=value:
+                  raise SystemExit(f"{key} mismatch: {m.get(key)} != {value}")
+          provider=(m.get("provider") or {}).get("name")
+          if provider!=os.environ["PROVIDER"]:
+              raise SystemExit(f"provider mismatch: {provider} != {os.environ['PROVIDER']}")
+          PY
+            bind_rc=$?
+            if [[ $bind_rc -eq 0 ]]; then
+              audio-engine qa "$render_dir"
+              qa_rc=$?
+            else
+              qa_rc=98
+            fi
+            set -e
+            if [[ $bind_rc -ne 0 ]]; then
+              reason="production_manifest_binding_failed"
+            elif [[ $qa_rc -ne 0 ]]; then
+              reason="qa_command_failed_rc_$qa_rc"
+            else
+              qa_status="$(python -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["status"])' "$render_dir/qa-report.json")"
+              if [[ "$qa_status" == "PASS" ]]; then
+                state="ready"
+              else
+                reason="automatic_qa_failed"
+              fi
+            fi
+          fi
+
+          if [[ -d "$render_dir" ]]; then
+            mkdir -p "$publish/$program_id"
+            for name in audio.mp3 manifest.json transcript.json qa-report.json; do
+              [[ -f "$render_dir/$name" ]] && cp "$render_dir/$name" "$publish/$program_id/$name"
+            done
+          fi
+
+          RESULT_STATE="$state" RESULT_REASON="$reason" RESULT_PATH="$publish/unit-result.json" python - <<'PY'
+          import json, os
+          from pathlib import Path
+          result={
+              "schema_version":1,
+              "unit_id":os.environ["UNIT_ID"],
+              "assembly":os.environ["ASSEMBLY_ID"],
+              "state":os.environ["RESULT_STATE"],
+              "reason":os.environ["RESULT_REASON"] or None,
+              "program":os.environ["PROGRAM"],
+              "program_sha256":os.environ["PROGRAM_SHA"],
+              "voice_pack":os.environ["VOICE_PACK"],
+              "voice_pack_sha256":os.environ["VOICE_PACK_SHA"],
+              "provider":os.environ["PROVIDER"],
+              "engine_ref":os.environ["ENGINE_REF"],
+              "production_manifest_sha256":os.environ["MANIFEST_SHA"],
+          }
+          Path(os.environ["RESULT_PATH"]).write_text(
+              json.dumps(result, ensure_ascii=False, indent=2)+"\n", encoding="utf-8"
+          )
+          PY
+
+      - name: Finalize unit result
+        if: always()
+        shell: bash
+        env:
+          UNIT_ID: ${{ matrix.id }}
+          ASSEMBLY_ID: ${{ matrix.assembly }}
+          PROGRAM: ${{ matrix.program }}
+          PROGRAM_SHA: ${{ matrix.program_sha256 }}
+          VOICE_PACK: ${{ matrix.voice_pack }}
+          VOICE_PACK_SHA: ${{ matrix.voice_pack_sha256 }}
+          PROVIDER: ${{ matrix.provider }}
+          ENGINE_REF: ${{ needs.plan.outputs.engine_ref }}
+          MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          publish="generated/unit-artifacts/$UNIT_ID"
+          mkdir -p "$publish"
+          if [[ ! -f "$publish/unit-result.json" ]]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path(f"generated/unit-artifacts/{os.environ['UNIT_ID']}/unit-result.json").write_text(
+              json.dumps({
+                  "schema_version":1,
+                  "unit_id":os.environ["UNIT_ID"],
+                  "assembly":os.environ["ASSEMBLY_ID"],
+                  "state":"failed",
+                  "reason":"runner_or_orchestration_failure_before_result",
+                  "program":os.environ["PROGRAM"],
+                  "program_sha256":os.environ["PROGRAM_SHA"],
+                  "voice_pack":os.environ["VOICE_PACK"],
+                  "voice_pack_sha256":os.environ["VOICE_PACK_SHA"],
+                  "provider":os.environ["PROVIDER"],
+                  "engine_ref":os.environ["ENGINE_REF"],
+                  "production_manifest_sha256":os.environ["MANIFEST_SHA"],
+              }, ensure_ascii=False, indent=2)+"\n",
+              encoding="utf-8",
+          )
+          PY
+          fi
+
+      - name: Upload scene shard evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_prefix }}-unit-${{ matrix.id }}
+          path: generated/unit-artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  assemble_blocks:
+    needs: [plan, render_units]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.ready_assembly_count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.ready_assemblies) }}
+    steps:
+      - name: Checkout exact Audio Engine
+        uses: actions/checkout@v6
+        with:
+          repository: stefm78/audio-engine
+          ref: ${{ needs.plan.outputs.engine_ref }}
+          path: .audio-engine
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install exact Audio Engine
+        run: python -m pip install --disable-pip-version-check ./.audio-engine
+
+      - name: Download all scene shard evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.artifact_prefix }}-unit-*
+          path: unit-artifacts
+          merge-multiple: true
+
+      - id: block
+        name: Fan-in qualified scene shards
+        shell: bash
+        env:
+          BLOCK_ID: ${{ matrix.id }}
+          BLOCK_UNITS_JSON: ${{ toJSON(matrix.units) }}
+          ENGINE_REF: ${{ needs.plan.outputs.engine_ref }}
+          MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p generated/block-artifacts/"$BLOCK_ID"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          block=os.environ["BLOCK_ID"]
+          units=json.loads(os.environ["BLOCK_UNITS_JSON"])
+          root=Path("unit-artifacts")
+          failures=[]
+          inputs=[]
+          for unit in units:
+              result_path=root/unit/"unit-result.json"
+              if not result_path.is_file():
+                  failures.append({"unit":unit,"reason":"missing_unit_result"})
+                  continue
+              result=json.loads(result_path.read_text(encoding="utf-8"))
+              if result.get("state")!="ready":
+                  failures.append({"unit":unit,"reason":result.get("reason") or result.get("state")})
+                  continue
+              candidates=list((root/unit).glob("*/audio.mp3"))
+              if len(candidates)!=1:
+                  failures.append({"unit":unit,"reason":f"expected_one_audio_found_{len(candidates)}"})
+                  continue
+              inputs.append({"file":str(candidates[0]),"pause_after_ms":0})
+          result_path=Path("generated/block-artifacts")/block/"block-result.json"
+          if failures:
+              result_path.write_text(json.dumps({
+                  "schema_version":1,"block_id":block,"state":"failed",
+                  "reason":"one_or_more_scene_shards_not_ready","failures":failures,
+                  "engine_ref":os.environ["ENGINE_REF"],
+                  "production_manifest_sha256":os.environ["MANIFEST_SHA"],
+              },ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+              Path(os.environ["GITHUB_OUTPUT"]).open("a",encoding="utf-8").write("assemble=false\n")
+          else:
+              plan={"schema_version":1,"id":block,"profile":"speech","inputs":inputs}
+              Path(f"production-block-{block}.json").write_text(
+                  json.dumps(plan,ensure_ascii=False,indent=2)+"\n",encoding="utf-8"
+              )
+              Path(os.environ["GITHUB_OUTPUT"]).open("a",encoding="utf-8").write("assemble=true\n")
+          PY
+
+      - name: Assemble and QA block
+        if: steps.block.outputs.assemble == 'true'
+        shell: bash
+        env:
+          BLOCK_ID: ${{ matrix.id }}
+          ENGINE_REF: ${{ needs.plan.outputs.engine_ref }}
+          MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
+        run: |
+          set -u
+          mkdir -p "generated/block-artifacts/$BLOCK_ID"
+          state="failed"
+          reason="assembly_failed"
+          set +e
+          audio-engine assemble "production-block-$BLOCK_ID.json" --out generated/blocks
+          assemble_rc=$?
+          set -e
+          if [[ $assemble_rc -eq 0 ]]; then
+            set +e
+            audio-engine qa "generated/blocks/$BLOCK_ID"
+            qa_rc=$?
+            set -e
+            if [[ $qa_rc -ne 0 ]]; then
+              reason="qa_command_failed_rc_$qa_rc"
+            else
+              qa_status="$(python -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["status"])' "generated/blocks/$BLOCK_ID/qa-report.json")"
+              if [[ "$qa_status" == "PASS" ]]; then
+                state="ready"
+                reason=""
+              else
+                reason="automatic_qa_failed"
+              fi
+            fi
+            cp -r "generated/blocks/$BLOCK_ID/"* "generated/block-artifacts/$BLOCK_ID/" 2>/dev/null || true
+          else
+            reason="assembly_failed_rc_$assemble_rc"
+          fi
+          STATE="$state" REASON="$reason" python - <<'PY'
+          import json, os
+          from pathlib import Path
+          block=os.environ["BLOCK_ID"]
+          Path(f"generated/block-artifacts/{block}/block-result.json").write_text(
+              json.dumps({
+                  "schema_version":1,"block_id":block,"state":os.environ["STATE"],
+                  "reason":os.environ["REASON"] or None,
+                  "engine_ref":os.environ["ENGINE_REF"],
+                  "production_manifest_sha256":os.environ["MANIFEST_SHA"],
+              },ensure_ascii=False,indent=2)+"\n",encoding="utf-8"
+          )
+          PY
+
+      - name: Upload block evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_prefix }}-block-${{ matrix.id }}
+          path: generated/block-artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  master:
+    needs: [plan, assemble_blocks]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.master_ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      master_state: ${{ steps.result.outputs.master_state }}
+    steps:
+      - name: Checkout exact Audio Engine
+        uses: actions/checkout@v6
+        with:
+          repository: stefm78/audio-engine
+          ref: ${{ needs.plan.outputs.engine_ref }}
+          path: .audio-engine
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install exact Audio Engine
+        run: python -m pip install --disable-pip-version-check ./.audio-engine
+
+      - name: Download production plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_prefix }}-plan
+          path: plan
+
+      - name: Download all block evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.artifact_prefix }}-block-*
+          path: block-artifacts
+          merge-multiple: true
+
+      - id: prepare
+        name: Assemble master only from qualified blocks
+        shell: bash
+        env:
+          ENGINE_REF: ${{ needs.plan.outputs.engine_ref }}
+          MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p generated/master-artifact/master
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          plan=json.load(open("plan/production-plan.json",encoding="utf-8"))
+          blocks=plan["master"]["assemblies"]
+          failures=[]
+          inputs=[]
+          root=Path("block-artifacts")
+          for block in blocks:
+              result_path=root/block/"block-result.json"
+              if not result_path.is_file():
+                  failures.append({"block":block,"reason":"missing_block_result"})
+                  continue
+              result=json.loads(result_path.read_text(encoding="utf-8"))
+              if result.get("state")!="ready":
+                  failures.append({"block":block,"reason":result.get("reason") or result.get("state")})
+                  continue
+              audio=root/block/"audio.mp3"
+              if not audio.is_file():
+                  failures.append({"block":block,"reason":"missing_block_audio"})
+                  continue
+              inputs.append({"file":str(audio),"pause_after_ms":0})
+          if failures:
+              Path("generated/master-artifact/master/master-result.json").write_text(
+                  json.dumps({
+                      "schema_version":1,"state":"failed","reason":"one_or_more_blocks_not_ready",
+                      "failures":failures,"engine_ref":os.environ["ENGINE_REF"],
+                      "production_manifest_sha256":os.environ["MANIFEST_SHA"],
+                  },ensure_ascii=False,indent=2)+"\n",encoding="utf-8"
+              )
+              Path(os.environ["GITHUB_OUTPUT"]).open("a",encoding="utf-8").write("master_state=failed\n")
+          else:
+              Path("production-master.json").write_text(
+                  json.dumps({"schema_version":1,"id":"master","profile":"speech","inputs":inputs},
+                  ensure_ascii=False,indent=2)+"\n",encoding="utf-8"
+              )
+              Path(os.environ["GITHUB_OUTPUT"]).open("a",encoding="utf-8").write("master_state=assemble\n")
+          PY
+
+      - name: Render and QA master
+        if: steps.prepare.outputs.master_state == 'assemble'
+        shell: bash
+        env:
+          ENGINE_REF: ${{ needs.plan.outputs.engine_ref }}
+          MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
+        run: |
+          set -u
+          state="failed"
+          reason="assembly_failed"
+          set +e
+          audio-engine assemble production-master.json --out generated/master
+          assemble_rc=$?
+          set -e
+          if [[ $assemble_rc -eq 0 ]]; then
+            set +e
+            audio-engine qa generated/master/master
+            qa_rc=$?
+            set -e
+            if [[ $qa_rc -ne 0 ]]; then
+              reason="qa_command_failed_rc_$qa_rc"
+            else
+              qa_status="$(python -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["status"])' generated/master/master/qa-report.json)"
+              if [[ "$qa_status" == "PASS" ]]; then
+                state="ready"
+                reason=""
+              else
+                reason="automatic_qa_failed"
+              fi
+            fi
+            cp -r generated/master/master/* generated/master-artifact/master/ 2>/dev/null || true
+          else
+            reason="assembly_failed_rc_$assemble_rc"
+          fi
+          STATE="$state" REASON="$reason" python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path("generated/master-artifact/master/master-result.json").write_text(
+              json.dumps({
+                  "schema_version":1,"state":os.environ["STATE"],"reason":os.environ["REASON"] or None,
+                  "engine_ref":os.environ["ENGINE_REF"],
+                  "production_manifest_sha256":os.environ["MANIFEST_SHA"],
+              },ensure_ascii=False,indent=2)+"\n",encoding="utf-8"
+          )
+          PY
+
+      - id: result
+        name: Emit final master state
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="failed"
+          if [[ ! -f generated/master-artifact/master/master-result.json ]]; then
+            echo '{"schema_version":1,"state":"failed","reason":"runner_or_orchestration_failure_before_result"}' > generated/master-artifact/master/master-result.json
+          fi
+          if [[ -f generated/master-artifact/master/master-result.json ]]; then
+            state="$(python -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("state","failed"))' generated/master-artifact/master/master-result.json)"
+          fi
+          echo "master_state=$state" >> "$GITHUB_OUTPUT"
+
+      - name: Upload master candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_prefix }}-master
+          path: generated/master-artifact/master
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    needs: [plan, master]
+    if: >-
+      always() &&
+      inputs.publish_release &&
+      needs.master.result == 'success' &&
+      needs.master.outputs.master_state == 'ready'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Require explicit release tag
+        if: inputs.release_tag == ''
+        run: |
+          echo "ERROR: release_tag is required when publish_release=true" >&2
+          exit 2
+
+      - name: Download qualified master
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_prefix }}-master
+          path: master
+
+      - name: Publish immutable master assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          PRERELEASE: ${{ inputs.release_prerelease }}
+          MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets=(master/audio.mp3 master/manifest.json master/qa-report.json master/master-result.json)
+          notes="Machine-qualified master from Production Manifest SHA-256: $MANIFEST_SHA"
+          pre=""
+          if [[ "$PRERELEASE" == "true" ]]; then pre="--prerelease"; fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" "${assets[@]}" --target "$GITHUB_SHA" $pre               --title "$TAG" --notes "$notes" --repo "$GITHUB_REPOSITORY"
+          fi
+
+  summary:
+    needs: [plan, render_units, assemble_blocks, master]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_prefix }}-plan
+          path: evidence/plan
+
+      - name: Download available production evidence
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: ${{ inputs.artifact_prefix }}-*
+          path: evidence/all
+          merge-multiple: true
+
+      - name: Build machine-readable production summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          plan=json.load(open("evidence/plan/production-plan.json",encoding="utf-8"))
+          root=Path("evidence/all")
+          def load(pattern):
+              out=[]
+              for path in sorted(root.glob(pattern)):
+                  try:
+                      out.append(json.loads(path.read_text(encoding="utf-8")))
+                  except Exception:
+                      pass
+              return out
+          units=load("**/unit-result.json")
+          blocks=load("**/block-result.json")
+          masters=load("**/master-result.json")
+          failed_units=[x for x in units if x.get("state")!="ready"]
+          failed_blocks=[x for x in blocks if x.get("state")!="ready"]
+          master_result=masters[-1] if masters else None
+          if failed_units or failed_blocks or (master_result and master_result.get("state")=="failed"):
+              status="failed"
+          elif plan["held_units"]:
+              status="hold"
+          elif master_result and master_result.get("state")=="ready":
+              status="ready"
+          else:
+              status="partial"
+          summary={
+              "schema_version":1,
+              "status":status,
+              "manifest_id":plan["manifest_id"],
+              "manifest_sha256":plan["manifest_sha256"],
+              "engine_ref":plan["engine_ref"],
+              "planned_ready_units":len(plan["ready_units"]),
+              "planned_held_units":plan["held_units"],
+              "unit_results":units,
+              "assemblies":plan["assemblies"],
+              "block_results":blocks,
+              "master_plan":plan["master"],
+              "master_result":master_result,
+          }
+          Path("production-summary.json").write_text(
+              json.dumps(summary,ensure_ascii=False,indent=2)+"\n",encoding="utf-8"
+          )
+          print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Upload production summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_prefix }}-summary
+          path: production-summary.json
+          if-no-files-found: error
+          retention-days: 30
