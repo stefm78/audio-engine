@@ -2,14 +2,17 @@ import hashlib
 import json
 import os
 import random
-import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 
 from ..audio import run_ffmpeg
 from ..contract import ContractError, load_json, sha256_file
 from ..provider_package import validate_provider_package
+from .local_runtime import (
+    verify_model_assets,
+    verify_references,
+    verify_system_runtime,
+)
 
 _PROVIDER_ID = "chatterbox-multilingual-v3"
 _ALLOWED_PARAMETERS = {
@@ -57,7 +60,7 @@ class ChatterboxMultilingualV3Provider:
             )
         runtime = self.package["runtime"]
         self.device = runtime.get("device", "cpu")
-        self.system_runtime = self._verify_system_runtime(runtime)
+        self.system_runtime = verify_system_runtime(runtime, "Chatterbox")
         if self.device != "cpu":
             raise ContractError(
                 "chatterbox-multilingual-v3 Production v1 is qualified for device='cpu' only"
@@ -69,45 +72,15 @@ class ChatterboxMultilingualV3Provider:
                 "Chatterbox model_dir is required; implicit model download is forbidden"
             )
         self.model_dir = Path(raw_model_dir).resolve()
-        self._verify_model_assets()
-        self.references = self._verify_references()
+        verify_model_assets(self.package, self.model_dir, "Chatterbox")
+        self.references = verify_references(
+            self.package,
+            self.workspace_root,
+            "Chatterbox",
+        )
         self.package_sha256 = sha256_file(self.package_path)
         self._model_factory = model_factory
         self._model = None
-
-    def _verify_system_runtime(self, runtime):
-        evidence = []
-        for item in runtime.get("system_dependencies", []):
-            commands = []
-            for command in item["commands"]:
-                executable = shutil.which(command)
-                if not executable:
-                    raise ContractError(
-                        f"Chatterbox system runtime command is unavailable: {command!r}"
-                    )
-                probe = subprocess.run(
-                    [executable, "-version"],
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    check=False,
-                )
-                first_line = (probe.stdout or "").splitlines()[:1]
-                if probe.returncode != 0 or not first_line:
-                    raise ContractError(
-                        f"Chatterbox system runtime version probe failed: {command!r}"
-                    )
-                commands.append({
-                    "command": command,
-                    "executable": executable,
-                    "version": first_line[0].strip(),
-                })
-            evidence.append({
-                "name": item["name"],
-                "reference_version": item.get("reference_version"),
-                "commands": commands,
-            })
-        return evidence
 
     def cache_identity(self):
         payload = {
@@ -127,46 +100,6 @@ class ChatterboxMultilingualV3Provider:
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-
-    def _verify_model_assets(self):
-        if not self.model_dir.is_dir():
-            raise ContractError(f"Chatterbox model directory not found: {self.model_dir}")
-        for item in self.package["model"]["integrity"]:
-            filename = item["name"]
-            if Path(filename).name != filename:
-                raise ContractError(
-                    f"Chatterbox model integrity name must be a filename: {filename!r}"
-                )
-            target = self.model_dir / filename
-            if not target.is_file():
-                raise ContractError(f"Chatterbox model asset missing: {filename}")
-            actual = sha256_file(target)
-            if actual != item["sha256"]:
-                raise ContractError(
-                    f"Chatterbox model asset SHA-256 mismatch for {filename}: "
-                    f"{actual} != {item['sha256']}"
-                )
-
-    def _verify_references(self):
-        references = {}
-        for item in self.package.get("references", []):
-            target = (self.workspace_root / item["path"]).resolve()
-            try:
-                target.relative_to(self.workspace_root)
-            except ValueError as exc:
-                raise ContractError(
-                    f"Chatterbox reference escapes workspace: {item['path']}"
-                ) from exc
-            if not target.is_file():
-                raise ContractError(f"Chatterbox reference missing: {item['path']}")
-            actual = sha256_file(target)
-            if actual != item["sha256"]:
-                raise ContractError(
-                    f"Chatterbox reference SHA-256 mismatch for {item['id']}: "
-                    f"{actual} != {item['sha256']}"
-                )
-            references[item["id"]] = target
-        return references
 
     def _load_model(self):
         if self._model is not None:
