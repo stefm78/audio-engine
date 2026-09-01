@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import os
 import random
 import tempfile
@@ -195,7 +196,6 @@ class ChatterboxMultilingualV3Provider:
             import numpy as np
             import torch
             import torchaudio as ta
-            from pydub import AudioSegment
         except ImportError as exc:
             raise RuntimeError(
                 "Promoted Chatterbox runtime dependencies are incomplete"
@@ -212,25 +212,37 @@ class ChatterboxMultilingualV3Provider:
             **controls,
         )
 
+        if wav.ndim == 1:
+            wav = wav.unsqueeze(0)
+        elif wav.ndim != 2:
+            raise RuntimeError(f"Unexpected Chatterbox waveform rank: {wav.ndim}")
+        if wav.shape[0] > 1:
+            wav = wav.mean(dim=0, keepdim=True)
+
+        target_rate = 24000
+        source_rate = int(model.sr)
+        if source_rate != target_rate:
+            wav = ta.functional.resample(wav, source_rate, target_rate)
+
+        wav = wav.float()
+        rms = torch.sqrt(torch.mean(wav.pow(2))).item()
+        if rms > 0:
+            current_dbfs = 20.0 * math.log10(rms)
+            target_dbfs = float(
+                (self.package["synthesis"].get("normalization") or {}).get(
+                    "target_dbfs",
+                    -20.0,
+                )
+            )
+            gain_db = max(-8.0, min(8.0, target_dbfs - current_dbfs))
+            wav = wav * (10.0 ** (gain_db / 20.0))
+        wav = torch.clamp(wav, -1.0, 1.0)
+
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory() as temp_value:
-            temp = Path(temp_value)
-            raw_wav = temp / "raw.wav"
-            normalized_wav = temp / "normalized.wav"
-            ta.save(str(raw_wav), wav, model.sr)
-
-            audio = AudioSegment.from_file(raw_wav).set_frame_rate(24000).set_channels(1)
-            if audio.rms > 0:
-                target_dbfs = float(
-                    (self.package["synthesis"].get("normalization") or {}).get(
-                        "target_dbfs",
-                        -20.0,
-                    )
-                )
-                audio = audio.apply_gain(target_dbfs - audio.dBFS)
-            audio.export(normalized_wav, format="wav")
-
+            normalized_wav = Path(temp_value) / "normalized.wav"
+            ta.save(str(normalized_wav), wav.cpu(), target_rate)
             run_ffmpeg([
                 "-i", str(normalized_wav),
                 "-map_metadata", "-1",
