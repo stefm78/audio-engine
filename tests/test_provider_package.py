@@ -57,6 +57,28 @@ class ProviderPackageTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "exact 40-char Git SHA"):
             validate_provider_package(package)
 
+    def test_system_dependency_requires_commands(self):
+        package = self.package()
+        package["runtime"]["system_dependencies"] = [
+            {"name": "ffmpeg", "reference_version": "7:6.1.1-3ubuntu5"}
+        ]
+        with self.assertRaisesRegex(ContractError, "commands must be a non-empty array"):
+            validate_provider_package(package)
+
+    def test_system_dependency_reported_when_declared(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = self.package()
+            package["runtime"]["system_dependencies"] = [{
+                "name": "ffmpeg",
+                "commands": ["ffmpeg", "ffprobe"],
+                "reference_version": "7:6.1.1-3ubuntu5",
+            }]
+            path = root / "provider.json"
+            path.write_text(json.dumps(package), encoding="utf-8")
+            report = provider_package_report(path)
+            self.assertEqual(report["system_dependency_count"], 1)
+
     def test_hydrate_exact_huggingface_snapshot_and_verify_hashes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
