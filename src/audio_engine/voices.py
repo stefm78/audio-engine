@@ -164,13 +164,14 @@ def resolve_segments(program, voice_config):
     for index, segment in enumerate(program["segments"], start=1):
         explicit_voice = segment.get("voice")
         explicit_provider = segment.get("provider")
+        performance_provider = segment.get("performance_provider")
         preset_id = segment.get("preset")
         explicit_character_id = segment.get("character_id")
         character_id = explicit_character_id or f"segment-{index}"
         alternatives = []
 
         if explicit_voice:
-            provider = explicit_provider or "edge"
+            identity_provider = explicit_provider or "edge"
             voice = explicit_voice
             rate = segment.get("rate", "+0%")
             pitch = segment.get("pitch", "+0Hz")
@@ -180,11 +181,11 @@ def resolve_segments(program, voice_config):
             if preset_id not in by_id:
                 raise ValueError(f"Unknown voice preset: {preset_id}")
             preset = by_id[preset_id]
-            provider = preset.get("provider", "edge")
-            if explicit_provider and explicit_provider != provider:
+            identity_provider = preset.get("provider", "edge")
+            if explicit_provider and explicit_provider != identity_provider:
                 raise ValueError(
                     f"Segment provider {explicit_provider!r} conflicts with preset "
-                    f"{preset_id!r} provider {provider!r}"
+                    f"{preset_id!r} provider {identity_provider!r}"
                 )
             voice = preset["voice"]
             rate = segment.get("rate", preset.get("rate", "+0%"))
@@ -193,11 +194,11 @@ def resolve_segments(program, voice_config):
             resolved_preset = preset["id"]
         elif explicit_character_id and character_id in character_cast:
             identity = character_cast[character_id]
-            provider = identity["provider"]
-            if explicit_provider and explicit_provider != provider:
+            identity_provider = identity["provider"]
+            if explicit_provider and explicit_provider != identity_provider:
                 raise ValueError(
                     f"Character {character_id!r} cannot silently change provider "
-                    f"from {provider!r} to {explicit_provider!r}"
+                    f"from {identity_provider!r} to {explicit_provider!r}"
                 )
             voice = identity["voice"]
             rate = segment.get("rate", identity["rate"])
@@ -206,11 +207,11 @@ def resolve_segments(program, voice_config):
             resolved_preset = identity["resolved_preset"]
         else:
             preset, ranked = choose_preset(segment.get("target", {}), presets)
-            provider = preset.get("provider", "edge")
-            if explicit_provider and explicit_provider != provider:
+            identity_provider = preset.get("provider", "edge")
+            if explicit_provider and explicit_provider != identity_provider:
                 raise ValueError(
                     f"Segment provider {explicit_provider!r} conflicts with selected preset "
-                    f"{preset['id']!r} provider {provider!r}"
+                    f"{preset['id']!r} provider {identity_provider!r}"
                 )
             voice = preset["voice"]
             rate = segment.get("rate", preset.get("rate", "+0%"))
@@ -224,27 +225,36 @@ def resolve_segments(program, voice_config):
 
         if explicit_character_id:
             previous = character_cast.get(character_id)
-            if previous and (previous["provider"] != provider or previous["voice"] != voice):
+            if previous and (
+                previous["provider"] != identity_provider
+                or previous["voice"] != voice
+            ):
                 raise ValueError(
                     f"Character {character_id!r} cannot silently change provider identity "
-                    f"from {previous['provider']}:{previous['voice']} to {provider}:{voice}; "
-                    "use a distinct age incarnation until an age lineage has been explicitly qualified"
+                    f"from {previous['provider']}:{previous['voice']} "
+                    f"to {identity_provider}:{voice}; "
+                    "use an explicit qualified identity lineage instead"
                 )
             if previous is None:
                 character_cast[character_id] = _identity_from_resolution(
-                    provider, voice, rate, pitch, volume, resolved_preset
+                    identity_provider, voice, rate, pitch, volume, resolved_preset
                 )
 
+        synthesis_provider = performance_provider or identity_provider
         resolved.append({
             **segment,
             "sequence": index,
             "resolved_preset": resolved_preset,
-            "provider": provider,
+            "provider": synthesis_provider,
+            "identity_provider": identity_provider,
+            "performance_provider": performance_provider,
             "voice": voice,
             "rate": rate,
             "pitch": pitch,
             "volume": volume,
-            "casting_identity": f"{provider}:{voice}" if explicit_character_id else None,
+            "casting_identity": (
+                f"{identity_provider}:{voice}" if explicit_character_id else None
+            ),
             "casting_alternatives": alternatives,
         })
     return resolved
