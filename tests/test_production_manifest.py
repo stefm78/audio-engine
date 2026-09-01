@@ -59,7 +59,7 @@ class ProductionManifestTests(unittest.TestCase):
             manifest["units"][0]["voice_pack_sha256"] = sha256(root / "voices.json")
             path = root / "production.json"
             path.write_text(json.dumps(manifest), encoding="utf-8")
-            plan = production_plan(path)
+            plan = production_plan(path, workspace_root=root)
             self.assertEqual([u["id"] for u in plan["ready_units"]], ["u1"])
             self.assertEqual([u["id"] for u in plan["held_units"]], ["u2"])
             self.assertEqual(plan["assemblies"][0]["state"], "hold")
@@ -74,7 +74,7 @@ class ProductionManifestTests(unittest.TestCase):
             path = root / "production.json"
             path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(ContractError, "mismatch"):
-                production_plan(path)
+                production_plan(path, workspace_root=root)
 
 
 if __name__ == "__main__":
