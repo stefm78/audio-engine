@@ -307,6 +307,8 @@ def validate_program(program):
                 errors.append(f"segments[{index}].text is required")
             if not (segment.get("voice") or segment.get("preset") or segment.get("target")):
                 errors.append(f"segments[{index}] needs voice, preset, or target")
+            if "provider" in segment and not _non_empty_string(segment.get("provider")):
+                errors.append(f"segments[{index}].provider must be a non-empty string")
             pause = segment.get("pause_after_ms", 350)
             if not isinstance(pause, (int, float)) or pause < 0:
                 errors.append(f"segments[{index}].pause_after_ms must be >= 0")
