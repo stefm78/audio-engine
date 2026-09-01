@@ -206,6 +206,15 @@ jobs:
       - name: Install exact Audio Engine
         run: python -m pip install --disable-pip-version-check ./.audio-engine
 
+      - name: Hydrate and verify locked Production assets
+        if: matrix.asset_count != 0
+        shell: bash
+        run: >-
+          audio-engine production hydrate-assets
+          "${{ inputs.manifest_path }}"
+          --unit "${{ matrix.id }}"
+          --workspace-root .
+
       - name: Hydrate and verify promoted provider assets
         if: matrix.provider_package_count != 0
         shell: bash
