@@ -116,7 +116,7 @@ jobs:
           test -f voxcpm2-model/model.safetensors
           test -f voxcpm2-model/audiovae.pth
 
-      - name: Render exactly two preregistered P4 candidates
+      - name: Replay only preregistered P4 candidate A after B capability reject
         shell: bash
         run: |
           set -euo pipefail
@@ -130,7 +130,8 @@ jobs:
           assert m["status"]=="MACHINE_PASS"
           assert m["cloud_tts"] is False
           assert m["nuc_required"] is False
-          assert len(m["results"])==2
+          assert len(m["results"])==1
+          assert m["results"][0]["variant"]=="p4-voxcpm2-a"
           for r in m["results"]:
               assert r["replacement_indices"]==[2,4,6,8,12]
               assert len(r["slots"])==5
@@ -146,7 +147,6 @@ jobs:
           name: local-tts-p4-voxcpm2-one-shot
           path: |
             generated/p4-voxcpm2/p4-voxcpm2-a.mp3
-            generated/p4-voxcpm2/p4-voxcpm2-b.mp3
             generated/p4-voxcpm2/index.html
             generated/p4-voxcpm2/manifest.json
             generated/p4-voxcpm2/SHA256SUMS.txt
