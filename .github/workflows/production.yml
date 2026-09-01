@@ -258,7 +258,7 @@ jobs:
             done
           fi
 
-          python - <<'PY'
+          RESULT_STATE="$state" RESULT_REASON="$reason" RESULT_PATH="$publish/unit-result.json" python - <<'PY'
           import json, os
           from pathlib import Path
           result={
@@ -279,9 +279,6 @@ jobs:
               json.dumps(result, ensure_ascii=False, indent=2)+"\n", encoding="utf-8"
           )
           PY
-        env:
-          RESULT_STATE: ${{ steps.produce.outputs.state }}
-        continue-on-error: false
 
       - name: Finalize unit result
         if: always()
@@ -329,7 +326,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact_prefix }}-unit-${{ matrix.id }}
-          path: generated/unit-artifacts/${{ matrix.id }}
+          path: generated/unit-artifacts
           if-no-files-found: error
           retention-days: 14
 
@@ -453,7 +450,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact_prefix }}-block-${{ matrix.id }}
-          path: generated/block-artifacts/${{ matrix.id }}
+          path: generated/block-artifacts
           if-no-files-found: error
           retention-days: 14
 
@@ -492,7 +489,7 @@ jobs:
           path: block-artifacts
           merge-multiple: true
 
-      - id: result
+      - id: prepare
         name: Assemble master only from qualified blocks
         shell: bash
         env:
@@ -541,7 +538,7 @@ jobs:
           PY
 
       - name: Render and QA master
-        if: steps.result.outputs.master_state == 'assemble'
+        if: steps.prepare.outputs.master_state == 'assemble'
         shell: bash
         env:
           ENGINE_REF: ${{ needs.plan.outputs.engine_ref }}
@@ -568,9 +565,19 @@ jobs:
                   "production_manifest_sha256":os.environ["MANIFEST_SHA"],
               },ensure_ascii=False,indent=2)+"\n",encoding="utf-8"
           )
-          with Path(os.environ["GITHUB_OUTPUT"]).open("a",encoding="utf-8") as handle:
-              handle.write(f"master_state={os.environ['STATE']}\n")
           PY
+
+      - id: result
+        name: Emit final master state
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="failed"
+          if [[ -f generated/master-artifact/master/master-result.json ]]; then
+            state="$(python -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("state","failed"))' generated/master-artifact/master/master-result.json)"
+          fi
+          echo "master_state=$state" >> "$GITHUB_OUTPUT"
 
       - name: Upload master candidate evidence
         if: always()
