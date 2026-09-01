@@ -59,12 +59,12 @@ class ChatterboxMultilingualV3Provider:
                 "chatterbox-multilingual-v3 Production v1 is qualified for device='cpu' only"
             )
 
-        self.model_dir = Path(model_dir or os.getenv("AUDIO_ENGINE_CHATTERBOX_MODEL_DIR", ""))
-        if not str(self.model_dir):
+        raw_model_dir = model_dir or os.getenv("AUDIO_ENGINE_CHATTERBOX_MODEL_DIR")
+        if not raw_model_dir:
             raise ContractError(
                 "Chatterbox model_dir is required; implicit model download is forbidden"
             )
-        self.model_dir = self.model_dir.resolve()
+        self.model_dir = Path(raw_model_dir).resolve()
         self._verify_model_assets()
         self.references = self._verify_references()
         self.package_sha256 = sha256_file(self.package_path)
