@@ -159,7 +159,7 @@ class ChatterboxMultilingualV3Provider:
     def _resolved_controls(self, segment):
         defaults = dict(self.package["synthesis"]["parameters"])
         overrides = segment.get("provider_parameters") or {}
-        unknown = sorted(set(defaults) | set(overrides) - _ALLOWED_PARAMETERS)
+        unknown = sorted((set(defaults) | set(overrides)) - _ALLOWED_PARAMETERS)
         if unknown:
             raise ContractError(
                 f"Unsupported Chatterbox synthesis parameters: {', '.join(unknown)}"
