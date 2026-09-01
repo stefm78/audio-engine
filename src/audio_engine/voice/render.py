@@ -46,15 +46,27 @@ def voice_content_key(segment, provider_name):
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def provider_cache_identity(provider):
+    """Stable provider runtime identity used by clip and scene caches."""
+    explicit = getattr(provider, "cache_identity", None)
+    if callable(explicit):
+        explicit = explicit()
+    if explicit is None:
+        explicit = _provider_code_sha256(provider)
+    return str(explicit)
+
+
 def voice_fingerprint(segment, provider):
     payload = {
         "provider": provider.name,
-        "provider_code_sha256": _provider_code_sha256(provider),
+        "provider_cache_identity": provider_cache_identity(provider),
         "text": segment["text"],
         "voice": segment["voice"],
         "rate": segment.get("rate", "+0%"),
         "pitch": segment.get("pitch", "+0Hz"),
         "volume": segment.get("volume", "+0%"),
+        "provider_parameters": segment.get("provider_parameters"),
+        "provider_seed": segment.get("provider_seed"),
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
