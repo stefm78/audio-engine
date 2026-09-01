@@ -44,6 +44,9 @@ def voice_content_key(segment, provider_name):
         "provider_parameters": segment.get("provider_parameters"),
         "provider_seed": segment.get("provider_seed"),
     }
+    if segment.get("performance_provider"):
+        payload["casting_identity"] = segment.get("casting_identity")
+        payload["performance_provider"] = segment.get("performance_provider")
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -69,6 +72,9 @@ def voice_fingerprint(segment, provider):
         "provider_parameters": segment.get("provider_parameters"),
         "provider_seed": segment.get("provider_seed"),
     }
+    if segment.get("performance_provider"):
+        payload["casting_identity"] = segment.get("casting_identity")
+        payload["performance_provider"] = segment.get("performance_provider")
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()

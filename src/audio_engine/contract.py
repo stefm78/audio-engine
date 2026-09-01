@@ -309,6 +309,8 @@ def validate_program(program):
                 errors.append(f"segments[{index}] needs voice, preset, or target")
             if "provider" in segment and not _non_empty_string(segment.get("provider")):
                 errors.append(f"segments[{index}].provider must be a non-empty string")
+            if "performance_provider" in segment and not _non_empty_string(segment.get("performance_provider")):
+                errors.append(f"segments[{index}].performance_provider must be a non-empty string")
             if "provider_parameters" in segment and not isinstance(segment.get("provider_parameters"), dict):
                 errors.append(f"segments[{index}].provider_parameters must be an object")
             if "provider_seed" in segment:
