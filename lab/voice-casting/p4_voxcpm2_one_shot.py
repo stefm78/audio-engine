@@ -264,6 +264,12 @@ def main():
     ap.add_argument("--baseline-report", required=True)
     ap.add_argument("--claire", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--variant",
+        action="append",
+        choices=tuple(VARIANTS),
+        help="Replay exactly the selected preregistered variant(s); default is all.",
+    )
     args = ap.parse_args()
 
     out = Path(args.out)
@@ -281,9 +287,10 @@ def main():
         device="cpu",
     )
 
+    selected = args.variant or list(VARIANTS)
     results = [
-        render_variant(model, baseline, report, claire, out, variant_id, spec)
-        for variant_id, spec in VARIANTS.items()
+        render_variant(model, baseline, report, claire, out, variant_id, VARIANTS[variant_id])
+        for variant_id in selected
     ]
     manifest = {
         "schema": "odyssee-p4-voxcpm2-one-shot-v1",
