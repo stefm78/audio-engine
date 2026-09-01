@@ -60,3 +60,24 @@ Cache entries are not evidence.
 ## Release
 
 `publish_release: true` requires an explicit `release_tag`. Release publication is gated on a `ready` master result. A HOLD or failed unit can therefore never be silently published as a final master.
+
+
+## Explicit performance providers
+
+A character's casting identity and the provider used to perform a particular
+segment are separate contracts.
+
+Use `performance_provider` only when the product has explicitly qualified a
+cross-provider performance path that preserves an already-frozen identity, for
+example a local model conditioned on the frozen reference voice.
+
+The base `provider` / preset still defines casting identity. The resolver:
+
+- keeps one stable `casting_identity` per `character_id`;
+- routes synthesis through `performance_provider` only on the declared segment;
+- fingerprints both casting identity and performance-provider controls;
+- still rejects any silent change of the base provider/voice identity;
+- never falls back when the performance provider is unavailable.
+
+This is not a recasting mechanism. It is an explicit, provenance-bound
+performance implementation of an already-qualified identity.
