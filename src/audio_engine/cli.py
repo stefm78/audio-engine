@@ -13,6 +13,7 @@ from .effects import load_capabilities, public_capabilities
 from .preflight import preflight_program
 from .preview import preview_program
 from .production import production_plan, validate_production_manifest
+from .qa import qa_render
 from .render import render_program
 from .sound.acquisition import DEFAULT_PROVIDERS, ensure_sound
 from .sound.catalog import SOUND_TYPES, public_catalog as public_sound_catalog, sound_info
@@ -133,6 +134,12 @@ def build_parser():
     production_plan_parser.add_argument("manifest")
     production_plan_parser.add_argument("--workspace-root", default=".")
 
+    qa = sub.add_parser(
+        "qa",
+        help="Run deterministic machine QA over one completed render directory",
+    )
+    qa.add_argument("render_dir")
+
     validate = sub.add_parser("validate", help="Validate a JSON contract")
     validate.add_argument("file")
     validate.add_argument("--kind", choices=("program", "assembly"), default="program")
@@ -228,6 +235,7 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    exit_code = 0
     try:
         if args.command == "render":
             result = render_program(args.program, args.out, voices_path=args.voices, sounds_path=args.sounds)
@@ -262,6 +270,10 @@ def main(argv=None):
                 result = production_plan(args.manifest, workspace_root=args.workspace_root)
         elif args.command == "batch":
             result = render_batch(args.pattern, args.out, voices_path=args.voices, sounds_path=args.sounds)
+        elif args.command == "qa":
+            result = qa_render(args.render_dir)
+            if result.get("status") != "PASS":
+                exit_code = 2
         elif args.command == "assemble":
             result = assemble_plan(args.plan, args.out)
         elif args.command == "capabilities":
@@ -384,7 +396,7 @@ def main(argv=None):
             result = validate_program(data) if args.kind == "program" else validate_assembly(data)
             result = {"status": "valid", "kind": args.kind, "id": result.get("id")}
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
+        return exit_code
     except (ContractError, ValueError, FileNotFoundError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
