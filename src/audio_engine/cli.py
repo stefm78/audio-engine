@@ -13,7 +13,11 @@ from .effects import load_capabilities, public_capabilities
 from .preflight import preflight_program
 from .preview import preview_program
 from .production import production_plan, validate_production_manifest
-from .provider_package import hydrate_provider_model, provider_package_report
+from .provider_package import (
+    hydrate_provider_model,
+    hydrate_provider_references,
+    provider_package_report,
+)
 from .qa import qa_render
 from .render import render_program
 from .sound.acquisition import DEFAULT_PROVIDERS, ensure_sound
@@ -157,6 +161,12 @@ def build_parser():
     )
     provider_package_hydrate.add_argument("package")
     provider_package_hydrate.add_argument("--cache-root", default=".provider-models")
+    provider_package_refs = provider_package_sub.add_parser(
+        "hydrate-references",
+        help="Materialize content-addressed reference assets from explicit sources",
+    )
+    provider_package_refs.add_argument("package")
+    provider_package_refs.add_argument("--workspace-root", default=".")
 
     qa = sub.add_parser(
         "qa",
@@ -300,10 +310,15 @@ def main(argv=None):
                     verify_files=args.verify_files,
                     voice_pack_path=args.voice_pack,
                 )
-            else:
+            elif args.provider_package_command == "hydrate-model":
                 result = hydrate_provider_model(
                     args.package,
                     cache_root=args.cache_root,
+                )
+            else:
+                result = hydrate_provider_references(
+                    args.package,
+                    workspace_root=args.workspace_root,
                 )
         elif args.command == "batch":
             result = render_batch(args.pattern, args.out, voices_path=args.voices, sounds_path=args.sounds)
