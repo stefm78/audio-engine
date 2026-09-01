@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import re
+import urllib.request
 from pathlib import Path
 
 from .contract import ContractError, load_json
@@ -137,6 +138,16 @@ def validate_provider_package(package, package_path=None, workspace_root=".", ve
         seen.add(item["id"])
         _validate_relpath(item.get("path"), f"references[{i}].path", errors)
         _validate_sha(item.get("sha256"), f"references[{i}].sha256", errors)
+        source = item.get("source")
+        if source is not None:
+            if not isinstance(source, dict):
+                errors.append(f"references[{i}].source must be an object")
+            elif source.get("type") != "github_release":
+                errors.append(f"references[{i}].source.type must be 'github_release'")
+            else:
+                for field in ("repository", "tag", "asset"):
+                    if not _non_empty(source.get(field)):
+                        errors.append(f"references[{i}].source.{field} is required")
 
     if verify_files:
         root = Path(workspace_root).resolve()
@@ -276,5 +287,77 @@ def hydrate_provider_model(path, cache_root=".provider-models"):
         "model_dir": str(destination),
         "verified": verified,
         "network_used": True,
+        "fallback": package["fallback"],
+    }
+
+
+def hydrate_provider_references(path, workspace_root="."):
+    """Materialize content-addressed reference assets from explicit sources."""
+    path = Path(path)
+    package = validate_provider_package(load_json(path), package_path=path)
+    root = Path(workspace_root).resolve()
+    hydrated = []
+    for item in package.get("references", []):
+        target = (root / item["path"]).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError as exc:
+            raise ContractError(f"reference path escapes workspace: {item['path']}") from exc
+
+        if target.is_file() and _sha256(target) == item["sha256"]:
+            hydrated.append({
+                "id": item["id"],
+                "path": item["path"],
+                "sha256": item["sha256"],
+                "cache_hit": True,
+            })
+            continue
+
+        source = item.get("source")
+        if not source:
+            raise ContractError(
+                f"reference {item['id']!r} is missing and has no explicit hydration source"
+            )
+        repository = source["repository"]
+        tag = source["tag"]
+        asset = source["asset"]
+        url = f"https://github.com/{repository}/releases/download/{tag}/{asset}"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp = target.with_suffix(target.suffix + ".download")
+        temp.unlink(missing_ok=True)
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "recit-audio-engine-provider-hydration/1"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response, temp.open("wb") as handle:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+            actual = _sha256(temp)
+            if actual != item["sha256"]:
+                raise ContractError(
+                    f"hydrated reference SHA-256 mismatch for {item['id']}: "
+                    f"{actual} != {item['sha256']}"
+                )
+            temp.replace(target)
+        finally:
+            temp.unlink(missing_ok=True)
+
+        hydrated.append({
+            "id": item["id"],
+            "path": item["path"],
+            "sha256": item["sha256"],
+            "cache_hit": False,
+            "source": url,
+        })
+
+    return {
+        "schema_version": 1,
+        "status": "ready",
+        "provider": package["provider"]["id"],
+        "references": hydrated,
         "fallback": package["fallback"],
     }
