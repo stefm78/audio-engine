@@ -1,0 +1,45 @@
+name: Edge Alain availability one-shot
+
+on:
+  push:
+    branches:
+      - probe/edge-alain-availability-v1
+    paths:
+      - .github/workflows/edge-alain-availability-one-shot.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check .
+      - name: Probe current Edge FR voice catalog
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from audio_engine.providers.edge import EdgeProvider
+
+          voices=EdgeProvider().list_voices(locale_prefix="fr-FR")
+          names=[v["voice"] for v in voices]
+          target="fr-FR-AlainNeural"
+          controls=["fr-FR-HenriNeural","fr-FR-DeniseNeural","fr-FR-VivienneMultilingualNeural"]
+          report={
+              "schema":"audio-engine.edge-voice-availability.v1",
+              "edge_tts_version":"7.2.8",
+              "target":target,
+              "target_available":target in names,
+              "controls":{name:name in names for name in controls},
+              "fr_fr_voice_count":len(names),
+              "fr_fr_voices":names,
+          }
+          print(json.dumps(report,ensure_ascii=False,indent=2))
+          PY
