@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 from pathlib import Path
@@ -16,6 +17,7 @@ def assemble_plan(plan_path, output_root):
     output_dir.mkdir(parents=True, exist_ok=True)
     audio_path = output_dir / "audio.mp3"
 
+    input_evidence = []
     with tempfile.TemporaryDirectory() as temp_value:
         temp_dir = Path(temp_value)
         parts = []
@@ -24,17 +26,40 @@ def assemble_plan(plan_path, output_root):
             source = (plan_path.parent / item["file"]).resolve()
             if not source.exists():
                 raise FileNotFoundError(f"Assembly input not found: {source}")
+            duration = probe_duration_seconds(source)
+            if duration is None or duration <= 0:
+                raise RuntimeError(f"Assembly input has no measurable audio duration: {source}")
+            input_evidence.append({
+                "file": item["file"],
+                "sha256": sha256_file(source),
+                "duration_seconds": duration,
+                "pause_after_ms": int(item.get("pause_after_ms", 0)),
+            })
             parts.append(source)
             pause = silence_file(temp_dir, item.get("pause_after_ms", 0), silence_cache)
             if pause:
                 parts.append(pause)
         encode_concat(parts, audio_path, profile)
 
+    engine_code_sha = sha256_file(Path(__file__))
+    fingerprint_payload = {
+        "source_sha256": sha256_file(plan_path),
+        "engine_code_sha256": engine_code_sha,
+        "engine_version": __version__,
+        "profile": profile_name,
+        "inputs": input_evidence,
+    }
+    render_fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
     manifest = {
         "schema_version": 1,
         "id": plan["id"],
         "status": "success",
         "source_sha256": sha256_file(plan_path),
+        "engine_code_sha256": engine_code_sha,
+        "render_fingerprint": render_fingerprint,
         "engine_version": __version__,
         "profile": profile_name,
         "audio": {
@@ -46,6 +71,10 @@ def assemble_plan(plan_path, output_root):
             "duration_seconds": probe_duration_seconds(audio_path),
         },
         "inputs": plan["inputs"],
+        "assembly": {
+            "input_count": len(input_evidence),
+            "inputs": input_evidence,
+        },
         "warnings": [],
     }
     (output_dir / "manifest.json").write_text(
