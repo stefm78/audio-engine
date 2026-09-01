@@ -38,17 +38,17 @@ def _sha256(path):
     return digest.hexdigest()
 
 
-def _resolve_local(manifest_path, relative):
-    base = Path(manifest_path).resolve().parent
+def _resolve_local(workspace_root, relative):
+    base = Path(workspace_root).resolve()
     target = (base / relative).resolve()
     try:
         target.relative_to(base)
     except ValueError as exc:
-        raise ContractError(f"path escapes manifest workspace: {relative}") from exc
+        raise ContractError(f"path escapes workspace root: {relative}") from exc
     return target
 
 
-def validate_production_manifest(manifest, manifest_path=None, verify_files=False):
+def validate_production_manifest(manifest, manifest_path=None, workspace_root=".", verify_files=False):
     errors = []
     if not isinstance(manifest, dict):
         raise ContractError("production manifest must be an object")
@@ -164,7 +164,7 @@ def validate_production_manifest(manifest, manifest_path=None, verify_files=Fals
                 if not (_non_empty(relative) and isinstance(expected, str) and _SHA256_RE.fullmatch(expected)):
                     continue
                 try:
-                    path = _resolve_local(manifest_path, relative)
+                    path = _resolve_local(workspace_root, relative)
                 except ContractError as exc:
                     errors.append(f"units[{index}].{field}: {exc}")
                     continue
@@ -182,11 +182,12 @@ def validate_production_manifest(manifest, manifest_path=None, verify_files=Fals
     return manifest
 
 
-def production_plan(manifest_path, verify_files=True):
+def production_plan(manifest_path, workspace_root=".", verify_files=True):
     manifest_path = Path(manifest_path)
     manifest = validate_production_manifest(
         load_json(manifest_path),
         manifest_path=manifest_path,
+        workspace_root=workspace_root,
         verify_files=verify_files,
     )
     unit_to_assembly = {}
