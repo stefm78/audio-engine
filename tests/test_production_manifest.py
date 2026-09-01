@@ -3,9 +3,14 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from audio_engine.contract import ContractError
-from audio_engine.production import production_plan, validate_production_manifest
+from audio_engine.production import (
+    hydrate_production_unit_assets,
+    production_plan,
+    validate_production_manifest,
+)
 
 
 def sha256(path):
@@ -125,6 +130,56 @@ class ProductionManifestTests(unittest.TestCase):
         unit.pop("provider")
         with self.assertRaisesRegex(ContractError, "needs provider_packages"):
             validate_production_manifest(manifest)
+
+    def test_locked_asset_can_be_absent_at_plan_then_hydrated_by_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "u1.json").write_text('{"id":"u1"}', encoding="utf-8")
+            (root / "voices.json").write_text('{"version":1}', encoding="utf-8")
+            payload = b"locked-ambience"
+            digest = hashlib.sha256(payload).hexdigest()
+
+            manifest = self.base_manifest()
+            unit = manifest["units"][0]
+            unit["program_sha256"] = sha256(root / "u1.json")
+            unit["voice_pack_sha256"] = sha256(root / "voices.json")
+            unit["assets"] = [{
+                "id": "ambience",
+                "path": "assets/ambience.wav",
+                "sha256": digest,
+                "source": {
+                    "type": "github_release",
+                    "repository": "owner/repo",
+                    "tag": "assets-v1",
+                    "asset": "ambience.wav",
+                },
+            }]
+            manifest_path = root / "production.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            plan = production_plan(manifest_path, workspace_root=root)
+            self.assertEqual(plan["ready_units"][0]["asset_count"], 1)
+            self.assertFalse((root / "assets" / "ambience.wav").exists())
+
+            class Response:
+                def __enter__(self):
+                    from io import BytesIO
+                    self.stream = BytesIO(payload)
+                    return self
+                def __exit__(self, *args):
+                    return False
+                def read(self, size=-1):
+                    return self.stream.read(size)
+
+            with patch("audio_engine.production.urllib.request.urlopen", return_value=Response()):
+                report = hydrate_production_unit_assets(
+                    manifest_path,
+                    "u1",
+                    workspace_root=root,
+                )
+            self.assertEqual(report["status"], "ready")
+            self.assertEqual((root / "assets" / "ambience.wav").read_bytes(), payload)
+            self.assertFalse(report["assets"][0]["cache_hit"])
 
     def test_ready_hash_mismatch_fails_before_render(self):
         with tempfile.TemporaryDirectory() as tmp:
