@@ -32,6 +32,7 @@ class ChatterboxMultilingualV3Provider:
 
     name = _PROVIDER_ID
     processing = "local"
+    edge_silence_normalization = False
     expressive_controls = (
         "provider_parameters.exaggeration",
         "provider_parameters.cfg_weight",
