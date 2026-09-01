@@ -371,7 +371,7 @@ jobs:
           MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
         run: |
           set -euo pipefail
-          mkdir -p generated/block-plans generated/block-artifacts/"$BLOCK_ID"
+          mkdir -p generated/block-artifacts/"$BLOCK_ID"
           python - <<'PY'
           import json, os
           from pathlib import Path
@@ -393,7 +393,7 @@ jobs:
               if len(candidates)!=1:
                   failures.append({"unit":unit,"reason":f"expected_one_audio_found_{len(candidates)}"})
                   continue
-              inputs.append({"file":str(Path("..")/".."/candidates[0]),"pause_after_ms":0})
+              inputs.append({"file":str(candidates[0]),"pause_after_ms":0})
           result_path=Path("generated/block-artifacts")/block/"block-result.json"
           if failures:
               result_path.write_text(json.dumps({
@@ -405,7 +405,7 @@ jobs:
               Path(os.environ["GITHUB_OUTPUT"]).open("a",encoding="utf-8").write("assemble=false\n")
           else:
               plan={"schema_version":1,"id":block,"profile":"speech","inputs":inputs}
-              Path(f"generated/block-plans/{block}.json").write_text(
+              Path(f"production-block-{block}.json").write_text(
                   json.dumps(plan,ensure_ascii=False,indent=2)+"\n",encoding="utf-8"
               )
               Path(os.environ["GITHUB_OUTPUT"]).open("a",encoding="utf-8").write("assemble=true\n")
@@ -419,17 +419,33 @@ jobs:
           ENGINE_REF: ${{ needs.plan.outputs.engine_ref }}
           MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
         run: |
-          set -euo pipefail
-          audio-engine assemble "generated/block-plans/$BLOCK_ID.json" --out generated/blocks
-          audio-engine qa "generated/blocks/$BLOCK_ID"
-          qa_status="$(python -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["status"])' "generated/blocks/$BLOCK_ID/qa-report.json")"
+          set -u
           mkdir -p "generated/block-artifacts/$BLOCK_ID"
-          cp -r "generated/blocks/$BLOCK_ID/"* "generated/block-artifacts/$BLOCK_ID/"
           state="failed"
-          reason="automatic_qa_failed"
-          if [[ "$qa_status" == "PASS" ]]; then
-            state="ready"
-            reason=""
+          reason="assembly_failed"
+          set +e
+          audio-engine assemble "production-block-$BLOCK_ID.json" --out generated/blocks
+          assemble_rc=$?
+          set -e
+          if [[ $assemble_rc -eq 0 ]]; then
+            set +e
+            audio-engine qa "generated/blocks/$BLOCK_ID"
+            qa_rc=$?
+            set -e
+            if [[ $qa_rc -ne 0 ]]; then
+              reason="qa_command_failed_rc_$qa_rc"
+            else
+              qa_status="$(python -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["status"])' "generated/blocks/$BLOCK_ID/qa-report.json")"
+              if [[ "$qa_status" == "PASS" ]]; then
+                state="ready"
+                reason=""
+              else
+                reason="automatic_qa_failed"
+              fi
+            fi
+            cp -r "generated/blocks/$BLOCK_ID/"* "generated/block-artifacts/$BLOCK_ID/" 2>/dev/null || true
+          else
+            reason="assembly_failed_rc_$assemble_rc"
           fi
           STATE="$state" REASON="$reason" python - <<'PY'
           import json, os
@@ -497,7 +513,7 @@ jobs:
           MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
         run: |
           set -euo pipefail
-          mkdir -p generated/master-plan generated/master-artifact/master
+          mkdir -p generated/master-artifact/master
           python - <<'PY'
           import json, os
           from pathlib import Path
@@ -519,7 +535,7 @@ jobs:
               if not audio.is_file():
                   failures.append({"block":block,"reason":"missing_block_audio"})
                   continue
-              inputs.append({"file":str(Path("..")/".."/audio),"pause_after_ms":0})
+              inputs.append({"file":str(audio),"pause_after_ms":0})
           if failures:
               Path("generated/master-artifact/master/master-result.json").write_text(
                   json.dumps({
@@ -530,7 +546,7 @@ jobs:
               )
               Path(os.environ["GITHUB_OUTPUT"]).open("a",encoding="utf-8").write("master_state=failed\n")
           else:
-              Path("generated/master-plan/master.json").write_text(
+              Path("production-master.json").write_text(
                   json.dumps({"schema_version":1,"id":"master","profile":"speech","inputs":inputs},
                   ensure_ascii=False,indent=2)+"\n",encoding="utf-8"
               )
@@ -544,16 +560,32 @@ jobs:
           ENGINE_REF: ${{ needs.plan.outputs.engine_ref }}
           MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
         run: |
-          set -euo pipefail
-          audio-engine assemble generated/master-plan/master.json --out generated/master
-          audio-engine qa generated/master/master
-          qa_status="$(python -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["status"])' generated/master/master/qa-report.json)"
-          cp -r generated/master/master/* generated/master-artifact/master/
+          set -u
           state="failed"
-          reason="automatic_qa_failed"
-          if [[ "$qa_status" == "PASS" ]]; then
-            state="ready"
-            reason=""
+          reason="assembly_failed"
+          set +e
+          audio-engine assemble production-master.json --out generated/master
+          assemble_rc=$?
+          set -e
+          if [[ $assemble_rc -eq 0 ]]; then
+            set +e
+            audio-engine qa generated/master/master
+            qa_rc=$?
+            set -e
+            if [[ $qa_rc -ne 0 ]]; then
+              reason="qa_command_failed_rc_$qa_rc"
+            else
+              qa_status="$(python -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["status"])' generated/master/master/qa-report.json)"
+              if [[ "$qa_status" == "PASS" ]]; then
+                state="ready"
+                reason=""
+              else
+                reason="automatic_qa_failed"
+              fi
+            fi
+            cp -r generated/master/master/* generated/master-artifact/master/ 2>/dev/null || true
+          else
+            reason="assembly_failed_rc_$assemble_rc"
           fi
           STATE="$state" REASON="$reason" python - <<'PY'
           import json, os
@@ -574,6 +606,9 @@ jobs:
         run: |
           set -euo pipefail
           state="failed"
+          if [[ ! -f generated/master-artifact/master/master-result.json ]]; then
+            echo '{"schema_version":1,"state":"failed","reason":"runner_or_orchestration_failure_before_result"}' > generated/master-artifact/master/master-result.json
+          fi
           if [[ -f generated/master-artifact/master/master-result.json ]]; then
             state="$(python -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("state","failed"))' generated/master-artifact/master/master-result.json)"
           fi
