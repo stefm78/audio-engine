@@ -136,7 +136,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.ready_unit_count != '0'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       max-parallel: ${{ inputs.max_parallel }}
@@ -155,20 +155,86 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '${{ matrix.python_version }}'
+          cache: pip
+          cache-dependency-path: .audio-engine/requirements/chatterbox-mtl-v3-h1b-runtime.txt
+
+      - name: Restore optional promoted-model cache
+        if: matrix.provider_package_count != 0
+        uses: actions/cache@v4
+        with:
+          path: generated/provider-models
+          key: >-
+            ${{ inputs.cache_namespace }}-${{ runner.os }}-provider-models-
+            ${{ matrix.provider_packages_fingerprint }}
+
+      - name: Install exact promoted provider runtime
+        if: matrix.provider_package_count != 0
+        shell: bash
+        env:
+          PROVIDER_PACKAGES_JSON: ${{ toJSON(matrix.provider_packages) }}
+        run: |
+          set -euo pipefail
+          mapfile -t packages < <(python - <<'PY'
+          import json, os
+          for item in json.loads(os.environ["PROVIDER_PACKAGES_JSON"]):
+              print(item["package"])
+          PY
+          )
+          installed=()
+          for package in "${packages[@]}"; do
+            provider_id="$(python - "$package" <<'PY'
+          import json, sys
+          print(json.load(open(sys.argv[1], encoding="utf-8"))["provider"]["id"])
+          PY
+            )"
+            case "$provider_id" in
+              chatterbox-multilingual-v3)
+                if [[ " ${installed[*]} " != *" $provider_id "* ]]; then
+                  bash .audio-engine/scripts/install_chatterbox_mtl_v3_h1b.sh
+                  installed+=("$provider_id")
+                fi
+                ;;
+              *)
+                echo "ERROR: Production provider '$provider_id' has no promoted runtime installer." >&2
+                echo "No fallback is allowed." >&2
+                exit 2
+                ;;
+            esac
+          done
 
       - name: Install exact Audio Engine
         run: python -m pip install --disable-pip-version-check ./.audio-engine
 
-      - name: Refuse unsupported Production provider
+      - name: Hydrate and verify locked Production assets
+        if: matrix.asset_count != 0
         shell: bash
+        run: >-
+          audio-engine production hydrate-assets
+          "${{ inputs.manifest_path }}"
+          --unit "${{ matrix.id }}"
+          --workspace-root .
+
+      - name: Hydrate and verify promoted provider assets
+        if: matrix.provider_package_count != 0
+        shell: bash
+        env:
+          PROVIDER_PACKAGES_JSON: ${{ toJSON(matrix.provider_packages) }}
+          VOICE_PACK: ${{ matrix.voice_pack }}
         run: |
           set -euo pipefail
-          if [[ "${{ matrix.provider }}" != "edge" ]]; then
-            echo "ERROR: Production provider '${{ matrix.provider }}' is not promoted by this engine runtime." >&2
-            echo "No fallback is allowed." >&2
-            exit 2
-          fi
+          mapfile -t packages < <(python - <<'PY'
+          import json, os
+          for item in json.loads(os.environ["PROVIDER_PACKAGES_JSON"]):
+              print(item["package"])
+          PY
+          )
+          for package in "${packages[@]}"; do
+            audio-engine provider-package hydrate-references "$package" --workspace-root .
+            audio-engine provider-package hydrate-model "$package" --cache-root generated/provider-models
+            audio-engine provider-package validate "$package" \
+              --verify-files --workspace-root . --voice-pack "$VOICE_PACK"
+          done
 
       - name: Restore optional scene cache
         uses: actions/cache@v4
@@ -190,6 +256,8 @@ jobs:
           VOICE_PACK: ${{ matrix.voice_pack }}
           VOICE_PACK_SHA: ${{ matrix.voice_pack_sha256 }}
           PROVIDER: ${{ matrix.provider }}
+          PROVIDERS_JSON: ${{ toJSON(matrix.providers) }}
+          PROVIDER_PACKAGES_JSON: ${{ toJSON(matrix.provider_packages) }}
           ENGINE_REF: ${{ needs.plan.outputs.engine_ref }}
           MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
         run: |
@@ -208,7 +276,19 @@ jobs:
           state="failed"
           reason=""
           set +e
-          audio-engine render "$PROGRAM" --out "$work" --voices "$VOICE_PACK"
+          provider_args=()
+          mapfile -t packages < <(python - <<'PY'
+          import json, os
+          for item in json.loads(os.environ["PROVIDER_PACKAGES_JSON"]):
+              print(item["package"])
+          PY
+          )
+          for package in "${packages[@]}"; do
+            provider_args+=(--provider-package "$package")
+          done
+          audio-engine render "$PROGRAM" --out "$work" --voices "$VOICE_PACK" \
+            --workspace-root . --provider-model-cache generated/provider-models \
+            "${provider_args[@]}"
           render_rc=$?
           set -e
           if [[ $render_rc -ne 0 ]]; then
@@ -225,9 +305,16 @@ jobs:
           for key,value in expected.items():
               if m.get(key)!=value:
                   raise SystemExit(f"{key} mismatch: {m.get(key)} != {value}")
-          provider=(m.get("provider") or {}).get("name")
-          if provider!=os.environ["PROVIDER"]:
-              raise SystemExit(f"provider mismatch: {provider} != {os.environ['PROVIDER']}")
+          expected_providers=sorted(json.loads(os.environ["PROVIDERS_JSON"]))
+          actual_providers=sorted(
+              item.get("name")
+              for item in (m.get("providers") or [])
+              if isinstance(item, dict) and item.get("name")
+          )
+          if actual_providers != expected_providers:
+              raise SystemExit(
+                  f"providers mismatch: {actual_providers} != {expected_providers}"
+              )
           PY
             bind_rc=$?
             if [[ $bind_rc -eq 0 ]]; then
@@ -272,6 +359,7 @@ jobs:
               "voice_pack":os.environ["VOICE_PACK"],
               "voice_pack_sha256":os.environ["VOICE_PACK_SHA"],
               "provider":os.environ["PROVIDER"],
+              "providers":json.loads(os.environ["PROVIDERS_JSON"]),
               "engine_ref":os.environ["ENGINE_REF"],
               "production_manifest_sha256":os.environ["MANIFEST_SHA"],
           }
@@ -291,6 +379,7 @@ jobs:
           VOICE_PACK: ${{ matrix.voice_pack }}
           VOICE_PACK_SHA: ${{ matrix.voice_pack_sha256 }}
           PROVIDER: ${{ matrix.provider }}
+          PROVIDERS_JSON: ${{ toJSON(matrix.providers) }}
           ENGINE_REF: ${{ needs.plan.outputs.engine_ref }}
           MANIFEST_SHA: ${{ needs.plan.outputs.manifest_sha256 }}
         run: |
@@ -313,6 +402,7 @@ jobs:
                   "voice_pack":os.environ["VOICE_PACK"],
                   "voice_pack_sha256":os.environ["VOICE_PACK_SHA"],
                   "provider":os.environ["PROVIDER"],
+                  "providers":json.loads(os.environ["PROVIDERS_JSON"]),
                   "engine_ref":os.environ["ENGINE_REF"],
                   "production_manifest_sha256":os.environ["MANIFEST_SHA"],
               }, ensure_ascii=False, indent=2)+"\n",

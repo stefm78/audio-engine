@@ -1,9 +1,11 @@
 import hashlib
 import json
 import re
+import urllib.request
 from pathlib import Path
 
 from .contract import ContractError, load_json
+from .provider_package import validate_provider_package
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -48,6 +50,87 @@ def _resolve_local(workspace_root, relative):
     return target
 
 
+def _unit_providers(unit, label, errors):
+    providers = unit.get("providers")
+    if providers is None:
+        provider = unit.get("provider")
+        if not _non_empty(provider):
+            errors.append(f"{label}.provider is required; fallback is never implicit")
+            return []
+        return [provider]
+    if (
+        not isinstance(providers, list)
+        or not providers
+        or not all(_non_empty(value) for value in providers)
+    ):
+        errors.append(f"{label}.providers must be a non-empty array of provider ids")
+        return []
+    if len(providers) != len(set(providers)):
+        errors.append(f"{label}.providers contains duplicates")
+    return providers
+
+
+def _validate_locked_assets(unit, label, errors):
+    assets = unit.get("assets", [])
+    if not isinstance(assets, list):
+        errors.append(f"{label}.assets must be an array")
+        return []
+    seen = set()
+    for index, item in enumerate(assets, start=1):
+        item_label = f"{label}.assets[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{item_label} must be an object")
+            continue
+        asset_id = item.get("id")
+        if not _non_empty(asset_id):
+            errors.append(f"{item_label}.id is required")
+            continue
+        if asset_id in seen:
+            errors.append(f"{label}.assets duplicates id {asset_id!r}")
+        seen.add(asset_id)
+        _validate_relpath(item.get("path"), f"{item_label}.path", errors)
+        _validate_sha256(item.get("sha256"), f"{item_label}.sha256", errors)
+        source = item.get("source")
+        if not isinstance(source, dict) or source.get("type") != "github_release":
+            errors.append(f"{item_label}.source.type must be 'github_release'")
+            continue
+        for field in ("repository", "tag", "asset"):
+            if not _non_empty(source.get(field)):
+                errors.append(f"{item_label}.source.{field} is required")
+    return assets
+
+
+def _validate_provider_packages(unit, providers, label, errors, require_complete=True):
+    packages = unit.get("provider_packages", [])
+    if not isinstance(packages, list):
+        errors.append(f"{label}.provider_packages must be an array")
+        return []
+    seen = set()
+    for index, item in enumerate(packages, start=1):
+        item_label = f"{label}.provider_packages[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{item_label} must be an object")
+            continue
+        provider = item.get("provider")
+        if not _non_empty(provider):
+            errors.append(f"{item_label}.provider is required")
+            continue
+        if provider in seen:
+            errors.append(f"{label}.provider_packages duplicates provider {provider!r}")
+        seen.add(provider)
+        if provider not in providers:
+            errors.append(f"{item_label}.provider {provider!r} is not declared by the unit")
+        _validate_relpath(item.get("package"), f"{item_label}.package", errors)
+        _validate_sha256(item.get("package_sha256"), f"{item_label}.package_sha256", errors)
+
+    missing = sorted(set(providers) - {"edge"} - seen)
+    if require_complete and missing:
+        errors.append(
+            f"{label} needs provider_packages for every non-edge provider: {missing}"
+        )
+    return packages
+
+
 def validate_production_manifest(manifest, manifest_path=None, workspace_root=".", verify_files=False):
     errors = []
     if not isinstance(manifest, dict):
@@ -83,9 +166,15 @@ def validate_production_manifest(manifest, manifest_path=None, workspace_root=".
         state = unit.get("state")
         if state not in _UNIT_STATES:
             errors.append(f"{label}.state must be one of {', '.join(_UNIT_STATES)}")
-        provider = unit.get("provider")
-        if not _non_empty(provider):
-            errors.append(f"{label}.provider is required; fallback is never implicit")
+        providers = _unit_providers(unit, label, errors)
+        assets = _validate_locked_assets(unit, label, errors)
+        provider_packages = _validate_provider_packages(
+            unit,
+            providers,
+            label,
+            errors,
+            require_complete=(state == "ready"),
+        )
 
         if state == "hold":
             if not _non_empty(unit.get("hold_reason")):
@@ -176,6 +265,55 @@ def validate_production_manifest(manifest, manifest_path=None, workspace_root=".
                     errors.append(
                         f"units[{index}].{hash_field} mismatch for {relative}: expected {expected}, got {actual}"
                     )
+            for asset_index, item in enumerate(unit.get("assets", []), start=1):
+                relative = item.get("path")
+                expected = item.get("sha256")
+                if not (_non_empty(relative) and isinstance(expected, str) and _SHA256_RE.fullmatch(expected)):
+                    continue
+                try:
+                    path = _resolve_local(workspace_root, relative)
+                except ContractError as exc:
+                    errors.append(f"units[{index}].assets[{asset_index}].path: {exc}")
+                    continue
+                if path.is_file() and _sha256(path) != expected:
+                    errors.append(
+                        f"units[{index}].assets[{asset_index}].sha256 mismatch for {relative}"
+                    )
+
+            providers = _unit_providers(unit, f"units[{index}]", [])
+            for package_index, item in enumerate(unit.get("provider_packages", []), start=1):
+                relative = item.get("package")
+                expected = item.get("package_sha256")
+                if not (_non_empty(relative) and isinstance(expected, str) and _SHA256_RE.fullmatch(expected)):
+                    continue
+                try:
+                    path = _resolve_local(workspace_root, relative)
+                except ContractError as exc:
+                    errors.append(f"units[{index}].provider_packages[{package_index}].package: {exc}")
+                    continue
+                if not path.is_file():
+                    errors.append(
+                        f"units[{index}].provider_packages[{package_index}].package not found: {relative}"
+                    )
+                    continue
+                actual = _sha256(path)
+                if actual != expected:
+                    errors.append(
+                        f"units[{index}].provider_packages[{package_index}].package_sha256 mismatch "
+                        f"for {relative}: expected {expected}, got {actual}"
+                    )
+                    continue
+                try:
+                    package = validate_provider_package(load_json(path), package_path=path)
+                except ContractError as exc:
+                    errors.append(
+                        f"units[{index}].provider_packages[{package_index}] invalid: {exc}"
+                    )
+                    continue
+                if package["provider"]["id"] != item.get("provider"):
+                    errors.append(
+                        f"units[{index}].provider_packages[{package_index}].provider does not match package"
+                    )
 
     if errors:
         raise ContractError("; ".join(errors))
@@ -199,17 +337,60 @@ def production_plan(manifest_path, workspace_root=".", verify_files=True):
     held_units = []
     by_id = {unit["id"]: unit for unit in manifest["units"]}
     for unit in manifest["units"]:
+        providers = unit.get("providers")
+        if providers is None:
+            providers = [unit["provider"]]
         item = {
             "id": unit["id"],
             "assembly": unit_to_assembly[unit["id"]],
-            "provider": unit["provider"],
+            "provider": unit.get("provider") or ("+".join(providers)),
+            "providers": providers,
         }
         if unit["state"] == "ready":
+            package_records = []
+            python_versions = set()
+            for package_item in unit.get("provider_packages", []):
+                package_path = _resolve_local(workspace_root, package_item["package"])
+                package = validate_provider_package(load_json(package_path), package_path=package_path)
+                runtime_python = package["runtime"]["python"]
+                python_versions.add(runtime_python)
+                package_records.append({
+                    "provider": package_item["provider"],
+                    "package": package_item["package"],
+                    "package_sha256": package_item["package_sha256"],
+                    "python": runtime_python,
+                    "device": package["runtime"].get("device", "cpu"),
+                    "model_revision": package["model"]["revision"],
+                })
+            if len(python_versions) > 1:
+                raise ContractError(
+                    f"unit {unit['id']} provider packages require incompatible Python versions: "
+                    f"{sorted(python_versions)}"
+                )
             item.update(
                 program=unit["program"],
                 program_sha256=unit["program_sha256"],
                 voice_pack=unit["voice_pack"],
                 voice_pack_sha256=unit["voice_pack_sha256"],
+                assets=unit.get("assets", []),
+                asset_count=len(unit.get("assets", [])),
+                assets_fingerprint=hashlib.sha256(
+                    json.dumps(
+                        unit.get("assets", []),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+                provider_packages=package_records,
+                provider_package_count=len(package_records),
+                provider_packages_fingerprint=hashlib.sha256(
+                    json.dumps(
+                        package_records,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+                python_version=(next(iter(python_versions)) if python_versions else "3.12"),
             )
             ready_units.append(item)
         else:
@@ -240,4 +421,75 @@ def production_plan(manifest_path, workspace_root=".", verify_files=True):
             "state": "ready" if not held_assemblies else "hold",
             "held_assemblies": held_assemblies,
         },
+    }
+
+
+def hydrate_production_unit_assets(manifest_path, unit_id, workspace_root="."):
+    manifest_path = Path(manifest_path)
+    manifest = validate_production_manifest(
+        load_json(manifest_path),
+        manifest_path=manifest_path,
+        workspace_root=workspace_root,
+        verify_files=False,
+    )
+    unit = next((item for item in manifest["units"] if item["id"] == unit_id), None)
+    if unit is None:
+        raise ContractError(f"unknown production unit: {unit_id}")
+
+    root = Path(workspace_root).resolve()
+    results = []
+    for item in unit.get("assets", []):
+        target = _resolve_local(root, item["path"])
+        if target.is_file() and _sha256(target) == item["sha256"]:
+            results.append({
+                "id": item["id"],
+                "path": item["path"],
+                "sha256": item["sha256"],
+                "cache_hit": True,
+            })
+            continue
+
+        source = item["source"]
+        url = (
+            f"https://github.com/{source['repository']}/releases/download/"
+            f"{source['tag']}/{source['asset']}"
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp = target.with_suffix(target.suffix + ".download")
+        temp.unlink(missing_ok=True)
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "recit-audio-engine-production-assets/1"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response, temp.open("wb") as handle:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+            actual = _sha256(temp)
+            if actual != item["sha256"]:
+                raise ContractError(
+                    f"production asset SHA-256 mismatch for {item['id']}: "
+                    f"{actual} != {item['sha256']}"
+                )
+            temp.replace(target)
+        finally:
+            temp.unlink(missing_ok=True)
+
+        results.append({
+            "id": item["id"],
+            "path": item["path"],
+            "sha256": item["sha256"],
+            "cache_hit": False,
+            "source": url,
+        })
+
+    return {
+        "schema_version": 1,
+        "status": "ready",
+        "manifest_id": manifest["id"],
+        "unit_id": unit_id,
+        "assets": results,
     }

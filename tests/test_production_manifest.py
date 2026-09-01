@@ -3,9 +3,14 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from audio_engine.contract import ContractError
-from audio_engine.production import production_plan, validate_production_manifest
+from audio_engine.production import (
+    hydrate_production_unit_assets,
+    production_plan,
+    validate_production_manifest,
+)
 
 
 def sha256(path):
@@ -64,6 +69,117 @@ class ProductionManifestTests(unittest.TestCase):
             self.assertEqual([u["id"] for u in plan["held_units"]], ["u2"])
             self.assertEqual(plan["assemblies"][0]["state"], "hold")
             self.assertEqual(plan["master"]["state"], "hold")
+
+    def test_ready_multi_provider_unit_binds_package_and_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "u1.json").write_text('{"id":"u1"}', encoding="utf-8")
+            (root / "voices.json").write_text('{"version":1}', encoding="utf-8")
+            package = {
+                "schema_version": 1,
+                "id": "local-provider-v1",
+                "provider": {"id": "local-test", "implementation_version": "1.0.0"},
+                "runtime": {
+                    "kind": "python",
+                    "python": "3.11.16",
+                    "device": "cpu",
+                    "dependencies": [{"name": "local-test", "version": "1.0.0"}],
+                },
+                "model": {
+                    "id": "example/model",
+                    "source": "local",
+                    "revision": "model-v1",
+                    "integrity": [{"name": "weights.bin", "sha256": "c" * 64}],
+                },
+                "voice_pack_sha256": sha256(root / "voices.json"),
+                "synthesis": {"seed": 7, "parameters": {}},
+                "references": [],
+                "fallback": "fail",
+            }
+            package_path = root / "provider.json"
+            package_path.write_text(json.dumps(package), encoding="utf-8")
+
+            manifest = self.base_manifest()
+            unit = manifest["units"][0]
+            unit["providers"] = ["edge", "local-test"]
+            unit.pop("provider")
+            unit["program_sha256"] = sha256(root / "u1.json")
+            unit["voice_pack_sha256"] = sha256(root / "voices.json")
+            unit["provider_packages"] = [{
+                "provider": "local-test",
+                "package": "provider.json",
+                "package_sha256": sha256(package_path),
+            }]
+            manifest_path = root / "production.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            plan = production_plan(manifest_path, workspace_root=root)
+            ready = plan["ready_units"][0]
+            self.assertEqual(ready["providers"], ["edge", "local-test"])
+            self.assertEqual(ready["provider_package_count"], 1)
+            self.assertEqual(ready["python_version"], "3.11.16")
+            self.assertEqual(
+                ready["provider_packages"][0]["provider"],
+                "local-test",
+            )
+
+    def test_ready_non_edge_provider_without_package_is_rejected(self):
+        manifest = self.base_manifest()
+        unit = manifest["units"][0]
+        unit["providers"] = ["edge", "local-test"]
+        unit.pop("provider")
+        with self.assertRaisesRegex(ContractError, "needs provider_packages"):
+            validate_production_manifest(manifest)
+
+    def test_locked_asset_can_be_absent_at_plan_then_hydrated_by_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "u1.json").write_text('{"id":"u1"}', encoding="utf-8")
+            (root / "voices.json").write_text('{"version":1}', encoding="utf-8")
+            payload = b"locked-ambience"
+            digest = hashlib.sha256(payload).hexdigest()
+
+            manifest = self.base_manifest()
+            unit = manifest["units"][0]
+            unit["program_sha256"] = sha256(root / "u1.json")
+            unit["voice_pack_sha256"] = sha256(root / "voices.json")
+            unit["assets"] = [{
+                "id": "ambience",
+                "path": "assets/ambience.wav",
+                "sha256": digest,
+                "source": {
+                    "type": "github_release",
+                    "repository": "owner/repo",
+                    "tag": "assets-v1",
+                    "asset": "ambience.wav",
+                },
+            }]
+            manifest_path = root / "production.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            plan = production_plan(manifest_path, workspace_root=root)
+            self.assertEqual(plan["ready_units"][0]["asset_count"], 1)
+            self.assertFalse((root / "assets" / "ambience.wav").exists())
+
+            class Response:
+                def __enter__(self):
+                    from io import BytesIO
+                    self.stream = BytesIO(payload)
+                    return self
+                def __exit__(self, *args):
+                    return False
+                def read(self, size=-1):
+                    return self.stream.read(size)
+
+            with patch("audio_engine.production.urllib.request.urlopen", return_value=Response()):
+                report = hydrate_production_unit_assets(
+                    manifest_path,
+                    "u1",
+                    workspace_root=root,
+                )
+            self.assertEqual(report["status"], "ready")
+            self.assertEqual((root / "assets" / "ambience.wav").read_bytes(), payload)
+            self.assertFalse(report["assets"][0]["cache_hit"])
 
     def test_ready_hash_mismatch_fails_before_render(self):
         with tempfile.TemporaryDirectory() as tmp:

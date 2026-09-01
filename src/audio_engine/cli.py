@@ -12,8 +12,17 @@ from .contract import ContractError, load_json, validate_assembly, validate_prog
 from .effects import load_capabilities, public_capabilities
 from .preflight import preflight_program
 from .preview import preview_program
-from .production import production_plan, validate_production_manifest
-from .provider_package import provider_package_report
+from .providers.factory import build_promoted_providers
+from .production import (
+    hydrate_production_unit_assets,
+    production_plan,
+    validate_production_manifest,
+)
+from .provider_package import (
+    hydrate_provider_model,
+    hydrate_provider_references,
+    provider_package_report,
+)
 from .qa import qa_render
 from .render import render_program
 from .sound.acquisition import DEFAULT_PROVIDERS, ensure_sound
@@ -83,6 +92,14 @@ def build_parser():
     render.add_argument("--out", default="output")
     render.add_argument("--voices", default=None)
     render.add_argument("--sounds", default=None)
+    render.add_argument(
+        "--provider-package",
+        action="append",
+        default=[],
+        help="Immutable promoted provider package; repeat for multiple local providers",
+    )
+    render.add_argument("--provider-model-cache", default=".provider-models")
+    render.add_argument("--workspace-root", default=".")
 
     preview = sub.add_parser("preview", help="Render one program and extract short windows around its sound events")
     preview.add_argument("program")
@@ -134,6 +151,42 @@ def build_parser():
     )
     production_plan_parser.add_argument("manifest")
     production_plan_parser.add_argument("--workspace-root", default=".")
+    production_assets = production_sub.add_parser(
+        "hydrate-assets",
+        help="Materialize content-addressed assets for one Production unit",
+    )
+    production_assets.add_argument("manifest")
+    production_assets.add_argument("--unit", required=True)
+    production_assets.add_argument("--workspace-root", default=".")
+
+    provider_package = sub.add_parser(
+        "provider-package",
+        help="Validate and hydrate immutable promoted provider packages",
+    )
+    provider_package_sub = provider_package.add_subparsers(
+        dest="provider_package_command",
+        required=True,
+    )
+    provider_package_validate = provider_package_sub.add_parser(
+        "validate",
+        help="Validate provider/model/runtime/integrity/fallback declarations",
+    )
+    provider_package_validate.add_argument("package")
+    provider_package_validate.add_argument("--verify-files", action="store_true")
+    provider_package_validate.add_argument("--workspace-root", default=".")
+    provider_package_validate.add_argument("--voice-pack", default=None)
+    provider_package_hydrate = provider_package_sub.add_parser(
+        "hydrate-model",
+        help="Download an exact model snapshot and verify every declared SHA-256",
+    )
+    provider_package_hydrate.add_argument("package")
+    provider_package_hydrate.add_argument("--cache-root", default=".provider-models")
+    provider_package_refs = provider_package_sub.add_parser(
+        "hydrate-references",
+        help="Materialize content-addressed reference assets from explicit sources",
+    )
+    provider_package_refs.add_argument("package")
+    provider_package_refs.add_argument("--workspace-root", default=".")
 
     qa = sub.add_parser(
         "qa",
@@ -239,7 +292,18 @@ def main(argv=None):
     exit_code = 0
     try:
         if args.command == "render":
-            result = render_program(args.program, args.out, voices_path=args.voices, sounds_path=args.sounds)
+            providers = build_promoted_providers(
+                args.provider_package,
+                workspace_root=args.workspace_root,
+                model_cache_root=args.provider_model_cache,
+            )
+            result = render_program(
+                args.program,
+                args.out,
+                voices_path=args.voices,
+                sounds_path=args.sounds,
+                providers=(providers or None),
+            )
         elif args.command == "preview":
             result = preview_program(
                 args.program,
@@ -270,12 +334,23 @@ def main(argv=None):
             else:
                 result = production_plan(args.manifest, workspace_root=args.workspace_root)
         elif args.command == "provider-package":
-            result = provider_package_report(
-                args.package,
-                workspace_root=args.workspace_root,
-                verify_files=args.verify_files,
-                voice_pack_path=args.voice_pack,
-            )
+            if args.provider_package_command == "validate":
+                result = provider_package_report(
+                    args.package,
+                    workspace_root=args.workspace_root,
+                    verify_files=args.verify_files,
+                    voice_pack_path=args.voice_pack,
+                )
+            elif args.provider_package_command == "hydrate-model":
+                result = hydrate_provider_model(
+                    args.package,
+                    cache_root=args.cache_root,
+                )
+            else:
+                result = hydrate_provider_references(
+                    args.package,
+                    workspace_root=args.workspace_root,
+                )
         elif args.command == "batch":
             result = render_batch(args.pattern, args.out, voices_path=args.voices, sounds_path=args.sounds)
         elif args.command == "qa":
