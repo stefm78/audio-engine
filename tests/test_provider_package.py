@@ -4,11 +4,13 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from audio_engine.contract import ContractError
 from audio_engine.provider_package import (
     hydrate_provider_model,
+    hydrate_provider_references,
     provider_package_report,
     validate_provider_package,
 )
@@ -94,6 +96,53 @@ class ProviderPackageTests(unittest.TestCase):
             self.assertEqual(report["verified"][0]["sha256"], digest)
             self.assertEqual(calls[0]["revision"], "4" * 40)
             self.assertEqual(calls[0]["allow_patterns"], ["weights.bin"])
+
+    def test_hydrate_reference_from_explicit_release_source_and_verify_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            payload = b"reference-bytes"
+            digest = hashlib.sha256(payload).hexdigest()
+            package = self.package()
+            package["references"] = [{
+                "id": "voice-ref",
+                "path": "refs/voice.wav",
+                "sha256": digest,
+                "source": {
+                    "type": "github_release",
+                    "repository": "owner/repo",
+                    "tag": "provider-assets-v1",
+                    "asset": "voice.wav",
+                },
+            }]
+            path = root / "provider.json"
+            path.write_text(json.dumps(package), encoding="utf-8")
+
+            class Response:
+                def __enter__(self):
+                    from io import BytesIO
+                    self.stream = BytesIO(payload)
+                    return self
+                def __exit__(self, *args):
+                    return False
+                def read(self, size=-1):
+                    return self.stream.read(size)
+
+            with patch("audio_engine.provider_package.urllib.request.urlopen", return_value=Response()) as mocked:
+                report = hydrate_provider_references(path, workspace_root=root)
+
+            target = root / "refs" / "voice.wav"
+            self.assertEqual(target.read_bytes(), payload)
+            self.assertFalse(report["references"][0]["cache_hit"])
+            requested = mocked.call_args.args[0].full_url
+            self.assertEqual(
+                requested,
+                "https://github.com/owner/repo/releases/download/provider-assets-v1/voice.wav",
+            )
+
+            with patch("audio_engine.provider_package.urllib.request.urlopen") as second:
+                cached = hydrate_provider_references(path, workspace_root=root)
+            self.assertTrue(cached["references"][0]["cache_hit"])
+            second.assert_not_called()
 
     def test_verify_voice_pack_and_reference_hashes(self):
         with tempfile.TemporaryDirectory() as tmp:
