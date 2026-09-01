@@ -195,6 +195,7 @@ def qa_render(render_dir):
             "schema_version": 1,
             "status": "FAIL",
             "render_id": manifest.get("id"),
+            "failed_checks": ["files"],
             "checks": checks,
         }
         (render_dir / "qa-report.json").write_text(
