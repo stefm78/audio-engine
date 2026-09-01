@@ -12,6 +12,7 @@ from .contract import ContractError, load_json, validate_assembly, validate_prog
 from .effects import load_capabilities, public_capabilities
 from .preflight import preflight_program
 from .preview import preview_program
+from .providers.factory import build_promoted_providers
 from .production import production_plan, validate_production_manifest
 from .provider_package import (
     hydrate_provider_model,
@@ -87,6 +88,14 @@ def build_parser():
     render.add_argument("--out", default="output")
     render.add_argument("--voices", default=None)
     render.add_argument("--sounds", default=None)
+    render.add_argument(
+        "--provider-package",
+        action="append",
+        default=[],
+        help="Immutable promoted provider package; repeat for multiple local providers",
+    )
+    render.add_argument("--provider-model-cache", default=".provider-models")
+    render.add_argument("--workspace-root", default=".")
 
     preview = sub.add_parser("preview", help="Render one program and extract short windows around its sound events")
     preview.add_argument("program")
@@ -272,7 +281,18 @@ def main(argv=None):
     exit_code = 0
     try:
         if args.command == "render":
-            result = render_program(args.program, args.out, voices_path=args.voices, sounds_path=args.sounds)
+            providers = build_promoted_providers(
+                args.provider_package,
+                workspace_root=args.workspace_root,
+                model_cache_root=args.provider_model_cache,
+            )
+            result = render_program(
+                args.program,
+                args.out,
+                voices_path=args.voices,
+                sounds_path=args.sounds,
+                providers=(providers or None),
+            )
         elif args.command == "preview":
             result = preview_program(
                 args.program,
