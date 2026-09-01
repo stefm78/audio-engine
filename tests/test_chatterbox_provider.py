@@ -1,8 +1,11 @@
 import hashlib
 import json
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from audio_engine.contract import ContractError
 from audio_engine.providers.chatterbox_mtl_v3 import ChatterboxMultilingualV3Provider
@@ -145,6 +148,88 @@ class ChatterboxProviderTests(unittest.TestCase):
                     "voice": "slot",
                     "provider_parameters": {"mystery_knob": 1},
                 })
+
+    def test_synthesize_declares_known_wav_format_without_ffprobe_probe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_path, model, _ = self.make_fixture(tmp)
+            observed = {}
+
+            class FakeModel:
+                sr = 24000
+                def generate(self, *args, **kwargs):
+                    return object()
+
+            fake_numpy = types.ModuleType("numpy")
+            fake_numpy.random = types.SimpleNamespace(seed=lambda value: None)
+
+            fake_torch = types.ModuleType("torch")
+            fake_torch.manual_seed = lambda value: None
+
+            fake_torchaudio = types.ModuleType("torchaudio")
+            def fake_save(path, wav, sample_rate):
+                Path(path).write_bytes(b"RIFFfake")
+            fake_torchaudio.save = fake_save
+
+            class FakeAudio:
+                rms = 1
+                dBFS = -20.0
+                def set_frame_rate(self, value):
+                    return self
+                def set_channels(self, value):
+                    return self
+                def apply_gain(self, value):
+                    return self
+                def export(self, path, format=None):
+                    Path(path).write_bytes(b"RIFFnormalized")
+
+            class FakeAudioSegment:
+                @staticmethod
+                def from_file(path, format=None):
+                    observed["format"] = format
+                    return FakeAudio()
+
+            fake_pydub = types.ModuleType("pydub")
+            fake_pydub.AudioSegment = FakeAudioSegment
+
+            previous = {
+                name: sys.modules.get(name)
+                for name in ("numpy", "torch", "torchaudio", "pydub")
+            }
+            sys.modules.update({
+                "numpy": fake_numpy,
+                "torch": fake_torch,
+                "torchaudio": fake_torchaudio,
+                "pydub": fake_pydub,
+            })
+            try:
+                provider = ChatterboxMultilingualV3Provider(
+                    package_path,
+                    workspace_root=tmp,
+                    model_dir=model,
+                    model_factory=lambda *_: FakeModel(),
+                )
+                output = Path(tmp) / "out.mp3"
+                with patch(
+                    "audio_engine.providers.chatterbox_mtl_v3.run_ffmpeg",
+                    side_effect=lambda args: output.write_bytes(b"mp3"),
+                ):
+                    provider.synthesize(
+                        {
+                            "sequence": 1,
+                            "text": "Bonjour.",
+                            "voice": "slot",
+                        },
+                        output,
+                    )
+            finally:
+                for name, value in previous.items():
+                    if value is None:
+                        sys.modules.pop(name, None)
+                    else:
+                        sys.modules[name] = value
+
+            self.assertEqual(observed["format"], "wav")
+            self.assertTrue(output.is_file())
 
     def test_model_factory_is_lazy(self):
         with tempfile.TemporaryDirectory() as tmp:
