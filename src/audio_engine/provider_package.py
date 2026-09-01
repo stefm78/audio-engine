@@ -80,6 +80,29 @@ def validate_provider_package(package, package_path=None, workspace_root=".", ve
                 if has_revision and not _GIT_SHA_RE.fullmatch(dep["revision"]):
                     errors.append(f"runtime.dependencies[{i}].revision must be an exact 40-char Git SHA")
 
+        system_dependencies = runtime.get("system_dependencies", [])
+        if not isinstance(system_dependencies, list):
+            errors.append("runtime.system_dependencies must be an array")
+        else:
+            seen_system = set()
+            for i, dep in enumerate(system_dependencies, 1):
+                label = f"runtime.system_dependencies[{i}]"
+                if not isinstance(dep, dict) or not _non_empty(dep.get("name")):
+                    errors.append(f"{label}.name is required")
+                    continue
+                if dep["name"] in seen_system:
+                    errors.append(f"duplicate system dependency: {dep['name']}")
+                seen_system.add(dep["name"])
+                commands = dep.get("commands")
+                if (
+                    not isinstance(commands, list)
+                    or not commands
+                    or not all(_non_empty(command) for command in commands)
+                ):
+                    errors.append(f"{label}.commands must be a non-empty array of command names")
+                if "reference_version" in dep and not _non_empty(dep.get("reference_version")):
+                    errors.append(f"{label}.reference_version must be a non-empty string")
+
     model = package.get("model")
     if not isinstance(model, dict):
         errors.append("model must be an object")
@@ -218,6 +241,7 @@ def provider_package_report(path, workspace_root=".", verify_files=False, voice_
         "model_revision": package["model"]["revision"],
         "model_integrity_items": len(package["model"]["integrity"]),
         "reference_count": len(package.get("references", [])),
+        "system_dependency_count": len(package["runtime"].get("system_dependencies", [])),
         "seed": package["synthesis"]["seed"],
         "files_verified": bool(verify_files),
     }

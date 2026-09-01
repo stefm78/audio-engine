@@ -2,6 +2,8 @@ import hashlib
 import json
 import os
 import random
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -55,6 +57,7 @@ class ChatterboxMultilingualV3Provider:
             )
         runtime = self.package["runtime"]
         self.device = runtime.get("device", "cpu")
+        self.system_runtime = self._verify_system_runtime(runtime)
         if self.device != "cpu":
             raise ContractError(
                 "chatterbox-multilingual-v3 Production v1 is qualified for device='cpu' only"
@@ -72,6 +75,40 @@ class ChatterboxMultilingualV3Provider:
         self._model_factory = model_factory
         self._model = None
 
+    def _verify_system_runtime(self, runtime):
+        evidence = []
+        for item in runtime.get("system_dependencies", []):
+            commands = []
+            for command in item["commands"]:
+                executable = shutil.which(command)
+                if not executable:
+                    raise ContractError(
+                        f"Chatterbox system runtime command is unavailable: {command!r}"
+                    )
+                probe = subprocess.run(
+                    [executable, "-version"],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                )
+                first_line = (probe.stdout or "").splitlines()[:1]
+                if probe.returncode != 0 or not first_line:
+                    raise ContractError(
+                        f"Chatterbox system runtime version probe failed: {command!r}"
+                    )
+                commands.append({
+                    "command": command,
+                    "executable": executable,
+                    "version": first_line[0].strip(),
+                })
+            evidence.append({
+                "name": item["name"],
+                "reference_version": item.get("reference_version"),
+                "commands": commands,
+            })
+        return evidence
+
     def cache_identity(self):
         payload = {
             "provider": self.name,
@@ -85,6 +122,7 @@ class ChatterboxMultilingualV3Provider:
                 for item in self.package.get("references", [])
             ],
             "device": self.device,
+            "system_runtime": self.system_runtime,
         }
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

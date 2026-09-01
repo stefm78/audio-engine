@@ -72,6 +72,66 @@ class ChatterboxProviderTests(unittest.TestCase):
         package_path.write_text(json.dumps(package), encoding="utf-8")
         return package_path, model, package
 
+    def test_missing_declared_system_runtime_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_path, model, package = self.make_fixture(tmp)
+            package["runtime"]["system_dependencies"] = [{
+                "name": "ffmpeg",
+                "commands": ["ffmpeg", "ffprobe"],
+                "reference_version": "7:6.1.1-3ubuntu5",
+            }]
+            package_path.write_text(json.dumps(package), encoding="utf-8")
+            fake_probe = types.SimpleNamespace(
+                returncode=0,
+                stdout="ffmpeg version 6.1.1\n",
+            )
+            with patch(
+                "audio_engine.providers.chatterbox_mtl_v3.shutil.which",
+                side_effect=lambda command: None if command == "ffprobe" else "/usr/bin/ffmpeg",
+            ), patch(
+                "audio_engine.providers.chatterbox_mtl_v3.subprocess.run",
+                return_value=fake_probe,
+            ):
+                with self.assertRaisesRegex(
+                    ContractError,
+                    "system runtime command is unavailable: 'ffprobe'",
+                ):
+                    ChatterboxMultilingualV3Provider(
+                        package_path,
+                        workspace_root=tmp,
+                        model_dir=model,
+                    )
+
+    def test_system_runtime_version_participates_in_cache_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_path, model, package = self.make_fixture(tmp)
+            package["runtime"]["system_dependencies"] = [{
+                "name": "ffmpeg",
+                "commands": ["ffmpeg", "ffprobe"],
+                "reference_version": "7:6.1.1-3ubuntu5",
+            }]
+            package_path.write_text(json.dumps(package), encoding="utf-8")
+
+            def make_provider(version):
+                fake = types.SimpleNamespace(returncode=0, stdout=version + "\n")
+                with patch(
+                    "audio_engine.providers.chatterbox_mtl_v3.shutil.which",
+                    side_effect=lambda command: f"/usr/bin/{command}",
+                ), patch(
+                    "audio_engine.providers.chatterbox_mtl_v3.subprocess.run",
+                    return_value=fake,
+                ):
+                    return ChatterboxMultilingualV3Provider(
+                        package_path,
+                        workspace_root=tmp,
+                        model_dir=model,
+                        model_factory=lambda *_: object(),
+                    )
+
+            first = make_provider("ffmpeg version 6.1.1")
+            second = make_provider("ffmpeg version 6.1.2")
+            self.assertNotEqual(first.cache_identity(), second.cache_identity())
+
     def test_init_verifies_model_and_reference_assets(self):
         with tempfile.TemporaryDirectory() as tmp:
             package_path, model, _ = self.make_fixture(tmp)

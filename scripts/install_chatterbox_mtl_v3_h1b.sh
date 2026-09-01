@@ -11,6 +11,25 @@ if sys.version_info[:3] != expected:
     )
 PY
 
+# H1b authority job 99322452235 installed Ubuntu ffmpeg
+# 7:6.1.1-3ubuntu5, which supplies both ffmpeg and ffprobe. Production
+# provisions the same declared capability and records the actual runner version.
+if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo "ERROR: Chatterbox H1b runtime requires ffmpeg + ffprobe; no supported provisioner is available." >&2
+    exit 2
+  fi
+  sudo apt-get update
+  sudo apt-get install -y ffmpeg
+fi
+
+ffmpeg -version | head -n 1
+ffprobe -version | head -n 1
+if command -v dpkg-query >/dev/null 2>&1; then
+  printf 'CHATTERBOX_SYSTEM_FFMPEG_PACKAGE='
+  dpkg-query -W -f='${Version}\n' ffmpeg
+fi
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python -m pip install --disable-pip-version-check \
   -r "$root/requirements/chatterbox-mtl-v3-h1b-runtime.txt"
