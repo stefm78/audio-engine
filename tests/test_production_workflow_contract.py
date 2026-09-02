@@ -116,7 +116,7 @@ class ProductionWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("Hydrate and verify promoted provider assets", self.workflow)
         self.assertIn("--cache-only-promoted-provider", self.workflow)
         self.assertIn("provider_cache_identity_mismatch", self.workflow)
-        self.assertIn("was not cache-only in final render", self.workflow)
+        self.assertIn("promoted_provider_not_cache_only", self.workflow)
         self.assertIn('cp -R "$work/provider-prewarm" "$publish/provider-prewarm"', self.workflow)
 
     def test_provider_prewarm_and_binding_evidence_are_structured_and_explicit(self):
