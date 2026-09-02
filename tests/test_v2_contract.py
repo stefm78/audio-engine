@@ -5,6 +5,7 @@ from pathlib import Path
 
 from audio_engine.ambience.prepare import resolve_ambience_source
 from audio_engine.contract import ContractError, validate_program
+from audio_engine.mix.render import _declared_position
 
 
 class V2ContractTests(unittest.TestCase):
@@ -19,6 +20,27 @@ class V2ContractTests(unittest.TestCase):
                         "ambience": {"file": file_value},
                         "segments": [{"voice": "test", "text": "Hello"}],
                     })
+
+    def test_bounded_subtle_semantic_placements_are_public_contract(self):
+        for placement, expected_pan in (("slight-left", -0.16), ("slight-right", 0.16)):
+            with self.subTest(placement=placement):
+                program = validate_program({
+                    "schema_version": 2,
+                    "id": "subtle-placement",
+                    "title": "Subtle placement",
+                    "actors": {"speaker": {"placement": placement}},
+                    "segments": [{
+                        "character_id": "speaker",
+                        "voice": "test",
+                        "text": "Hello",
+                    }],
+                })
+                resolved, pan = _declared_position(
+                    program["segments"][0],
+                    program["actors"],
+                )
+                self.assertEqual(resolved, placement)
+                self.assertEqual(pan, expected_pan)
 
     def test_numeric_pan_is_not_public_contract(self):
         with self.assertRaises(ContractError):
