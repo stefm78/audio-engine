@@ -1,3 +1,4 @@
+import math
 import re
 import subprocess
 from pathlib import Path
@@ -68,15 +69,26 @@ def encode_concat(parts, output_path, profile):
         encoding="utf-8",
     )
     requested_peak = float(profile["true_peak_db"])
-    filter_peak = requested_peak
+    limiter_ceiling_dbfs = None
     measured_peak = None
     attempts = 0
     try:
         for attempts in range(1, 4):
             filter_value = (
                 f"loudnorm=I={profile['loudness_lufs']}:"
-                f"TP={filter_peak:.3f}:LRA={profile['lra']}"
+                f"TP={requested_peak:.3f}:LRA={profile['lra']}"
             )
+            if limiter_ceiling_dbfs is not None:
+                limiter_linear = math.pow(10.0, limiter_ceiling_dbfs / 20.0)
+                if not 0.0625 <= limiter_linear <= 1.0:
+                    raise RuntimeError(
+                        "Required assembly limiter ceiling exceeds bounded alimiter range: "
+                        f"{limiter_ceiling_dbfs:.3f} dBFS"
+                    )
+                filter_value += (
+                    f",alimiter=limit={limiter_linear:.6f}:"
+                    "attack=5:release=50:level=false"
+                )
             run_ffmpeg([
                 "-f", "concat", "-safe", "0", "-i", str(concat_file),
                 "-af", filter_value,
@@ -90,7 +102,10 @@ def encode_concat(parts, output_path, profile):
             if measured_peak <= requested_peak + 0.5:
                 break
             excess = measured_peak - requested_peak
-            filter_peak -= excess + 0.5
+            if limiter_ceiling_dbfs is None:
+                limiter_ceiling_dbfs = requested_peak - excess - 0.5
+            else:
+                limiter_ceiling_dbfs -= excess + 0.5
         else:
             raise RuntimeError(
                 "Encoded true peak remains above bounded assembly target after "
@@ -101,7 +116,12 @@ def encode_concat(parts, output_path, profile):
 
     return {
         "requested_true_peak_dbtp": requested_peak,
-        "effective_loudnorm_true_peak_dbtp": round(filter_peak, 3),
+        "effective_loudnorm_true_peak_dbtp": requested_peak,
+        "effective_limiter_ceiling_dbfs": (
+            round(limiter_ceiling_dbfs, 3)
+            if limiter_ceiling_dbfs is not None
+            else None
+        ),
         "measured_encoded_true_peak_dbtp": round(float(measured_peak), 3),
         "attempts": attempts,
         "acceptance_ceiling_dbtp": round(requested_peak + 0.5, 3),
