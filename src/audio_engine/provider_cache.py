@@ -1,3 +1,6 @@
+import contextlib
+import json
+import sys
 from pathlib import Path
 
 from .contract import ContractError, load_json, validate_program
@@ -61,3 +64,33 @@ def prewarm_promoted_provider_cache(
         "cache_misses": misses,
         "fingerprints": fingerprints,
     }
+
+
+def prewarm_promoted_provider_cache_to_file(
+    report_path,
+    program_path,
+    voices_path,
+    provider_package_path,
+    cache_root,
+    workspace_root=".",
+    model_cache_root=".provider-models",
+):
+    """Write structured prewarm evidence without trusting provider stdout."""
+    report_path = Path(report_path)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.redirect_stdout(sys.stderr):
+        report = prewarm_promoted_provider_cache(
+            program_path,
+            voices_path,
+            provider_package_path,
+            cache_root,
+            workspace_root=workspace_root,
+            model_cache_root=model_cache_root,
+        )
+    temp_path = report_path.with_name(report_path.name + ".tmp")
+    temp_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temp_path.replace(report_path)
+    return report

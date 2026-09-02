@@ -6,7 +6,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from audio_engine.audio import run_ffmpeg
-from audio_engine.provider_cache import prewarm_promoted_provider_cache
+from audio_engine.provider_cache import (
+    prewarm_promoted_provider_cache,
+    prewarm_promoted_provider_cache_to_file,
+)
 from audio_engine.providers.factory import CacheOnlyProvider
 from audio_engine.render import render_program
 
@@ -91,6 +94,36 @@ class ProviderCacheIsolationTests(unittest.TestCase):
             self.assertEqual(report["cache_hits"], 1)
             self.assertEqual(report["cache_misses"], 1)
             self.assertEqual(report["fingerprints"], ["fp-1", "fp-2"])
+
+    def test_structured_prewarm_report_ignores_provider_stdout_noise(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            program, voices = self.write_program_and_voices(root)
+            provider = ToneProvider("alpha", 440)
+            original = provider.synthesize
+
+            def noisy_synthesize(segment, path):
+                print("provider-library-noise-before-json")
+                return original(segment, path)
+
+            provider.synthesize = noisy_synthesize
+            report_path = root / "prewarm.json"
+            with patch(
+                "audio_engine.provider_cache.build_promoted_providers",
+                return_value={"alpha": provider},
+            ):
+                report = prewarm_promoted_provider_cache_to_file(
+                    report_path,
+                    program,
+                    voices,
+                    root / "alpha-package.json",
+                    root / "cache",
+                )
+
+            parsed = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(parsed, report)
+            self.assertEqual(parsed["status"], "ready")
+            self.assertNotIn("provider-library-noise-before-json", report_path.read_text(encoding="utf-8"))
 
     def test_cache_only_provider_reuses_prewarmed_clip_without_runtime_call(self):
         with tempfile.TemporaryDirectory() as tmp:
