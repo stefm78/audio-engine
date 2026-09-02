@@ -13,6 +13,7 @@ from .effects import load_capabilities, public_capabilities
 from .preflight import preflight_program
 from .preview import preview_program
 from .providers.factory import build_promoted_providers
+from .provider_cache import prewarm_promoted_provider_cache
 from .production import (
     hydrate_production_unit_assets,
     production_plan,
@@ -99,6 +100,12 @@ def build_parser():
         help="Immutable promoted provider package; repeat for multiple local providers",
     )
     render.add_argument("--provider-model-cache", default=".provider-models")
+    render.add_argument(
+        "--cache-only-promoted-provider",
+        action="append",
+        default=[],
+        help="Promoted provider id that must be satisfied from prewarmed cache only; repeat as needed",
+    )
     render.add_argument("--workspace-root", default=".")
 
     preview = sub.add_parser("preview", help="Render one program and extract short windows around its sound events")
@@ -187,6 +194,25 @@ def build_parser():
     )
     provider_package_refs.add_argument("package")
     provider_package_refs.add_argument("--workspace-root", default=".")
+
+    provider_cache = sub.add_parser(
+        "provider-cache",
+        help="Prewarm promoted provider voice caches in an isolated runtime",
+    )
+    provider_cache_sub = provider_cache.add_subparsers(
+        dest="provider_cache_command",
+        required=True,
+    )
+    provider_cache_prewarm = provider_cache_sub.add_parser(
+        "prewarm",
+        help="Render only one promoted provider's Program segments into a shared voice cache",
+    )
+    provider_cache_prewarm.add_argument("program")
+    provider_cache_prewarm.add_argument("--voices", required=True)
+    provider_cache_prewarm.add_argument("--provider-package", required=True)
+    provider_cache_prewarm.add_argument("--cache-root", required=True)
+    provider_cache_prewarm.add_argument("--provider-model-cache", default=".provider-models")
+    provider_cache_prewarm.add_argument("--workspace-root", default=".")
 
     qa = sub.add_parser(
         "qa",
@@ -296,6 +322,7 @@ def main(argv=None):
                 args.provider_package,
                 workspace_root=args.workspace_root,
                 model_cache_root=args.provider_model_cache,
+                cache_only_ids=args.cache_only_promoted_provider,
             )
             result = render_program(
                 args.program,
@@ -342,6 +369,15 @@ def main(argv=None):
                     args.unit,
                     workspace_root=args.workspace_root,
                 )
+        elif args.command == "provider-cache":
+            result = prewarm_promoted_provider_cache(
+                args.program,
+                args.voices,
+                args.provider_package,
+                args.cache_root,
+                workspace_root=args.workspace_root,
+                model_cache_root=args.provider_model_cache,
+            )
         elif args.command == "provider-package":
             if args.provider_package_command == "validate":
                 result = provider_package_report(
