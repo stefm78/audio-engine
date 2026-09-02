@@ -61,7 +61,7 @@ Use this as the default. Do not add stereo or sound design when it does not impr
 }
 ```
 
-Keep a character's placement stable unless the story gives a real reason to move it.
+Keep a character's placement stable unless the story gives a real reason to move it. Prefer `slight-left` / `slight-right` when subtle separation is sufficient; `left` / `right` remain the stronger ±0.45 positions.
 
 ## Recipe 3 — Continuous environment under narration
 
@@ -124,7 +124,7 @@ Prefer `speech` when the environment competes with intelligibility.
 }
 ```
 
-Use explicit `at_ms`. The public placement vocabulary is only `left`, `center`, `right`.
+Use explicit `at_ms`. The public placement vocabulary is bounded and semantic: `left`, `slight-left`, `center`, `slight-right`, `right`. Use `slight-left` / `slight-right` for restrained ±0.16 placement; arbitrary numeric pan remains forbidden.
 
 Choose an intrinsically short one-shot for `punctuation`. This role has no authored play-duration field: the mixer uses the source naturally within the remaining master window. A long source is therefore a poor punctuation ingredient even when it is technically valid as an event asset.
 
