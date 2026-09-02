@@ -38,11 +38,13 @@ class AssemblyPeakGuardTests(unittest.TestCase):
             self.assertEqual(render.call_count, 2)
             first = render.call_args_list[0].args[0]
             second = render.call_args_list[1].args[0]
-            self.assertIn("loudnorm=I=-16:TP=-2.500:LRA=11", first)
-            self.assertNotIn("alimiter=", first)
-            self.assertIn("loudnorm=I=-16:TP=-2.500:LRA=11", second)
-            self.assertIn("alimiter=limit=", second)
-            self.assertIn("attack=5:release=50:level=false", second)
+            first_filter = first[first.index("-af") + 1]
+            second_filter = second[second.index("-af") + 1]
+            self.assertIn("loudnorm=I=-16:TP=-2.500:LRA=11", first_filter)
+            self.assertNotIn("alimiter=", first_filter)
+            self.assertIn("loudnorm=I=-16:TP=-2.500:LRA=11", second_filter)
+            self.assertIn("alimiter=limit=", second_filter)
+            self.assertIn("attack=5:release=50:level=false", second_filter)
             self.assertEqual(report["attempts"], 2)
             self.assertEqual(report["measured_encoded_true_peak_dbtp"], -2.4)
             self.assertEqual(report["effective_loudnorm_true_peak_dbtp"], -2.5)
@@ -63,8 +65,9 @@ class AssemblyPeakGuardTests(unittest.TestCase):
 
             self.assertEqual(render.call_count, 1)
             args = render.call_args_list[0].args[0]
-            self.assertIn("loudnorm=I=-16:TP=-2.500:LRA=11", args)
-            self.assertNotIn("alimiter=", args)
+            filter_value = args[args.index("-af") + 1]
+            self.assertIn("loudnorm=I=-16:TP=-2.500:LRA=11", filter_value)
+            self.assertNotIn("alimiter=", filter_value)
             self.assertIsNone(report["effective_limiter_ceiling_dbfs"])
 
     def test_fails_closed_after_bounded_peak_guard_attempts(self):
