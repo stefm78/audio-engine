@@ -1,0 +1,255 @@
+name: LOCAL TTS P6 VoiceDesign BeltOut one-shot
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  QWEN_REV: 022e286b98fbec7e1e916cb940cdf532cd9f488e
+  VD_MODEL_ID: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+  VD_MODEL_REV: 5ecdb67327fd37bb2e042aab12ff7391903235d3
+  BELTOUT_REV: f71295e33cc9c0092083089ed0f9c1a532e77e6b
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  donors:
+    if: github.head_ref == 'lab/LOCAL-TTS-WP-008-p6-voicedesign-beltout'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          df -h /
+          free -h
+
+      - name: Checkout pinned Qwen3-TTS source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/QwenLM/Qwen3-TTS.git qwen3-upstream
+          cd qwen3-upstream
+          git checkout "$QWEN_REV"
+          test "$(git rev-parse HEAD)" = "$QWEN_REV"
+
+      - name: Install pinned Qwen CPU stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check             --index-url https://download.pytorch.org/whl/cpu             torch torchaudio
+          python -m pip install --disable-pip-version-check -e ./qwen3-upstream
+
+      - name: Download pinned VoiceDesign model
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          snapshot_download(
+              repo_id=os.environ["VD_MODEL_ID"],
+              revision=os.environ["VD_MODEL_REV"],
+              local_dir="qwen3-voicedesign-model",
+          )
+          PY
+          test -f qwen3-voicedesign-model/config.json
+          test -f qwen3-voicedesign-model/model.safetensors
+
+      - name: Static donor protocol gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile lab/voice-casting/p6_voicedesign_donors.py
+          ! grep -E 'AZURE_SPEECH|edge_tts|EdgeProvider|speech\.microsoft|cognitiveservices'             lab/voice-casting/p6_voicedesign_donors.py
+          python - <<'PY'
+          import importlib.util
+          p="lab/voice-casting/p6_voicedesign_donors.py"
+          spec=importlib.util.spec_from_file_location("p6don",p); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          assert [x["i"] for x in m.CASES] == [2,4,10,12,15]
+          assert [x["seed"] for x in m.CASES] == [2026090302,2026090304,2026090310,2026090312,2026090315]
+          assert [x["text"] for x in m.CASES] == ["Non.","Ce lit ne sort pas de cette chambre.","Tu le savais.","Pénélope…","Notre lit."]
+          assert m.MODEL_REV == "5ecdb67327fd37bb2e042aab12ff7391903235d3"
+          print("P6_VOICEDESIGN_DONOR_PROTOCOL_PASS")
+          PY
+
+      - name: Render exactly five frozen source performances
+        shell: bash
+        env:
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p generated/p6-donors
+          /usr/bin/time -v             python lab/voice-casting/p6_voicedesign_donors.py               --model-dir qwen3-voicedesign-model               --out generated/p6-donors             2> >(tee generated/p6-donors/resource-time.txt >&2)
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path("generated/p6-donors/donors.json").read_text())
+          assert m["status"]=="PASS"
+          assert m["render_count"]==5
+          assert all(x["technical_gate"]["status"]=="PASS" for x in m["records"])
+          print("P6_VOICEDESIGN_DONORS_PASS")
+          PY
+
+      - name: Upload immutable performance donors
+        uses: actions/upload-artifact@v4
+        with:
+          name: p6-voicedesign-performance-donors
+          path: generated/p6-donors/
+          if-no-files-found: error
+          retention-days: 14
+
+  convert:
+    needs: donors
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Free disk and install system tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg time
+
+      - name: Recover immutable H1b-B P6 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/h1b
+          gh release download odyssee-h1b-corrective-review-v1             --repo stefm78/recit-audioguide             -p p6-b.mp3 -p p6-b-report.json             -D inputs/h1b
+          test "$(sha256sum inputs/h1b/p6-b.mp3 | cut -d' ' -f1)" =             "474c2e41a5d702b2a84524aa3be9a0559ed7378af18d507ac082b666029d64ae"
+          test "$(sha256sum inputs/h1b/p6-b-report.json | cut -d' ' -f1)" =             "366091a73e7597626384535e900a5b30e7943c485d0197ec25f015c384b6d891"
+
+      - name: Download exact performance donors
+        uses: actions/download-artifact@v4
+        with:
+          name: p6-voicedesign-performance-donors
+          path: inputs/donors
+
+      - name: Checkout pinned BeltOut source
+        shell: bash
+        run: |
+          set -euo pipefail
+          GIT_LFS_SKIP_SMUDGE=1 git clone --filter=blob:none https://github.com/Bill13579/beltout.git beltout-src
+          cd beltout-src
+          git checkout "$BELTOUT_REV"
+          test "$(git rev-parse HEAD)" = "$BELTOUT_REV"
+
+      - name: Install frozen BeltOut CPU runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check             --index-url https://download.pytorch.org/whl/cpu             torch==2.6.0 torchaudio==2.6.0
+          python -m pip install --disable-pip-version-check             numpy==1.26.4 librosa==0.11.0 s3tokenizer==0.3.0             torchcrepe==0.0.24 transformers==4.46.3 diffusers==0.29.0             conformer==0.3.2 safetensors==0.5.3 huggingface_hub==0.33.1             scipy==1.15.3 tqdm==4.67.1 soundfile==0.13.1 pydub==0.25.1
+          python -m pip install --disable-pip-version-check --no-deps -e ./beltout-src
+          python - <<'PY'
+          import torch, torchaudio, librosa, s3tokenizer, torchcrepe
+          from beltout import BeltOutTTM
+          print("BELTOUT_RUNTIME_IMPORT_PASS")
+          PY
+
+      - name: Download exact BeltOut checkpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/beltout
+          python - <<'PY'
+          import os
+          from huggingface_hub import hf_hub_download
+          files=[
+            "checkpoints/cfm_step_117580.safetensors",
+            "checkpoints/pitchmvmt_step_117580.safetensors",
+            "checkpoints/encoder_step_0.safetensors",
+            "checkpoints/flow_step_0.safetensors",
+            "checkpoints/mel2wav_step_0.safetensors",
+            "checkpoints/speaker_encoder_step_0.safetensors",
+            "checkpoints/tokenizer_step_0.safetensors",
+          ]
+          for f in files:
+              hf_hub_download(repo_id="Bill13579/beltout",filename=f,revision=os.environ["BELTOUT_REV"],local_dir="inputs/beltout")
+          PY
+          cp inputs/beltout/checkpoints/*.safetensors inputs/beltout/
+
+      - name: Static conversion protocol gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile lab/voice-casting/p6_beltout_assemble.py
+          ! grep -E 'AZURE_SPEECH|edge_tts|EdgeProvider|speech\.microsoft|cognitiveservices'             lab/voice-casting/p6_beltout_assemble.py
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          t=ast.parse(Path("lab/voice-casting/p6_beltout_assemble.py").read_text())
+          vals={}
+          for n in t.body:
+              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name):
+                  if n.targets[0].id in {"TARGETS","ANCHOR_SEGMENTS","BELTOUT_REV"}:
+                      vals[n.targets[0].id]=ast.literal_eval(n.value)
+          assert vals["TARGETS"]=={2:"Non.",4:"Ce lit ne sort pas de cette chambre.",10:"Tu le savais.",12:"Pénélope…",15:"Notre lit."}
+          assert vals["ANCHOR_SEGMENTS"]==(6,7,8)
+          assert vals["BELTOUT_REV"]=="f71295e33cc9c0092083089ed0f9c1a532e77e6b"
+          print("P6_BELTOUT_PROTOCOL_PASS")
+          PY
+
+      - name: Convert exactly five performances and assemble one P6 scene
+        shell: bash
+        env:
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p generated/p6-voicedesign-beltout
+          /usr/bin/time -v             python lab/voice-casting/p6_beltout_assemble.py               --beltout-source beltout-src               --checkpoint-dir inputs/beltout               --donors-dir inputs/donors               --baseline-audio inputs/h1b/p6-b.mp3               --baseline-report inputs/h1b/p6-b-report.json               --out generated/p6-voicedesign-beltout             2> >(tee generated/p6-voicedesign-beltout/resource-time.txt >&2)
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path("generated/p6-voicedesign-beltout/manifest.json").read_text())
+          assert m["status"]=="MACHINE_PASS"
+          assert m["cloud_tts"] is False
+          assert m["nuc_required"] is False
+          assert [x["i"] for x in m["slots"]]==[2,4,10,12,15]
+          assert all(x["technical_gate"]["status"]=="PASS" for x in m["slots"])
+          assert all(x["direction_pass"] is True for x in m["slots"])
+          print("P6_VOICEDESIGN_BELTOUT_MACHINE_PASS",m["candidate_sha256"])
+          PY
+
+          sha256sum             generated/p6-voicedesign-beltout/p6-voicedesign-beltout.mp3             generated/p6-voicedesign-beltout/ulysse-henri-anchor.wav             generated/p6-voicedesign-beltout/slots/*.wav             generated/p6-voicedesign-beltout/manifest.json             | tee generated/p6-voicedesign-beltout/SHA256SUMS.txt
+
+      - name: Upload immutable P6 review bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-tts-p6-voicedesign-beltout-one-shot
+          path: |
+            generated/p6-voicedesign-beltout/p6-voicedesign-beltout.mp3
+            generated/p6-voicedesign-beltout/index.html
+            generated/p6-voicedesign-beltout/ulysse-henri-anchor.wav
+            generated/p6-voicedesign-beltout/slots/*.wav
+            generated/p6-voicedesign-beltout/manifest.json
+            generated/p6-voicedesign-beltout/SHA256SUMS.txt
+            generated/p6-voicedesign-beltout/resource-time.txt
+          if-no-files-found: warn
+          retention-days: 14
