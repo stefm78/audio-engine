@@ -6,6 +6,7 @@ from pathlib import Path
 from audio_engine.audio import run_ffmpeg
 from audio_engine.contract import sha256_file
 from audio_engine.render import render_program
+from audio_engine.sound.render import PLACEMENT_PAN as SOUND_PLACEMENT_PAN
 
 
 class FakeProvider:
@@ -38,6 +39,12 @@ def make_audio(path, source, duration=1.0, channels=2):
 
 
 class SoundscapeRenderTests(unittest.TestCase):
+    def test_subtle_event_pan_values_are_exactly_bounded(self):
+        self.assertEqual(SOUND_PLACEMENT_PAN["slight-left"], -0.16)
+        self.assertEqual(SOUND_PLACEMENT_PAN["slight-right"], 0.16)
+        self.assertEqual(SOUND_PLACEMENT_PAN["left"], -0.45)
+        self.assertEqual(SOUND_PLACEMENT_PAN["right"], 0.45)
+
     def test_local_bed_layer_event_render_and_voice_reuse(self):
         with tempfile.TemporaryDirectory() as temp_value:
             root = Path(temp_value)
