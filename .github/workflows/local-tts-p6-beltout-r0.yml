@@ -1,0 +1,191 @@
+name: LOCAL TTS BeltOut R0
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  BELTOUT_SOURCE_REV: f71295e33cc9c0092083089ed0f9c1a532e77e6b
+  BELTOUT_HF_REV: f71295e33cc9c0092083089ed0f9c1a532e77e6b
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  beltout-r0:
+    if: github.head_ref == 'lab/LOCAL-TTS-WP-007-beltout-r0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Free disk and install system tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg time
+          df -h /
+          free -h
+
+      - name: Recover immutable H1b-B P6 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/h1b
+          gh release download odyssee-h1b-corrective-review-v1             --repo stefm78/recit-audioguide             -p p6-b.mp3 -p p6-b-report.json             -D inputs/h1b
+          test "$(sha256sum inputs/h1b/p6-b.mp3 | cut -d' ' -f1)" =             "474c2e41a5d702b2a84524aa3be9a0559ed7378af18d507ac082b666029d64ae"
+          test "$(sha256sum inputs/h1b/p6-b-report.json | cut -d' ' -f1)" =             "366091a73e7597626384535e900a5b30e7943c485d0197ec25f015c384b6d891"
+
+      - name: Recover exact historical expressive donor
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/donor
+          gh run download 32811700540             --repo stefm78/audio-engine             -n qwen3-style-transplant-donors             -D inputs/donor
+          test -f inputs/donor/sadness-contained.wav
+          test "$(sha256sum inputs/donor/sadness-contained.wav | cut -d' ' -f1)" =             "4194a72b1705ec1820ea13cfdd3a0ed434e2bf63a445ba9f85ea1aeca33fdd25"
+
+      - name: Checkout pinned BeltOut source
+        shell: bash
+        run: |
+          set -euo pipefail
+          GIT_LFS_SKIP_SMUDGE=1 git clone --filter=blob:none https://github.com/Bill13579/beltout.git beltout-src
+          cd beltout-src
+          git checkout "$BELTOUT_SOURCE_REV"
+          test "$(git rev-parse HEAD)" = "$BELTOUT_SOURCE_REV"
+
+      - name: Install frozen CPU inference environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check             --index-url https://download.pytorch.org/whl/cpu             torch==2.6.0 torchaudio==2.6.0
+
+          python -m pip install --disable-pip-version-check             numpy==1.26.4             librosa==0.11.0             s3tokenizer==0.3.0             torchcrepe==0.0.24             transformers==4.46.3             diffusers==0.29.0             conformer==0.3.2             safetensors==0.5.3             huggingface_hub==0.33.1             scipy==1.15.3             tqdm==4.67.1             soundfile==0.13.1
+
+          python -m pip install --disable-pip-version-check --no-deps -e ./beltout-src
+
+          python - <<'PY'
+          import torch, torchaudio, librosa, s3tokenizer, torchcrepe
+          from beltout import BeltOutTTM
+          print("BELTOUT_RUNTIME_IMPORT_PASS")
+          PY
+
+      - name: Download exact BeltOut checkpoints only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/beltout
+          python - <<'PY'
+          import os
+          from huggingface_hub import hf_hub_download
+
+          files = [
+              "checkpoints/cfm_step_117580.safetensors",
+              "checkpoints/pitchmvmt_step_117580.safetensors",
+              "checkpoints/encoder_step_0.safetensors",
+              "checkpoints/flow_step_0.safetensors",
+              "checkpoints/mel2wav_step_0.safetensors",
+              "checkpoints/speaker_encoder_step_0.safetensors",
+              "checkpoints/tokenizer_step_0.safetensors",
+          ]
+          for filename in files:
+              hf_hub_download(
+                  repo_id="Bill13579/beltout",
+                  filename=filename,
+                  revision=os.environ["BELTOUT_HF_REV"],
+                  local_dir="inputs/beltout",
+              )
+          PY
+
+          cp inputs/beltout/checkpoints/*.safetensors inputs/beltout/
+          test -f inputs/beltout/cfm_step_117580.safetensors
+          test -f inputs/beltout/pitchmvmt_step_117580.safetensors
+          test -f inputs/beltout/encoder_step_0.safetensors
+          test -f inputs/beltout/flow_step_0.safetensors
+          test -f inputs/beltout/mel2wav_step_0.safetensors
+          test -f inputs/beltout/speaker_encoder_step_0.safetensors
+          test -f inputs/beltout/tokenizer_step_0.safetensors
+          du -sh inputs/beltout
+          df -h /
+
+      - name: Static R0 protocol gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile lab/voice-casting/beltout_r0.py
+
+          ! grep -E 'AZURE_SPEECH|edge_tts|EdgeProvider|speech\.microsoft|cognitiveservices'             lab/voice-casting/beltout_r0.py
+
+          python - <<'PY'
+          import ast
+          import os
+          from pathlib import Path
+          t = ast.parse(Path("lab/voice-casting/beltout_r0.py").read_text())
+          vals = {}
+          for n in t.body:
+              if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
+                  if n.targets[0].id in {"DONOR_SHA256","ANCHOR_SEGMENTS","SEED","BELTOUT_SOURCE_REV","BELTOUT_HF_REV"}:
+                      vals[n.targets[0].id] = ast.literal_eval(n.value)
+          assert vals["DONOR_SHA256"] == "4194a72b1705ec1820ea13cfdd3a0ed434e2bf63a445ba9f85ea1aeca33fdd25"
+          assert vals["ANCHOR_SEGMENTS"] == (6,7,8)
+          assert vals["SEED"] == 2026090207
+          assert vals["BELTOUT_SOURCE_REV"] == os.environ["BELTOUT_SOURCE_REV"]
+          assert vals["BELTOUT_HF_REV"] == os.environ["BELTOUT_HF_REV"]
+          print("BELTOUT_R0_PROTOCOL_PASS")
+          PY
+
+      - name: Run exactly one BeltOut conversion
+        shell: bash
+        env:
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p generated/beltout-r0
+          /usr/bin/time -v             python lab/voice-casting/beltout_r0.py               --beltout-source beltout-src               --checkpoint-dir inputs/beltout               --baseline-audio inputs/h1b/p6-b.mp3               --baseline-report inputs/h1b/p6-b-report.json               --donor inputs/donor/sadness-contained.wav               --out generated/beltout-r0             2> >(tee generated/beltout-r0/resource-time.txt >&2)
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          m = json.loads(Path("generated/beltout-r0/manifest.json").read_text())
+          assert m["status"] == "RESOURCE_CAPABILITY_GATE_PASS"
+          assert m["artistic_candidate"] is False
+          assert m["human_review"] is False
+          assert m["cloud_tts"] is False
+          assert m["nuc_required"] is False
+          assert m["render"]["technical_gate"]["status"] == "PASS"
+          assert m["speaker_embedding"]["direction_pass"] is True
+          assert m["duration_pass"] is True
+          print("BELTOUT_R0_PASS", m["render"]["output_sha256"])
+          PY
+
+          sha256sum             generated/beltout-r0/beltout-r0.wav             generated/beltout-r0/ulysse-henri-anchor.wav             generated/beltout-r0/manifest.json             | tee generated/beltout-r0/SHA256SUMS.txt
+
+      - name: Upload R0 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-tts-p6-beltout-r0
+          path: |
+            generated/beltout-r0/beltout-r0.wav
+            generated/beltout-r0/ulysse-henri-anchor.wav
+            generated/beltout-r0/manifest.json
+            generated/beltout-r0/SHA256SUMS.txt
+            generated/beltout-r0/resource-time.txt
+          if-no-files-found: warn
+          retention-days: 14
