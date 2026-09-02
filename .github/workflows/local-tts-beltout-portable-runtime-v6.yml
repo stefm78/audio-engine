@@ -1,0 +1,262 @@
+name: LOCAL TTS BeltOut portable runtime split bundle v6
+
+on:
+  push:
+    branches:
+      - lab/LOCAL-TTS-WP-010-portable-runtime
+    paths:
+      - .github/workflows/local-tts-beltout-portable-runtime-v6.yml
+
+permissions:
+  contents: read
+
+env:
+  BELTOUT_REV: f71295e33cc9c0092083089ed0f9c1a532e77e6b
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Free disk
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          df -h /
+
+      - name: Install uv and managed portable Python 3.12
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check uv
+          mkdir -p portable/managed-python
+          export UV_PYTHON_INSTALL_DIR="$PWD/portable/managed-python"
+          uv python install 3.12
+          find portable/managed-python -maxdepth 4 -type f -name 'python3.12' -o -name 'python' | sort
+          PY="$(find portable/managed-python -type f \( -name python3.12 -o -name python \) | head -1)"
+          test -n "$PY"
+          "$PY" --version
+          echo "$PY" > portable/python-path.txt
+
+      - name: Install exact BeltOut CPU runtime into portable Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY="$(cat portable/python-path.txt)"
+          STDLIB="$("$PY" -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
+          rm -f "$STDLIB/EXTERNALLY-MANAGED"
+          export PIP_BREAK_SYSTEM_PACKAGES=1
+          "$PY" -m ensurepip --upgrade
+          "$PY" -m pip install --disable-pip-version-check             --index-url https://download.pytorch.org/whl/cpu             torch==2.6.0 torchaudio==2.6.0
+          "$PY" -m pip install --disable-pip-version-check             numpy==1.26.4             librosa==0.11.0             s3tokenizer==0.3.0             torchcrepe==0.0.24             transformers==4.46.3             diffusers==0.29.0             conformer==0.3.2             safetensors==0.5.3             huggingface_hub==0.33.1             scipy==1.15.3             tqdm==4.67.1             soundfile==0.13.1
+          "$PY" - <<'PY'
+          import torch, torchaudio, librosa, s3tokenizer, torchcrepe
+          import transformers, diffusers, conformer, safetensors, huggingface_hub
+          print("PORTABLE_RUNTIME_IMPORT_PASS")
+          print("torch", torch.__version__)
+          print("torchaudio", torchaudio.__version__)
+          PY
+
+      - name: Checkout exact BeltOut source
+        shell: bash
+        run: |
+          set -euo pipefail
+          GIT_LFS_SKIP_SMUDGE=1 git clone --filter=blob:none https://github.com/Bill13579/beltout.git portable/beltout-src
+          cd portable/beltout-src
+          git checkout "$BELTOUT_REV"
+          test "$(git rev-parse HEAD)" = "$BELTOUT_REV"
+          rm -rf .git
+          cd ../..
+          PY="$(cat portable/python-path.txt)"
+          "$PY" -m pip install --disable-pip-version-check --no-deps ./portable/beltout-src
+
+      - name: Download exact BeltOut checkpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY="$(cat portable/python-path.txt)"
+          mkdir -p portable/checkpoints
+          "$PY" - <<'PY'
+          import os
+          from huggingface_hub import hf_hub_download
+          files=[
+            "checkpoints/cfm_step_117580.safetensors",
+            "checkpoints/pitchmvmt_step_117580.safetensors",
+            "checkpoints/encoder_step_0.safetensors",
+            "checkpoints/flow_step_0.safetensors",
+            "checkpoints/mel2wav_step_0.safetensors",
+            "checkpoints/speaker_encoder_step_0.safetensors",
+            "checkpoints/tokenizer_step_0.safetensors",
+          ]
+          for f in files:
+              p=hf_hub_download(
+                  repo_id="Bill13579/beltout",
+                  filename=f,
+                  revision=os.environ["BELTOUT_REV"],
+                  local_dir="portable/hf",
+              )
+              print(p)
+          PY
+          cp portable/hf/checkpoints/*.safetensors portable/checkpoints/
+          rm -rf portable/hf
+          ls -lh portable/checkpoints
+          du -sh portable
+
+      - name: Make portable launcher and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > portable/run-python.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          ROOT="$(cd "$(dirname "$0")" && pwd)"
+          PY="$(find "$ROOT/managed-python" -type f \( -name python3.12 -o -name python \) | head -1)"
+          export PYTHONPATH="$ROOT/beltout-src/src${PYTHONPATH:+:$PYTHONPATH}"
+          exec "$PY" "$@"
+          SH
+          chmod +x portable/run-python.sh
+
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root=Path("portable")
+          cps=[]
+          for p in sorted((root/"checkpoints").glob("*.safetensors")):
+              h=hashlib.sha256(p.read_bytes()).hexdigest()
+              cps.append({"file":p.name,"sha256":h,"bytes":p.stat().st_size})
+          m={
+            "schema":"beltout-portable-runtime-v1",
+            "beltout_revision":"f71295e33cc9c0092083089ed0f9c1a532e77e6b",
+            "python":"3.12",
+            "torch":"2.6.0+cpu",
+            "torchaudio":"2.6.0+cpu",
+            "checkpoints":cps,
+            "contains_human_audio":False,
+          }
+          (root/"runtime-manifest.json").write_text(json.dumps(m,indent=2)+"\n")
+          print(json.dumps(m,indent=2))
+          PY
+
+      - name: Smoke portable launcher in runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./portable/run-python.sh - <<'PY'
+          import sys
+          from beltout import BeltOutTTM
+          import torch
+          print("PORTABLE_BELTOUT_IMPORT_PASS", sys.version, torch.__version__)
+          PY
+
+      - name: Split portable runtime below connector limit
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v zstd >/dev/null || {
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends zstd
+          }
+          tar -I 'zstd -3 -T0' -cf beltout-portable-runtime.tar.zst portable
+          mkdir -p runtime-parts
+          split -b 400M -d -a 2 beltout-portable-runtime.tar.zst runtime-parts/runtime.part.
+          ls -lh runtime-parts
+          test "$(find runtime-parts -type f -size +450M | wc -l)" = "0"
+
+      - name: Upload runtime part 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-portable-runtime-part-00
+          path: runtime-parts/runtime.part.00
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload runtime part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-portable-runtime-part-01
+          path: runtime-parts/runtime.part.01
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload runtime part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-portable-runtime-part-02
+          path: runtime-parts/runtime.part.02
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload runtime part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-portable-runtime-part-03
+          path: runtime-parts/runtime.part.03
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload runtime part 04
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-portable-runtime-part-04
+          path: runtime-parts/runtime.part.04
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload runtime part 05
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-portable-runtime-part-05
+          path: runtime-parts/runtime.part.05
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload runtime part 06
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-portable-runtime-part-06
+          path: runtime-parts/runtime.part.06
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload runtime part 07
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-portable-runtime-part-07
+          path: runtime-parts/runtime.part.07
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload runtime part 08
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-portable-runtime-part-08
+          path: runtime-parts/runtime.part.08
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload runtime part 09
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-portable-runtime-part-09
+          path: runtime-parts/runtime.part.09
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
