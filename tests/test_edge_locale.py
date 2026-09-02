@@ -6,9 +6,24 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from audio_engine.providers.edge import EdgeProvider, _speech_locale
+from audio_engine.voice.render import provider_cache_identity
 
 
 class EdgeLocaleTests(unittest.TestCase):
+    def test_cache_identity_is_explicit_and_keeps_qualified_legacy_aliases(self):
+        provider = EdgeProvider()
+        self.assertEqual(
+            provider_cache_identity(provider),
+            "edge-tts-7.2.8|ssml-locale-v1|voice-synthesis-v2-edge-silence-normalized",
+        )
+        self.assertEqual(
+            set(provider.cache_compatible_identities),
+            {
+                "dfc727bb784bcb630165714b90a01266d524a1c4aa3485b6c6d106e7a1f8e6a6",
+                "7c58d0ba7ff7c0bd2b8a14f28a342274407e893f92d1eccdbb0daca90be2b380",
+            },
+        )
+
     def test_native_voice_uses_its_provider_locale(self):
         communicate = SimpleNamespace(voice="fr-FR-DeniseNeural")
         self.assertEqual(_speech_locale(communicate), "fr-FR")
