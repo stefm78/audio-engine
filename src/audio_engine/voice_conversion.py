@@ -183,6 +183,54 @@ def verify_beltout_conversion_inputs(
     }
 
 
+def _load_audio_for_conversion(librosa, np, path, sample_rate):
+    """Decode one immutable input without materializing a normalized raw file."""
+    try:
+        audio, _ = librosa.load(path, sr=sample_rate, mono=True)
+        return np.asarray(audio, dtype=np.float32), "librosa"
+    except Exception as primary_exc:
+        try:
+            import imageio_ffmpeg
+        except ImportError as exc:
+            raise ContractError(
+                "Audio container is unsupported by the local decoder and "
+                "imageio-ffmpeg is unavailable"
+            ) from exc
+
+        command = [
+            imageio_ffmpeg.get_ffmpeg_exe(),
+            "-hide_banner",
+            "-loglevel", "error",
+            "-nostdin",
+            "-i", str(path),
+            "-vn",
+            "-ac", "1",
+            "-ar", str(sample_rate),
+            "-f", "f32le",
+            "-acodec", "pcm_f32le",
+            "pipe:1",
+        ]
+        try:
+            decoded = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        except OSError as exc:
+            raise ContractError(f"Unable to invoke deterministic audio decoder: {exc}") from exc
+        if decoded.returncode != 0:
+            detail = (decoded.stderr or b"").decode("utf-8", errors="replace").strip()
+            raise ContractError(
+                "Unable to decode immutable source audio in memory"
+                + (f": {detail}" if detail else "")
+            ) from primary_exc
+        audio = np.frombuffer(decoded.stdout or b"", dtype="<f4").copy()
+        if audio.size == 0:
+            raise ContractError("Deterministic in-memory audio decode produced no samples")
+        return audio, "ffmpeg-memory"
+
+
 def _cosine(torch, functional, a, b):
     a = a.detach().float().reshape(1, -1).cpu()
     b = b.detach().float().reshape(1, -1).cpu()
@@ -228,15 +276,11 @@ def _convert_with_beltout(validated):
             device="cpu",
         )
 
-        source_wav, _ = librosa.load(
-            validated["source"],
-            sr=model.sr,
-            mono=True,
+        source_wav, source_decoder = _load_audio_for_conversion(
+            librosa, np, validated["source"], model.sr
         )
-        target_wav, _ = librosa.load(
-            validated["target_reference"],
-            sr=model.sr,
-            mono=True,
+        target_wav, target_decoder = _load_audio_for_conversion(
+            librosa, np, validated["target_reference"], model.sr
         )
         if len(source_wav) == 0 or len(target_wav) == 0:
             raise ContractError("BeltOut source and target reference must contain audio")
@@ -341,6 +385,12 @@ def _convert_with_beltout(validated):
         duration_pass = 0.75 <= duration_ratio <= 1.25
 
         return {
+            "audio_decode": {
+                "source": source_decoder,
+                "target_reference": target_decoder,
+                "persistent_normalized_raw_file": False,
+                "filters": [],
+            },
             "technical": {
                 "status": "PASS" if technical_pass else "REJECT",
                 "sample_rate": int(output_sr),

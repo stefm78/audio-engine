@@ -7,6 +7,7 @@ on:
       - main
     paths:
       - .github/workflows/production-beltout-portable-windows.yml
+      - src/audio_engine/voice_conversion.py
 
 permissions:
   contents: read
@@ -50,9 +51,8 @@ jobs:
           $portable = (Resolve-Path portable).Path
           $pyRel = (Get-Content portable/python-path.txt -Raw).Trim()
           $py = Join-Path $portable $pyRel
-          & $py -m ensurepip --upgrade
-          & $py -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu "torch==2.6.0" "torchaudio==2.6.0"
-          & $py -m pip install --disable-pip-version-check "numpy==1.26.4" "librosa==0.11.0" "s3tokenizer==0.3.0" "torchcrepe==0.0.24" "transformers==4.46.3" "diffusers==0.29.0" "conformer==0.3.2" "safetensors==0.5.3" "huggingface_hub==0.33.1" "scipy==1.15.3" "tqdm==4.67.1" "soundfile==0.13.1" "edge-tts==7.2.8" "imageio-ffmpeg==0.6.0"
+          uv pip install --python "$py" --break-system-packages --index-url https://download.pytorch.org/whl/cpu "torch==2.6.0" "torchaudio==2.6.0"
+          uv pip install --python "$py" --break-system-packages "numpy==1.26.4" "librosa==0.11.0" "s3tokenizer==0.3.0" "torchcrepe==0.0.24" "transformers==4.46.3" "diffusers==0.29.0" "conformer==0.3.2" "safetensors==0.5.3" "huggingface_hub==0.33.1" "scipy==1.15.3" "tqdm==4.67.1" "soundfile==0.13.1" "edge-tts==7.2.8" "imageio-ffmpeg==0.6.0"
           & $py -c "import torch, torchaudio, librosa, s3tokenizer, torchcrepe, transformers, diffusers, conformer, safetensors, huggingface_hub, soundfile; print('WINDOWS_PORTABLE_RUNTIME_IMPORT_PASS', torch.__version__, torchaudio.__version__)"
 
       - name: Pin BeltOut source
@@ -69,7 +69,7 @@ jobs:
           $portable = (Resolve-Path portable).Path
           $pyRel = (Get-Content portable/python-path.txt -Raw).Trim()
           $py = Join-Path $portable $pyRel
-          & $py -m pip install --disable-pip-version-check --no-deps ./portable/beltout-src
+          uv pip install --python "$py" --break-system-packages --no-deps ./portable/beltout-src
 
       - name: Hydrate exact checkpoints
         shell: pwsh
@@ -112,7 +112,7 @@ jobs:
           $portable = (Resolve-Path portable).Path
           $pyRel = (Get-Content portable/python-path.txt -Raw).Trim()
           $py = Join-Path $portable $pyRel
-          & $py -m pip install --disable-pip-version-check --no-deps .
+          uv pip install --python "$py" --break-system-packages --no-deps .
 
           $code = @'
           import hashlib
