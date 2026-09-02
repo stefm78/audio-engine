@@ -60,10 +60,10 @@ def provider_cache_identity(provider):
     return str(explicit)
 
 
-def voice_fingerprint(segment, provider):
+def _voice_fingerprint_for_cache_identity(segment, provider_name, cache_identity):
     payload = {
-        "provider": provider.name,
-        "provider_cache_identity": provider_cache_identity(provider),
+        "provider": provider_name,
+        "provider_cache_identity": str(cache_identity),
         "text": segment["text"],
         "voice": segment["voice"],
         "rate": segment.get("rate", "+0%"),
@@ -78,6 +78,32 @@ def voice_fingerprint(segment, provider):
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+def voice_fingerprint(segment, provider):
+    return _voice_fingerprint_for_cache_identity(
+        segment,
+        provider.name,
+        provider_cache_identity(provider),
+    )
+
+
+def _cache_compatible_voice_fingerprints(segment, provider):
+    identities = getattr(provider, "cache_compatible_identities", ()) or ()
+    if callable(identities):
+        identities = identities()
+    current = provider_cache_identity(provider)
+    seen = {current}
+    result = []
+    for identity in identities:
+        identity = str(identity or "")
+        if not identity or identity in seen:
+            continue
+        seen.add(identity)
+        result.append(
+            _voice_fingerprint_for_cache_identity(segment, provider.name, identity)
+        )
+    return result
 
 
 def _metadata_path(path):
@@ -183,6 +209,15 @@ def render_voice_clip(segment, provider, cache_root, fallback_fingerprints=None)
     if path.exists() and path.stat().st_size > 0:
         _ensure_timing_metadata(segment, provider, fingerprint, path)
         return path, True, fingerprint
+
+    for compatible in _cache_compatible_voice_fingerprints(segment, provider):
+        legacy = cache_root / f"{compatible}.mp3"
+        if legacy.exists() and legacy.stat().st_size > 0:
+            # The provider explicitly declared this historical identity byte-compatible
+            # with the current successful synthesis contract. Preserve exact clip bytes.
+            shutil.copyfile(legacy, path)
+            _ensure_timing_metadata(segment, provider, fingerprint, path)
+            return path, True, fingerprint
 
     for fallback in fallback_fingerprints or ():
         if not fallback or fallback == fingerprint:
