@@ -59,11 +59,11 @@ Cache entries are not evidence.
 
 ## Scene cache lifecycle
 
-Production uses a ready-only `scene-v3` cache. The cache is an acceleration layer; Program, voice-pack, provider-package and engine fingerprints remain the correctness authority.
+Production uses a ready-only `scene-v4` cache. `scene-v3` is intentionally quarantined and is never a restore or migration source because that generation may contain structurally READY but product-unqualified provenance. The cache is an acceleration layer; Program, voice-pack, provider-package and engine fingerprints remain the correctness authority.
 
 On a cache miss, the workflow may migrate compatible `scene-v2` content. A caller can also opt into a pre-`scene-v2` legacy source. For recovery from a known historical source, the caller may force selected unit ids and bind that restore to an exact legacy engine commit, Program SHA-256 and historical voice-pack SHA-256.
 
-A scene-v3 cache is saved only when the unit result is `ready`. Failed provider calls, failed QA and partial renders are never persisted as reusable scene-v3 caches.
+A scene-v4 cache is saved only when the unit result is `ready`. Failed provider calls, failed QA and partial renders are never persisted as reusable scene-v4 caches.
 
 Forced migration is a recovery mechanism, not a fallback: if the exact requested legacy source does not exist, the shard fails closed.
 
