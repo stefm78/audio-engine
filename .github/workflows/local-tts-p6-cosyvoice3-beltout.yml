@@ -1,0 +1,321 @@
+name: LOCAL TTS P6 CosyVoice3 BeltOut one-shot
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  COSYVOICE_REV: 074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc
+  COSY_MODEL_ID: FunAudioLLM/Fun-CosyVoice3-0.5B-2512
+  COSY_MODEL_REV: ed5fc9fb5d640ee5d8199235df412530f6abe9e0
+  BELTOUT_REV: f71295e33cc9c0092083089ed0f9c1a532e77e6b
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  donors:
+    if: github.head_ref == 'lab/LOCAL-TTS-WP-009-p6-cosyvoice3-beltout'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Free runner disk and install tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg time
+          df -h /
+          free -h
+
+      - name: Recover immutable H1b-B P6 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/h1b
+          gh release download odyssee-h1b-corrective-review-v1             --repo stefm78/recit-audioguide             -p p6-b.mp3 -p p6-b-report.json             -D inputs/h1b
+          test "$(sha256sum inputs/h1b/p6-b.mp3 | cut -d' ' -f1)" =             "474c2e41a5d702b2a84524aa3be9a0559ed7378af18d507ac082b666029d64ae"
+          test "$(sha256sum inputs/h1b/p6-b-report.json | cut -d' ' -f1)" =             "366091a73e7597626384535e900a5b30e7943c485d0197ec25f015c384b6d891"
+
+      - name: Checkout pinned CosyVoice source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --recursive https://github.com/QwenAudio/CosyVoice.git cosyvoice-upstream
+          cd cosyvoice-upstream
+          git checkout "$COSYVOICE_REV"
+          git submodule update --init --recursive
+          test "$(git rev-parse HEAD)" = "$COSYVOICE_REV"
+
+      - name: Install pinned CosyVoice CPU environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check             --index-url https://download.pytorch.org/whl/cpu             torch==2.3.1 torchaudio==2.3.1
+
+          python - <<'PY'
+          from pathlib import Path
+          source=Path("cosyvoice-upstream/requirements.txt")
+          target=Path("cosyvoice-cpu-requirements.txt")
+          blocked={"deepspeed","onnxruntime-gpu","tensorrt-cu12","tensorrt-cu12-bindings","tensorrt-cu12-libs","torch","torchaudio","openai-whisper"}
+          kept=[]
+          for raw in source.read_text(encoding="utf-8").splitlines():
+              line=raw.strip()
+              if not line or line.startswith("--extra-index-url"):
+                  continue
+              package=line.split("==",1)[0].split(";",1)[0].strip().lower()
+              if package in blocked:
+                  continue
+              kept.append(line)
+          target.write_text("\n".join(kept)+"\n",encoding="utf-8")
+          print(target.read_text())
+          PY
+
+          python -m pip install --disable-pip-version-check setuptools==75.8.0 wheel
+          python -m pip install --disable-pip-version-check --no-build-isolation openai-whisper==20231117
+          python -m pip install --disable-pip-version-check -r cosyvoice-cpu-requirements.txt
+          python -m pip install --disable-pip-version-check onnxruntime==1.18.0 huggingface_hub pydub==0.25.1
+          python -m pip check
+
+      - name: Download pinned CosyVoice3 CPU model assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          snapshot_download(
+              repo_id=os.environ["COSY_MODEL_ID"],
+              revision=os.environ["COSY_MODEL_REV"],
+              local_dir="cosyvoice-model",
+              allow_patterns=[
+                  "cosyvoice3.yaml",
+                  "campplus.onnx",
+                  "speech_tokenizer_v3.onnx",
+                  "spk2info.pt",
+                  "llm.pt",
+                  "flow.pt",
+                  "hift.pt",
+                  "CosyVoice-BlankEN/*",
+              ],
+          )
+          PY
+          test -f cosyvoice-model/cosyvoice3.yaml
+          test -f cosyvoice-model/campplus.onnx
+          test -f cosyvoice-model/speech_tokenizer_v3.onnx
+          test -f cosyvoice-model/llm.pt
+          test -f cosyvoice-model/flow.pt
+          test -f cosyvoice-model/hift.pt
+          test -f cosyvoice-model/CosyVoice-BlankEN/model.safetensors
+
+      - name: Static CosyVoice3 P6 protocol gate
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/cosyvoice-upstream:${{ github.workspace }}/cosyvoice-upstream/third_party/Matcha-TTS
+        run: |
+          set -euo pipefail
+          python -m py_compile lab/voice-casting/p6_cosyvoice3_donors.py
+          ! grep -E 'AZURE_SPEECH|edge_tts|EdgeProvider|speech\.microsoft|cognitiveservices'             lab/voice-casting/p6_cosyvoice3_donors.py
+
+          python - <<'PY'
+          import importlib.util, inspect
+          from cosyvoice.cli.cosyvoice import CosyVoice3
+          p="lab/voice-casting/p6_cosyvoice3_donors.py"
+          spec=importlib.util.spec_from_file_location("p6cosy",p)
+          m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          assert [x["i"] for x in m.CASES]==[2,4,10,12,15]
+          assert [x["seed"] for x in m.CASES]==[2026090402,2026090404,2026090410,2026090412,2026090415]
+          assert [x["text"] for x in m.CASES]==["Non.","Ce lit ne sort pas de cette chambre.","Tu le savais.","Pénélope…","Notre lit."]
+          assert m.COSY_SOURCE_REV=="074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc"
+          assert m.MODEL_REV=="ed5fc9fb5d640ee5d8199235df412530f6abe9e0"
+          init_params=inspect.signature(CosyVoice3.__init__).parameters
+          assert "load_trt" in init_params and "load_vllm" in init_params
+          assert hasattr(CosyVoice3,"inference_instruct2")
+          print("P6_COSYVOICE3_PROTOCOL_PASS")
+          PY
+
+      - name: Render exactly five CosyVoice3 performances
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/cosyvoice-upstream:${{ github.workspace }}/cosyvoice-upstream/third_party/Matcha-TTS
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p generated/p6-cosy-donors
+          /usr/bin/time -v             python lab/voice-casting/p6_cosyvoice3_donors.py               --cosy-source cosyvoice-upstream               --model-dir cosyvoice-model               --baseline-audio inputs/h1b/p6-b.mp3               --baseline-report inputs/h1b/p6-b-report.json               --out generated/p6-cosy-donors             2> >(tee generated/p6-cosy-donors/resource-time.txt >&2)
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path("generated/p6-cosy-donors/donors.json").read_text())
+          assert m["status"]=="PASS"
+          assert m["render_count"]==5
+          assert all(x["technical_gate"]["status"]=="PASS" for x in m["records"])
+          print("P6_COSYVOICE3_DONORS_PASS")
+          PY
+
+      - name: Upload immutable CosyVoice3 donors
+        uses: actions/upload-artifact@v4
+        with:
+          name: p6-cosyvoice3-performance-donors
+          path: generated/p6-cosy-donors/
+          if-no-files-found: error
+          retention-days: 14
+
+  convert:
+    needs: donors
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Free disk and install system tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg time
+
+      - name: Recover immutable H1b-B P6 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/h1b
+          gh release download odyssee-h1b-corrective-review-v1             --repo stefm78/recit-audioguide             -p p6-b.mp3 -p p6-b-report.json             -D inputs/h1b
+          test "$(sha256sum inputs/h1b/p6-b.mp3 | cut -d' ' -f1)" =             "474c2e41a5d702b2a84524aa3be9a0559ed7378af18d507ac082b666029d64ae"
+          test "$(sha256sum inputs/h1b/p6-b-report.json | cut -d' ' -f1)" =             "366091a73e7597626384535e900a5b30e7943c485d0197ec25f015c384b6d891"
+
+      - name: Download exact CosyVoice3 donors
+        uses: actions/download-artifact@v4
+        with:
+          name: p6-cosyvoice3-performance-donors
+          path: inputs/donors
+
+      - name: Checkout pinned BeltOut source
+        shell: bash
+        run: |
+          set -euo pipefail
+          GIT_LFS_SKIP_SMUDGE=1 git clone --filter=blob:none https://github.com/Bill13579/beltout.git beltout-src
+          cd beltout-src
+          git checkout "$BELTOUT_REV"
+          test "$(git rev-parse HEAD)" = "$BELTOUT_REV"
+
+      - name: Install frozen BeltOut CPU runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check             --index-url https://download.pytorch.org/whl/cpu             torch==2.6.0 torchaudio==2.6.0
+          python -m pip install --disable-pip-version-check             numpy==1.26.4 librosa==0.11.0 s3tokenizer==0.3.0             torchcrepe==0.0.24 transformers==4.46.3 diffusers==0.29.0             conformer==0.3.2 safetensors==0.5.3 huggingface_hub==0.33.1             scipy==1.15.3 tqdm==4.67.1 soundfile==0.13.1 pydub==0.25.1
+          python -m pip install --disable-pip-version-check --no-deps -e ./beltout-src
+          python - <<'PY'
+          import torch, torchaudio, librosa, s3tokenizer, torchcrepe
+          from beltout import BeltOutTTM
+          print("BELTOUT_RUNTIME_IMPORT_PASS")
+          PY
+
+      - name: Download exact BeltOut checkpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/beltout
+          python - <<'PY'
+          import os
+          from huggingface_hub import hf_hub_download
+          files=[
+            "checkpoints/cfm_step_117580.safetensors",
+            "checkpoints/pitchmvmt_step_117580.safetensors",
+            "checkpoints/encoder_step_0.safetensors",
+            "checkpoints/flow_step_0.safetensors",
+            "checkpoints/mel2wav_step_0.safetensors",
+            "checkpoints/speaker_encoder_step_0.safetensors",
+            "checkpoints/tokenizer_step_0.safetensors",
+          ]
+          for f in files:
+              hf_hub_download(repo_id="Bill13579/beltout",filename=f,revision=os.environ["BELTOUT_REV"],local_dir="inputs/beltout")
+          PY
+          cp inputs/beltout/checkpoints/*.safetensors inputs/beltout/
+
+      - name: Static conversion protocol gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile lab/voice-casting/p6_cosyvoice3_beltout_assemble.py
+          ! grep -E 'AZURE_SPEECH|edge_tts|EdgeProvider|speech\.microsoft|cognitiveservices'             lab/voice-casting/p6_cosyvoice3_beltout_assemble.py
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          t=ast.parse(Path("lab/voice-casting/p6_cosyvoice3_beltout_assemble.py").read_text())
+          vals={}
+          for n in t.body:
+              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name):
+                  if n.targets[0].id in {"TARGETS","ANCHOR_SEGMENTS","BELTOUT_REV"}:
+                      vals[n.targets[0].id]=ast.literal_eval(n.value)
+          assert vals["TARGETS"]=={2:"Non.",4:"Ce lit ne sort pas de cette chambre.",10:"Tu le savais.",12:"Pénélope…",15:"Notre lit."}
+          assert vals["ANCHOR_SEGMENTS"]==(6,7,8)
+          assert vals["BELTOUT_REV"]=="f71295e33cc9c0092083089ed0f9c1a532e77e6b"
+          print("P6_COSYVOICE3_BELTOUT_PROTOCOL_PASS")
+          PY
+
+      - name: Convert five performances and assemble exactly one P6 scene
+        shell: bash
+        env:
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p generated/p6-cosyvoice3-beltout
+          /usr/bin/time -v             python lab/voice-casting/p6_cosyvoice3_beltout_assemble.py               --beltout-source beltout-src               --checkpoint-dir inputs/beltout               --donors-dir inputs/donors               --baseline-audio inputs/h1b/p6-b.mp3               --baseline-report inputs/h1b/p6-b-report.json               --out generated/p6-cosyvoice3-beltout             2> >(tee generated/p6-cosyvoice3-beltout/resource-time.txt >&2)
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path("generated/p6-cosyvoice3-beltout/manifest.json").read_text())
+          assert m["status"]=="MACHINE_PASS"
+          assert m["cloud_tts"] is False
+          assert m["nuc_required"] is False
+          assert [x["i"] for x in m["slots"]]==[2,4,10,12,15]
+          assert all(x["technical_gate"]["status"]=="PASS" for x in m["slots"])
+          assert all(x["direction_pass"] is True for x in m["slots"])
+          assert all(0.65<=x["duration_ratio_vs_h1b_slot"]<=1.50 for x in m["slots"])
+          print("P6_COSYVOICE3_BELTOUT_MACHINE_PASS",m["candidate_sha256"])
+          PY
+
+          sha256sum             generated/p6-cosyvoice3-beltout/p6-cosyvoice3-beltout.mp3             generated/p6-cosyvoice3-beltout/ulysse-henri-anchor.wav             generated/p6-cosyvoice3-beltout/slots/*.wav             generated/p6-cosyvoice3-beltout/manifest.json             | tee generated/p6-cosyvoice3-beltout/SHA256SUMS.txt
+
+      - name: Upload immutable P6 review bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-tts-p6-cosyvoice3-beltout-one-shot
+          path: |
+            generated/p6-cosyvoice3-beltout/p6-cosyvoice3-beltout.mp3
+            generated/p6-cosyvoice3-beltout/index.html
+            generated/p6-cosyvoice3-beltout/ulysse-henri-anchor.wav
+            generated/p6-cosyvoice3-beltout/slots/*.wav
+            generated/p6-cosyvoice3-beltout/manifest.json
+            generated/p6-cosyvoice3-beltout/SHA256SUMS.txt
+            generated/p6-cosyvoice3-beltout/resource-time.txt
+          if-no-files-found: warn
+          retention-days: 14
