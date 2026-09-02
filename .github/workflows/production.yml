@@ -17,6 +17,11 @@ on:
         required: false
         default: production-v1
         type: string
+      legacy_scene_cache_engine_ref:
+        description: Optional exact pre-scene-v2 engine ref for fail-closed per-unit cache migration
+        required: false
+        default: ''
+        type: string
       max_parallel:
         description: Maximum concurrent scene renders
         required: false
@@ -259,7 +264,8 @@ jobs:
               --verify-files --workspace-root . --voice-pack "$VOICE_PACK"
           done
 
-      - name: Restore optional content-addressed scene cache
+      - id: scene-cache-v2
+        name: Restore optional content-addressed scene cache
         uses: actions/cache@v4
         with:
           path: generated/work/${{ matrix.id }}/.cache
@@ -270,6 +276,33 @@ jobs:
             ${{ needs.plan.outputs.engine_ref }}
           restore-keys: |
             ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}-scene-v2-${{ matrix.id }}-
+
+      - id: legacy-scene-cache
+        name: Restore optional pre-scene-v2 cache migration source
+        if: inputs.legacy_scene_cache_engine_ref != '' && steps.scene-cache-v2.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: generated/work/${{ matrix.id }}/.cache
+          key: legacy-scene-cache-migration-${{ github.run_id }}-${{ matrix.id }}
+          restore-keys: |
+            ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- ${{ inputs.legacy_scene_cache_engine_ref }}-${{ matrix.id }}-
+
+      - name: Require opted-in legacy scene cache migration source
+        if: inputs.legacy_scene_cache_engine_ref != '' && steps.scene-cache-v2.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          LEGACY_ENGINE_REF: ${{ inputs.legacy_scene_cache_engine_ref }}
+          UNIT_ID: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$LEGACY_ENGINE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: legacy_scene_cache_engine_ref must be an exact 40-hex commit SHA." >&2
+            exit 2
+          fi
+          if ! find "generated/work/$UNIT_ID/.cache/voices" -type f -name '*.mp3' -print -quit 2>/dev/null | grep -q .; then
+            echo "ERROR: opted-in legacy scene cache migration source was not restored for $UNIT_ID." >&2
+            exit 2
+          fi
 
       - id: produce
         name: Render and machine-qualify scene shard
