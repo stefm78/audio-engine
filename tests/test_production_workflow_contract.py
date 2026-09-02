@@ -83,12 +83,21 @@ class ProductionWorkflowContractTests(unittest.TestCase):
         self.assertIn("steps.scene-cache-v4.outputs.cache-hit != 'true'", self.workflow)
 
 
-    def test_local_provider_runtime_installers_are_explicit(self):
+    def test_local_provider_runtimes_are_isolated_and_final_render_is_cache_only(self):
+        self.assertNotIn("Install exact promoted provider runtime", self.workflow)
+        self.assertIn("Prewarm promoted provider voice caches in isolated runtimes", self.workflow)
+        self.assertIn('python -m venv "$venv"', self.workflow)
+        self.assertIn('source "$venv/bin/activate"', self.workflow)
         self.assertIn("install_chatterbox_mtl_v3_h1b.sh", self.workflow)
         self.assertIn("install_voxcpm2_p4_runtime.sh", self.workflow)
         self.assertIn("requirements/chatterbox-mtl-v3-h1b-runtime.txt", self.workflow)
         self.assertIn("requirements/voxcpm2-p4-runtime.txt", self.workflow)
-        self.assertIn("voxcpm2)", self.workflow)
+        self.assertIn("--no-deps ./.audio-engine", self.workflow)
+        self.assertIn("audio-engine provider-cache prewarm", self.workflow)
+        self.assertIn("--cache-only-promoted-provider", self.workflow)
+        self.assertIn("provider cache identity mismatch", self.workflow)
+        self.assertIn("was not cache-only in final render", self.workflow)
+        self.assertIn('cp -R "$work/provider-prewarm" "$publish/provider-prewarm"', self.workflow)
 
     def test_production_releases_never_clobber_existing_assets(self):
         self.assertNotIn("gh release upload", self.workflow)
