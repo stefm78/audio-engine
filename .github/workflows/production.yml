@@ -200,46 +200,6 @@ jobs:
             ${{ inputs.cache_namespace }}-${{ runner.os }}-provider-models-
             ${{ matrix.provider_packages_fingerprint }}
 
-      - name: Install exact promoted provider runtime
-        if: matrix.provider_package_count != 0
-        shell: bash
-        env:
-          PROVIDER_PACKAGES_JSON: ${{ toJSON(matrix.provider_packages) }}
-        run: |
-          set -euo pipefail
-          mapfile -t packages < <(python - <<'PY'
-          import json, os
-          for item in json.loads(os.environ["PROVIDER_PACKAGES_JSON"]):
-              print(item["package"])
-          PY
-          )
-          installed=()
-          for package in "${packages[@]}"; do
-            provider_id="$(python - "$package" <<'PY'
-          import json, sys
-          print(json.load(open(sys.argv[1], encoding="utf-8"))["provider"]["id"])
-          PY
-            )"
-            case "$provider_id" in
-              chatterbox-multilingual-v3)
-                if [[ " ${installed[*]} " != *" $provider_id "* ]]; then
-                  bash .audio-engine/scripts/install_chatterbox_mtl_v3_h1b.sh
-                  installed+=("$provider_id")
-                fi
-                ;;
-              voxcpm2)
-                if [[ " ${installed[*]} " != *" $provider_id "* ]]; then
-                  bash .audio-engine/scripts/install_voxcpm2_p4_runtime.sh
-                  installed+=("$provider_id")
-                fi
-                ;;
-              *)
-                echo "ERROR: Production provider '$provider_id' has no promoted runtime installer." >&2
-                echo "No fallback is allowed." >&2
-                exit 2
-                ;;
-            esac
-          done
 
       - name: Install exact Audio Engine
         run: python -m pip install --disable-pip-version-check ./.audio-engine
@@ -419,6 +379,58 @@ jobs:
             exit 2
           fi
 
+      - name: Prewarm promoted provider voice caches in isolated runtimes
+        if: matrix.provider_package_count != 0
+        shell: bash
+        env:
+          UNIT_ID: ${{ matrix.id }}
+          PROGRAM: ${{ matrix.program }}
+          VOICE_PACK: ${{ matrix.voice_pack }}
+          PROVIDER_PACKAGES_JSON: ${{ toJSON(matrix.provider_packages) }}
+        run: |
+          set -euo pipefail
+          work="generated/work/$UNIT_ID"
+          cache_root="$work/.cache/voices"
+          report_root="$work/provider-prewarm"
+          mkdir -p "$cache_root" "$report_root" generated/provider-venvs
+
+          mapfile -t packages < <(python - <<'PY'
+          import json, os
+          for item in json.loads(os.environ["PROVIDER_PACKAGES_JSON"]):
+              print(item["package"])
+          PY
+          )
+
+          for package in "${packages[@]}"; do
+            provider_id="$(python - "$package" <<'PY'
+          import json, sys
+          print(json.load(open(sys.argv[1], encoding="utf-8"))["provider"]["id"])
+          PY
+            )"
+            safe_id="${provider_id//[^A-Za-z0-9_.-]/_}"
+            venv="generated/provider-venvs/$safe_id"
+            rm -rf "$venv"
+            python -m venv "$venv"
+            # shellcheck disable=SC1090
+            source "$venv/bin/activate"
+            case "$provider_id" in
+              chatterbox-multilingual-v3)
+                bash .audio-engine/scripts/install_chatterbox_mtl_v3_h1b.sh
+                ;;
+              voxcpm2)
+                bash .audio-engine/scripts/install_voxcpm2_p4_runtime.sh
+                ;;
+              *)
+                echo "ERROR: Production provider '$provider_id' has no promoted runtime installer." >&2
+                echo "No fallback is allowed." >&2
+                exit 2
+                ;;
+            esac
+            python -m pip install --disable-pip-version-check --no-deps ./.audio-engine
+            audio-engine provider-cache prewarm "$PROGRAM"               --voices "$VOICE_PACK"               --provider-package "$package"               --cache-root "$cache_root"               --provider-model-cache generated/provider-models               --workspace-root .               > "$report_root/$safe_id.json"
+            deactivate
+          done
+
       - id: produce
         name: Render and machine-qualify scene shard
         shell: bash
@@ -458,7 +470,13 @@ jobs:
           PY
           )
           for package in "${packages[@]}"; do
+            provider_id="$(python - "$package" <<'PY'
+          import json, sys
+          print(json.load(open(sys.argv[1], encoding="utf-8"))["provider"]["id"])
+          PY
+            )"
             provider_args+=(--provider-package "$package")
+            provider_args+=(--cache-only-promoted-provider "$provider_id")
           done
           audio-engine render "$PROGRAM" --out "$work" --voices "$VOICE_PACK" \
             --workspace-root . --provider-model-cache generated/provider-models \
@@ -471,6 +489,7 @@ jobs:
             set +e
             python - "$render_dir/manifest.json" <<'PY'
           import json, os, sys
+          from pathlib import Path
           m=json.load(open(sys.argv[1], encoding="utf-8"))
           expected={
               "source_sha256": os.environ["PROGRAM_SHA"],
@@ -489,6 +508,32 @@ jobs:
               raise SystemExit(
                   f"providers mismatch: {actual_providers} != {expected_providers}"
               )
+          records={
+              item["name"]: item
+              for item in (m.get("providers") or [])
+              if isinstance(item, dict) and item.get("name")
+          }
+          prewarm_root=Path("generated/work") / os.environ["UNIT_ID"] / "provider-prewarm"
+          if prewarm_root.is_dir():
+              reports=[]
+              for report_path in sorted(prewarm_root.glob("*.json")):
+                  reports.append(json.load(open(report_path, encoding="utf-8")))
+              for report in reports:
+                  provider_id=report.get("provider")
+                  if report.get("status")!="ready":
+                      raise SystemExit(f"provider prewarm did not finish ready: {provider_id}")
+                  record=records.get(provider_id)
+                  if record is None:
+                      raise SystemExit(f"prewarmed provider missing from render manifest: {provider_id}")
+                  if record.get("cache_identity")!=report.get("provider_cache_identity"):
+                      raise SystemExit(
+                          f"provider cache identity mismatch for {provider_id}: "
+                          f"{record.get('cache_identity')} != {report.get('provider_cache_identity')}"
+                      )
+                  if not str(record.get("processing", "")).startswith("cache-only:"):
+                      raise SystemExit(
+                          f"promoted provider {provider_id} was not cache-only in final render"
+                      )
           PY
             bind_rc=$?
             if [[ $bind_rc -eq 0 ]]; then
@@ -517,6 +562,9 @@ jobs:
             for name in audio.mp3 manifest.json transcript.json qa-report.json; do
               [[ -f "$render_dir/$name" ]] && cp "$render_dir/$name" "$publish/$program_id/$name"
             done
+          fi
+          if [[ -d "$work/provider-prewarm" ]]; then
+            cp -R "$work/provider-prewarm" "$publish/provider-prewarm"
           fi
 
           RESULT_STATE="$state" RESULT_REASON="$reason" RESULT_PATH="$publish/unit-result.json" python - <<'PY'
