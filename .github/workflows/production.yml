@@ -442,7 +442,13 @@ jobs:
             audio-engine provider-package hydrate-model "$package" --cache-root generated/provider-models
             audio-engine provider-package validate "$package" \
               --verify-files --workspace-root . --voice-pack "$VOICE_PACK"
-            audio-engine provider-cache prewarm "$PROGRAM"               --voices "$VOICE_PACK"               --provider-package "$package"               --cache-root "$cache_root"               --provider-model-cache generated/provider-models               --workspace-root .               > "$report_root/$safe_id.json"
+            audio-engine provider-cache prewarm "$PROGRAM" \
+              --voices "$VOICE_PACK" \
+              --provider-package "$package" \
+              --cache-root "$cache_root" \
+              --provider-model-cache generated/provider-models \
+              --workspace-root . \
+              --report "$report_root/$safe_id.json"
             deactivate
           done
 
@@ -502,17 +508,50 @@ jobs:
             reason="render_failed_rc_$render_rc"
           else
             set +e
-            python - "$render_dir/manifest.json" <<'PY'
+            BINDING_REPORT="$work/production-binding.json" python - "$render_dir/manifest.json" <<'PY'
           import json, os, sys
           from pathlib import Path
-          m=json.load(open(sys.argv[1], encoding="utf-8"))
+
+          manifest_path=Path(sys.argv[1])
+          report_path=Path(os.environ["BINDING_REPORT"])
+          report={
+              "schema_version":1,
+              "status":"FAIL",
+              "manifest":str(manifest_path),
+              "invariants":[],
+              "error":None,
+          }
+
+          def add(name, status, **details):
+              item={"name":name,"status":status}
+              item.update(details)
+              report["invariants"].append(item)
+
+          def fail(code, message, **details):
+              report["error"]={"code":code,"message":message,**details}
+              report_path.write_text(
+                  json.dumps(report, ensure_ascii=False, indent=2)+"\n",
+                  encoding="utf-8",
+              )
+              print(f"{code}: {message}", file=sys.stderr)
+              raise SystemExit(2)
+
+          try:
+              m=json.load(open(manifest_path, encoding="utf-8"))
+          except (OSError, json.JSONDecodeError) as exc:
+              fail("render_manifest_invalid_json", str(exc), path=str(manifest_path))
+
           expected={
               "source_sha256": os.environ["PROGRAM_SHA"],
               "voice_config_sha256": os.environ["VOICE_PACK_SHA"],
           }
           for key,value in expected.items():
-              if m.get(key)!=value:
-                  raise SystemExit(f"{key} mismatch: {m.get(key)} != {value}")
+              actual=m.get(key)
+              if actual!=value:
+                  add(key, "FAIL", expected=value, actual=actual)
+                  fail(f"{key}_mismatch", f"{actual} != {value}", expected=value, actual=actual)
+              add(key, "PASS", expected=value, actual=actual)
+
           expected_providers=sorted(json.loads(os.environ["PROVIDERS_JSON"]))
           actual_providers=sorted(
               item.get("name")
@@ -520,35 +559,127 @@ jobs:
               if isinstance(item, dict) and item.get("name")
           )
           if actual_providers != expected_providers:
-              raise SystemExit(
-                  f"providers mismatch: {actual_providers} != {expected_providers}"
+              add("provider_set", "FAIL", expected=expected_providers, actual=actual_providers)
+              fail(
+                  "provider_set_mismatch",
+                  f"{actual_providers} != {expected_providers}",
+                  expected=expected_providers,
+                  actual=actual_providers,
               )
+          add("provider_set", "PASS", expected=expected_providers, actual=actual_providers)
+
           records={
               item["name"]: item
               for item in (m.get("providers") or [])
               if isinstance(item, dict) and item.get("name")
           }
+          expected_promoted=sorted(
+              item["provider"]
+              for item in json.loads(os.environ["PROVIDER_PACKAGES_JSON"])
+          )
           prewarm_root=Path("generated/work") / os.environ["UNIT_ID"] / "provider-prewarm"
-          if prewarm_root.is_dir():
-              reports=[]
-              for report_path in sorted(prewarm_root.glob("*.json")):
-                  reports.append(json.load(open(report_path, encoding="utf-8")))
-              for report in reports:
-                  provider_id=report.get("provider")
-                  if report.get("status")!="ready":
-                      raise SystemExit(f"provider prewarm did not finish ready: {provider_id}")
-                  record=records.get(provider_id)
-                  if record is None:
-                      raise SystemExit(f"prewarmed provider missing from render manifest: {provider_id}")
-                  if record.get("cache_identity")!=report.get("provider_cache_identity"):
-                      raise SystemExit(
-                          f"provider cache identity mismatch for {provider_id}: "
-                          f"{record.get('cache_identity')} != {report.get('provider_cache_identity')}"
-                      )
-                  if not str(record.get("processing", "")).startswith("cache-only:"):
-                      raise SystemExit(
-                          f"promoted provider {provider_id} was not cache-only in final render"
-                      )
+          report_paths=sorted(prewarm_root.glob("*.json")) if prewarm_root.is_dir() else []
+          parsed_reports=[]
+          for prewarm_path in report_paths:
+              try:
+                  parsed=json.load(open(prewarm_path, encoding="utf-8"))
+              except (OSError, json.JSONDecodeError) as exc:
+                  add("provider_prewarm_json", "FAIL", path=str(prewarm_path), error=str(exc))
+                  fail(
+                      "provider_prewarm_report_invalid_json",
+                      f"{prewarm_path.name}: {exc}",
+                      path=str(prewarm_path),
+                  )
+              parsed_reports.append((prewarm_path, parsed))
+
+          actual_promoted=sorted(
+              report.get("provider")
+              for _, report in parsed_reports
+              if isinstance(report, dict) and report.get("provider")
+          )
+          if actual_promoted != expected_promoted:
+              add(
+                  "provider_prewarm_report_set",
+                  "FAIL",
+                  expected=expected_promoted,
+                  actual=actual_promoted,
+              )
+              fail(
+                  "provider_prewarm_report_set_mismatch",
+                  f"{actual_promoted} != {expected_promoted}",
+                  expected=expected_promoted,
+                  actual=actual_promoted,
+              )
+          add(
+              "provider_prewarm_report_set",
+              "PASS",
+              expected=expected_promoted,
+              actual=actual_promoted,
+          )
+
+          for prewarm_path, prewarm in parsed_reports:
+              provider_id=prewarm.get("provider")
+              if prewarm.get("status")!="ready":
+                  add("provider_prewarm_ready", "FAIL", provider=provider_id, actual=prewarm.get("status"))
+                  fail(
+                      "provider_prewarm_not_ready",
+                      f"{provider_id}: {prewarm.get('status')}",
+                      provider=provider_id,
+                      actual=prewarm.get("status"),
+                  )
+              add("provider_prewarm_ready", "PASS", provider=provider_id)
+
+              record=records.get(provider_id)
+              if record is None:
+                  add("provider_present_in_render", "FAIL", provider=provider_id)
+                  fail(
+                      "prewarmed_provider_missing_from_render_manifest",
+                      provider_id,
+                      provider=provider_id,
+                  )
+              add("provider_present_in_render", "PASS", provider=provider_id)
+
+              expected_identity=prewarm.get("provider_cache_identity")
+              actual_identity=record.get("cache_identity")
+              if actual_identity!=expected_identity:
+                  add(
+                      "provider_cache_identity",
+                      "FAIL",
+                      provider=provider_id,
+                      expected=expected_identity,
+                      actual=actual_identity,
+                  )
+                  fail(
+                      "provider_cache_identity_mismatch",
+                      f"{provider_id}: {actual_identity} != {expected_identity}",
+                      provider=provider_id,
+                      expected=expected_identity,
+                      actual=actual_identity,
+                  )
+              add(
+                  "provider_cache_identity",
+                  "PASS",
+                  provider=provider_id,
+                  expected=expected_identity,
+                  actual=actual_identity,
+              )
+
+              processing=str(record.get("processing", ""))
+              if not processing.startswith("cache-only:"):
+                  add("promoted_provider_cache_only", "FAIL", provider=provider_id, actual=processing)
+                  fail(
+                      "promoted_provider_not_cache_only",
+                      f"{provider_id}: {processing}",
+                      provider=provider_id,
+                      actual=processing,
+                  )
+              add("promoted_provider_cache_only", "PASS", provider=provider_id, actual=processing)
+
+          report["status"]="PASS"
+          report_path.write_text(
+              json.dumps(report, ensure_ascii=False, indent=2)+"\n",
+              encoding="utf-8",
+          )
           PY
             bind_rc=$?
             if [[ $bind_rc -eq 0 ]]; then
@@ -559,7 +690,10 @@ jobs:
             fi
             set -e
             if [[ $bind_rc -ne 0 ]]; then
-              reason="production_manifest_binding_failed"
+              binding_code="$(python -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); print((r.get("error") or {}).get("code") or "unknown_binding_failure")' "$work/production-binding.json" 2>/dev/null || echo unknown_binding_failure)"
+              binding_provider="$(python -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); print((r.get("error") or {}).get("provider") or "")' "$work/production-binding.json" 2>/dev/null || true)"
+              reason="production_manifest_binding_failed:$binding_code"
+              [[ -n "$binding_provider" ]] && reason="$reason:$binding_provider"
             elif [[ $qa_rc -ne 0 ]]; then
               reason="qa_command_failed_rc_$qa_rc"
             else
@@ -581,10 +715,20 @@ jobs:
           if [[ -d "$work/provider-prewarm" ]]; then
             cp -R "$work/provider-prewarm" "$publish/provider-prewarm"
           fi
+          if [[ -f "$work/production-binding.json" ]]; then
+            cp "$work/production-binding.json" "$publish/production-binding.json"
+          fi
 
-          RESULT_STATE="$state" RESULT_REASON="$reason" RESULT_PATH="$publish/unit-result.json" python - <<'PY'
+          RESULT_STATE="$state" RESULT_REASON="$reason" RESULT_PATH="$publish/unit-result.json" BINDING_REPORT_PATH="$publish/production-binding.json" python - <<'PY'
           import json, os
           from pathlib import Path
+          binding_path=Path(os.environ["BINDING_REPORT_PATH"])
+          binding=None
+          if binding_path.is_file():
+              try:
+                  binding=json.load(open(binding_path, encoding="utf-8"))
+              except (OSError, json.JSONDecodeError):
+                  binding={"status":"UNREADABLE"}
           result={
               "schema_version":1,
               "unit_id":os.environ["UNIT_ID"],
@@ -599,6 +743,7 @@ jobs:
               "providers":json.loads(os.environ["PROVIDERS_JSON"]),
               "engine_ref":os.environ["ENGINE_REF"],
               "production_manifest_sha256":os.environ["MANIFEST_SHA"],
+              "production_binding":binding,
           }
           Path(os.environ["RESULT_PATH"]).write_text(
               json.dumps(result, ensure_ascii=False, indent=2)+"\n", encoding="utf-8"
