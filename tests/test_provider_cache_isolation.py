@@ -5,11 +5,33 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from audio_engine.audio import run_ffmpeg
 from audio_engine.provider_cache import prewarm_promoted_provider_cache
 from audio_engine.providers.factory import CacheOnlyProvider
 from audio_engine.render import render_program
 
-from test_multi_provider import ToneProvider
+
+class ToneProvider:
+    processing = "local-test"
+
+    def __init__(self, name, frequency):
+        self.name = name
+        self.frequency = frequency
+        self.calls = 0
+
+    def cache_identity(self):
+        return f"{self.name}-runtime-v1"
+
+    def synthesize(self, segment, path):
+        self.calls += 1
+        run_ffmpeg([
+            "-f", "lavfi",
+            "-i", f"sine=frequency={self.frequency}:sample_rate=24000:duration=0.20",
+            "-ac", "1",
+            "-c:a", "libmp3lame",
+            "-b:a", "64k",
+            str(path),
+        ])
 
 
 class ProviderCacheIsolationTests(unittest.TestCase):
