@@ -275,7 +275,7 @@ jobs:
           done
 
       - id: cache-migration-policy
-        name: Resolve scene-v3 cache migration policy
+        name: Resolve scene-v4 cache migration policy
         shell: bash
         env:
           UNIT_ID: ${{ matrix.id }}
@@ -321,18 +321,18 @@ jobs:
           PY
 
       - id: scene-cache-v3
-        name: Restore optional content-addressed scene-v3 cache
+        name: Restore optional content-addressed scene-v4 cache
         if: steps.cache-migration-policy.outputs.force_legacy != 'true'
         uses: actions/cache/restore@v4
         with:
           path: generated/work/${{ matrix.id }}/.cache
           key: >-
             ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}-
-            scene-v3-${{ matrix.id }}-${{ matrix.program_sha256 }}-
+            scene-v4-${{ matrix.id }}-${{ matrix.program_sha256 }}-
             ${{ matrix.voice_pack_sha256 }}-${{ matrix.provider_packages_fingerprint }}-
             ${{ needs.plan.outputs.engine_ref }}
           restore-keys: |
-            ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- scene-v3-${{ matrix.id }}-
+            ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- scene-v4-${{ matrix.id }}-
 
       - id: scene-cache-v2-migration
         name: Restore optional scene-v2 migration source
@@ -393,7 +393,7 @@ jobs:
         env:
           UNIT_ID: ${{ matrix.id }}
         run: |
-          echo "ERROR: forced recovery mode forbids remote resynthesis for non-forced unit $UNIT_ID; no scene-v3 or scene-v2 migration source was found." >&2
+          echo "ERROR: forced recovery mode forbids remote resynthesis for non-forced unit $UNIT_ID; no scene-v4 or scene-v2 migration source was found." >&2
           exit 2
 
       - name: Require opted-in legacy scene cache migration source
@@ -586,7 +586,7 @@ jobs:
           fi
 
       - id: scene-cache-save-gate
-        name: Authorize ready-only scene-v3 cache save
+        name: Authorize ready-only scene-v4 cache save
         if: always()
         shell: bash
         env:
@@ -608,7 +608,7 @@ jobs:
               handle.write(f"ready={'true' if ready and has_cache else 'false'}\n")
           PY
 
-      - name: Save ready-only content-addressed scene-v3 cache
+      - name: Save ready-only content-addressed scene-v4 cache
         if: >-
           always() &&
           steps.scene-cache-save-gate.outputs.ready == 'true' &&
@@ -618,7 +618,7 @@ jobs:
           path: generated/work/${{ matrix.id }}/.cache
           key: >-
             ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}-
-            scene-v3-${{ matrix.id }}-${{ matrix.program_sha256 }}-
+            scene-v4-${{ matrix.id }}-${{ matrix.program_sha256 }}-
             ${{ matrix.voice_pack_sha256 }}-${{ matrix.provider_packages_fingerprint }}-
             ${{ needs.plan.outputs.engine_ref }}
 
