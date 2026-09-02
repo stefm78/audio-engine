@@ -78,7 +78,12 @@ jobs:
           python -m pip install --disable-pip-version-check             numpy==1.26.4             librosa==0.11.0             s3tokenizer==0.3.0             torchcrepe==0.0.24             transformers==4.46.3             diffusers==0.29.0             conformer==0.3.2             safetensors==0.5.3             huggingface_hub==0.33.1             scipy==1.15.3             tqdm==4.67.1             soundfile==0.13.1
 
           python -m pip install --disable-pip-version-check --no-deps -e ./beltout-src
-          python -m pip check
+
+          python - <<'PY'
+          import torch, torchaudio, librosa, s3tokenizer, torchcrepe
+          from beltout import BeltOutTTM
+          print("BELTOUT_RUNTIME_IMPORT_PASS")
+          PY
 
       - name: Download exact BeltOut checkpoints only
         shell: bash
