@@ -3,6 +3,7 @@ from pathlib import Path
 from ..contract import ContractError, load_json
 from ..provider_package import validate_provider_package
 from .chatterbox_mtl_v3 import ChatterboxMultilingualV3Provider
+from .immutable_voice_clips import ImmutableVoiceClipsProvider
 from .voxcpm2 import VoxCPM2Provider
 
 
@@ -63,6 +64,11 @@ def build_promoted_providers(
                 package_path,
                 workspace_root=workspace_root,
                 model_dir=model_dir,
+            )
+        elif provider_id == "immutable-voice-clips-v1":
+            provider = ImmutableVoiceClipsProvider(
+                package_path,
+                workspace_root=workspace_root,
             )
         else:
             raise ContractError(
