@@ -119,6 +119,18 @@ class ProductionWorkflowContractTests(unittest.TestCase):
         self.assertIn("was not cache-only in final render", self.workflow)
         self.assertIn('cp -R "$work/provider-prewarm" "$publish/provider-prewarm"', self.workflow)
 
+    def test_provider_prewarm_and_binding_evidence_are_structured_and_explicit(self):
+        self.assertIn('--report "$report_root/$safe_id.json"', self.workflow)
+        self.assertNotIn('> "$report_root/$safe_id.json"', self.workflow)
+        self.assertIn("production-binding.json", self.workflow)
+        self.assertIn("provider_prewarm_report_invalid_json", self.workflow)
+        self.assertIn("provider_prewarm_report_set_mismatch", self.workflow)
+        self.assertIn("provider_prewarm_not_ready", self.workflow)
+        self.assertIn("provider_cache_identity_mismatch", self.workflow)
+        self.assertIn("promoted_provider_not_cache_only", self.workflow)
+        self.assertIn('reason="production_manifest_binding_failed:$binding_code"', self.workflow)
+        self.assertIn('"production_binding":binding', self.workflow)
+
     def test_production_releases_never_clobber_existing_assets(self):
         self.assertNotIn("gh release upload", self.workflow)
         self.assertNotIn("--clobber", self.workflow)
