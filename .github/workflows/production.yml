@@ -276,29 +276,6 @@ jobs:
             exit 2
           fi
 
-      - id: legacy-scene-cache
-        name: Restore optional pre-scene-v2 cache migration source
-        if: inputs.legacy_scene_cache_engine_ref != ''
-        uses: actions/cache/restore@v4
-        with:
-          path: generated/work/${{ matrix.id }}/.cache
-          key: legacy-scene-cache-migration-${{ github.run_id }}-${{ matrix.id }}
-          restore-keys: |
-            ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- ${{ inputs.legacy_scene_cache_engine_ref }}-${{ matrix.id }}-
-
-      - name: Require opted-in legacy scene cache migration source
-        if: inputs.legacy_scene_cache_engine_ref != ''
-        shell: bash
-        env:
-          MATCHED_KEY: ${{ steps.legacy-scene-cache.outputs.cache-matched-key }}
-          UNIT_ID: ${{ matrix.id }}
-        run: |
-          set -euo pipefail
-          if [[ -z "$MATCHED_KEY" ]]; then
-            echo "ERROR: opted-in legacy scene cache migration source was not found for $UNIT_ID." >&2
-            exit 2
-          fi
-
       - id: scene-cache-v2
         name: Restore optional content-addressed scene cache
         uses: actions/cache@v4
@@ -311,6 +288,29 @@ jobs:
             ${{ needs.plan.outputs.engine_ref }}
           restore-keys: |
             ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}-scene-v2-${{ matrix.id }}-
+
+      - id: legacy-scene-cache
+        name: Restore optional pre-scene-v2 cache migration source
+        if: inputs.legacy_scene_cache_engine_ref != '' && steps.scene-cache-v2.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: generated/work/${{ matrix.id }}/.cache
+          key: legacy-scene-cache-migration-${{ github.run_id }}-${{ matrix.id }}
+          restore-keys: |
+            ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- ${{ inputs.legacy_scene_cache_engine_ref }}-${{ matrix.id }}-
+
+      - name: Require opted-in legacy scene cache migration source
+        if: inputs.legacy_scene_cache_engine_ref != '' && steps.scene-cache-v2.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          MATCHED_KEY: ${{ steps.legacy-scene-cache.outputs.cache-matched-key }}
+          UNIT_ID: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$MATCHED_KEY" ]]; then
+            echo "ERROR: opted-in legacy scene cache migration source was not found for $UNIT_ID." >&2
+            exit 2
+          fi
 
       - id: produce
         name: Render and machine-qualify scene shard
