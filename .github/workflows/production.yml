@@ -317,6 +317,7 @@ jobs:
           output = Path(os.environ["GITHUB_OUTPUT"])
           with output.open("a", encoding="utf-8") as handle:
               handle.write(f"force_legacy={'true' if force else 'false'}\n")
+              handle.write(f"force_mode={'true' if bool(force_units) else 'false'}\n")
           PY
 
       - id: scene-cache-v3
@@ -331,7 +332,7 @@ jobs:
             ${{ matrix.voice_pack_sha256 }}-${{ matrix.provider_packages_fingerprint }}-
             ${{ needs.plan.outputs.engine_ref }}
           restore-keys: |
-            ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}-scene-v3-${{ matrix.id }}-
+            ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- scene-v3-${{ matrix.id }}-
 
       - id: scene-cache-v2-migration
         name: Restore optional scene-v2 migration source
@@ -343,7 +344,7 @@ jobs:
           path: generated/work/${{ matrix.id }}/.cache
           key: scene-v2-migration-${{ github.run_id }}-${{ matrix.id }}
           restore-keys: |
-            ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}-scene-v2-${{ matrix.id }}-
+            ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- scene-v2-${{ matrix.id }}-
 
       - id: legacy-scene-cache-exact
         name: Restore exact pre-scene-v2 cache migration source
@@ -353,6 +354,7 @@ jobs:
           (
             steps.cache-migration-policy.outputs.force_legacy == 'true' ||
             (
+              steps.cache-migration-policy.outputs.force_mode != 'true' &&
               steps.scene-cache-v3.outputs.cache-matched-key == '' &&
               steps.scene-cache-v2-migration.outputs.cache-matched-key == ''
             )
@@ -370,6 +372,7 @@ jobs:
         if: >-
           inputs.legacy_scene_cache_engine_ref != '' &&
           inputs.legacy_scene_cache_voice_pack_sha256 == '' &&
+          steps.cache-migration-policy.outputs.force_mode != 'true' &&
           steps.cache-migration-policy.outputs.force_legacy != 'true' &&
           steps.scene-cache-v3.outputs.cache-matched-key == '' &&
           steps.scene-cache-v2-migration.outputs.cache-matched-key == ''
@@ -380,12 +383,26 @@ jobs:
           restore-keys: |
             ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- ${{ inputs.legacy_scene_cache_engine_ref }}-${{ matrix.id }}- ${{ matrix.program_sha256 }}-
 
+      - name: Require non-forced cache source during forced recovery
+        if: >-
+          steps.cache-migration-policy.outputs.force_mode == 'true' &&
+          steps.cache-migration-policy.outputs.force_legacy != 'true' &&
+          steps.scene-cache-v3.outputs.cache-matched-key == '' &&
+          steps.scene-cache-v2-migration.outputs.cache-matched-key == ''
+        shell: bash
+        env:
+          UNIT_ID: ${{ matrix.id }}
+        run: |
+          echo "ERROR: forced recovery mode forbids remote resynthesis for non-forced unit $UNIT_ID; no scene-v3 or scene-v2 migration source was found." >&2
+          exit 2
+
       - name: Require opted-in legacy scene cache migration source
         if: >-
           inputs.legacy_scene_cache_engine_ref != '' &&
           (
             steps.cache-migration-policy.outputs.force_legacy == 'true' ||
             (
+              steps.cache-migration-policy.outputs.force_mode != 'true' &&
               steps.scene-cache-v3.outputs.cache-matched-key == '' &&
               steps.scene-cache-v2-migration.outputs.cache-matched-key == ''
             )
