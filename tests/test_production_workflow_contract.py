@@ -19,8 +19,8 @@ class ProductionWorkflowContractTests(unittest.TestCase):
         self.assertIn('"state")!="ready"', self.workflow)
         self.assertIn("This is not a final master release.", self.workflow)
 
-    def test_scene_v3_cache_is_content_addressed_and_migrates_v2(self):
-        self.assertIn("scene-v3-${{ matrix.id }}-${{ matrix.program_sha256 }}", self.workflow)
+    def test_scene_v4_cache_is_content_addressed_and_migrates_v2(self):
+        self.assertIn("scene-v4-${{ matrix.id }}-${{ matrix.program_sha256 }}", self.workflow)
         self.assertIn("${{ matrix.provider_packages_fingerprint }}", self.workflow)
         self.assertIn("${{ needs.plan.outputs.engine_ref }}", self.workflow)
         self.assertIn("Restore optional scene-v2 migration source", self.workflow)
@@ -29,7 +29,7 @@ class ProductionWorkflowContractTests(unittest.TestCase):
             self.workflow,
         )
         self.assertIn(
-            "${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- scene-v3-${{ matrix.id }}-",
+            "${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- scene-v4-${{ matrix.id }}-",
             self.workflow,
         )
 
@@ -67,11 +67,16 @@ class ProductionWorkflowContractTests(unittest.TestCase):
             self.workflow,
         )
 
-    def test_scene_v3_cache_is_saved_only_for_ready_units(self):
+    def test_scene_v3_generation_is_quarantined_from_restore_paths(self):
+        self.assertNotIn("Restore optional content-addressed scene-v3 cache", self.workflow)
+        self.assertNotIn("scene-v3-${{ matrix.id }}-", self.workflow)
+        self.assertIn("Restore optional scene-v2 migration source", self.workflow)
+
+    def test_scene_v4_cache_is_saved_only_for_ready_units(self):
         self.assertIn("uses: actions/cache/restore@v4", self.workflow)
-        self.assertNotIn("- id: scene-cache-v3\n        name: Restore optional content-addressed scene-v3 cache\n        uses: actions/cache@v4", self.workflow)
+        self.assertNotIn("- id: scene-cache-v3\n        name: Restore optional content-addressed scene-v4 cache\n        uses: actions/cache@v4", self.workflow)
         self.assertIn("uses: actions/cache/save@v4", self.workflow)
-        self.assertIn("Authorize ready-only scene-v3 cache save", self.workflow)
+        self.assertIn("Authorize ready-only scene-v4 cache save", self.workflow)
         self.assertIn('result.get("state") == "ready"', self.workflow)
         self.assertIn("steps.scene-cache-save-gate.outputs.ready == 'true'", self.workflow)
         self.assertIn("steps.scene-cache-v3.outputs.cache-hit != 'true'", self.workflow)
