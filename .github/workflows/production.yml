@@ -429,6 +429,9 @@ jobs:
               voxcpm2)
                 bash .audio-engine/scripts/install_voxcpm2_p4_runtime.sh
                 ;;
+              immutable-voice-clips-v1)
+                # No model runtime: references are immutable authored/converted clips.
+                ;;
               *)
                 echo "ERROR: Production provider '$provider_id' has no promoted runtime installer." >&2
                 echo "No fallback is allowed." >&2
@@ -439,7 +442,9 @@ jobs:
               "imageio-ffmpeg==0.6.0" "edge-tts==7.2.8"
             python -m pip install --disable-pip-version-check --no-deps ./.audio-engine
             audio-engine provider-package hydrate-references "$package" --workspace-root .
-            audio-engine provider-package hydrate-model "$package" --cache-root generated/provider-models
+            if [[ "$provider_id" != "immutable-voice-clips-v1" ]]; then
+              audio-engine provider-package hydrate-model "$package" --cache-root generated/provider-models
+            fi
             audio-engine provider-package validate "$package" \
               --verify-files --workspace-root . --voice-pack "$VOICE_PACK"
             audio-engine provider-cache prewarm "$PROGRAM" \
