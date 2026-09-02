@@ -1,0 +1,142 @@
+name: LOCAL TTS P6 Confucius4 one-shot
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CONFUCIUS_SOURCE_REV: 45f83890b72ba26d1954dab5001600301ebe8dd3
+  CONFUCIUS_HF_REV: 696981f
+  W2V_HF_REV: da985ba
+  CAMPPLUS_HF_REV: e4b6ede
+  BIGVGAN_HF_REV: 633ff70
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  p6-confucius4:
+    if: github.head_ref == 'lab/LOCAL-TTS-WP-006-p6-confucius4'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Free disk and install tools
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg time
+
+      - name: Recover immutable H1b-B P6 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/h1b
+          gh release download odyssee-h1b-corrective-review-v1             --repo stefm78/recit-audioguide             -p p6-b.mp3 -p p6-b-report.json             -D inputs/h1b
+          test "$(sha256sum inputs/h1b/p6-b.mp3 | cut -d' ' -f1)" =             "474c2e41a5d702b2a84524aa3be9a0559ed7378af18d507ac082b666029d64ae"
+          test "$(sha256sum inputs/h1b/p6-b-report.json | cut -d' ' -f1)" =             "366091a73e7597626384535e900a5b30e7943c485d0197ec25f015c384b6d891"
+
+      - name: Checkout pinned Confucius4 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/netease-youdao/Confucius4-TTS.git confucius-src
+          cd confucius-src
+          git checkout "$CONFUCIUS_SOURCE_REV"
+          test "$(git rev-parse HEAD)" = "$CONFUCIUS_SOURCE_REV"
+
+      - name: Install pinned CPU environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check             --index-url https://download.pytorch.org/whl/cpu             torch==2.7.0 torchaudio==2.7.0
+          grep -Ev '^(torch|torchaudio)==' confucius-src/requirements.txt > /tmp/confucius-requirements.txt
+          python -m pip install --disable-pip-version-check -r /tmp/confucius-requirements.txt
+          python -m pip install --disable-pip-version-check pydub==0.25.1
+          python -m pip check
+
+      - name: Download exact model snapshots
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/models
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download, hf_hub_download
+          snapshot_download(repo_id="netease-youdao/Confucius4-TTS",revision=os.environ["CONFUCIUS_HF_REV"],local_dir="inputs/models/confucius4")
+          snapshot_download(repo_id="facebook/w2v-bert-2.0",revision=os.environ["W2V_HF_REV"],local_dir="inputs/models/w2v-bert-2.0")
+          snapshot_download(repo_id="nvidia/bigvgan_v2_22khz_80band_256x",revision=os.environ["BIGVGAN_HF_REV"],local_dir="inputs/models/bigvgan")
+          hf_hub_download(repo_id="funasr/campplus",filename="campplus_cn_common.bin",revision=os.environ["CAMPPLUS_HF_REV"],local_dir="inputs/models/campplus")
+          PY
+
+      - name: Static one-shot protocol gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile lab/voice-casting/p6_confucius4_one_shot.py
+          ! grep -E 'AZURE_SPEECH|edge_tts|EdgeProvider|speech\.microsoft|cognitiveservices' lab/voice-casting/p6_confucius4_one_shot.py
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          t=ast.parse(Path("lab/voice-casting/p6_confucius4_one_shot.py").read_text())
+          vals={}
+          for n in t.body:
+              if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name):
+                  if n.targets[0].id in {"TARGETS","SEEDS","ANCHOR_SEGMENTS"}:
+                      vals[n.targets[0].id]=ast.literal_eval(n.value)
+          assert vals["ANCHOR_SEGMENTS"]==(6,7,8)
+          assert vals["TARGETS"]=={2:"Non.",4:"Ce lit ne sort pas de cette chambre.",10:"Tu le savais.",12:"Pénélope…",15:"Notre lit."}
+          assert set(vals["SEEDS"])=={2,4,10,12,15}
+          print("P6_CONFUCIUS4_PROTOCOL_PASS")
+          PY
+
+      - name: Render exactly one P6 candidate
+        shell: bash
+        env:
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p generated/p6-confucius4
+          /usr/bin/time -v             python lab/voice-casting/p6_confucius4_one_shot.py               --source-dir confucius-src               --confucius-model-dir inputs/models/confucius4               --w2v-dir inputs/models/w2v-bert-2.0               --campplus-dir inputs/models/campplus               --bigvgan-dir inputs/models/bigvgan               --baseline-audio inputs/h1b/p6-b.mp3               --baseline-report inputs/h1b/p6-b-report.json               --out generated/p6-confucius4             2> >(tee generated/p6-confucius4/resource-time.txt >&2)
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path("generated/p6-confucius4/manifest.json").read_text())
+          assert m["status"]=="MACHINE_PASS"
+          assert m["cloud_tts"] is False and m["nuc_required"] is False
+          assert [x["i"] for x in m["slots"]]==[2,4,10,12,15]
+          assert all(x["technical_gate"]["status"]=="PASS" for x in m["slots"])
+          print("P6_CONFUCIUS4_MACHINE_PASS",m["candidate_sha256"])
+          PY
+
+          sha256sum             generated/p6-confucius4/p6-confucius4.mp3             generated/p6-confucius4/ulysse-henri-anchor.wav             generated/p6-confucius4/slots/*.wav             generated/p6-confucius4/manifest.json             | tee generated/p6-confucius4/SHA256SUMS.txt
+
+      - name: Upload immutable P6 review bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-tts-p6-confucius4-one-shot
+          path: |
+            generated/p6-confucius4/p6-confucius4.mp3
+            generated/p6-confucius4/index.html
+            generated/p6-confucius4/ulysse-henri-anchor.wav
+            generated/p6-confucius4/slots/*.wav
+            generated/p6-confucius4/manifest.json
+            generated/p6-confucius4/SHA256SUMS.txt
+            generated/p6-confucius4/resource-time.txt
+          if-no-files-found: warn
+          retention-days: 14
