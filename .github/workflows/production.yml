@@ -218,26 +218,6 @@ jobs:
           --unit "${{ matrix.id }}"
           --workspace-root .
 
-      - name: Hydrate and verify promoted provider assets
-        if: matrix.provider_package_count != 0
-        shell: bash
-        env:
-          PROVIDER_PACKAGES_JSON: ${{ toJSON(matrix.provider_packages) }}
-          VOICE_PACK: ${{ matrix.voice_pack }}
-        run: |
-          set -euo pipefail
-          mapfile -t packages < <(python - <<'PY'
-          import json, os
-          for item in json.loads(os.environ["PROVIDER_PACKAGES_JSON"]):
-              print(item["package"])
-          PY
-          )
-          for package in "${packages[@]}"; do
-            audio-engine provider-package hydrate-references "$package" --workspace-root .
-            audio-engine provider-package hydrate-model "$package" --cache-root generated/provider-models
-            audio-engine provider-package validate "$package" \
-              --verify-files --workspace-root . --voice-pack "$VOICE_PACK"
-          done
 
       - id: cache-migration-policy
         name: Resolve scene-v4 cache migration policy
@@ -456,6 +436,10 @@ jobs:
                 ;;
             esac
             python -m pip install --disable-pip-version-check --no-deps ./.audio-engine
+            audio-engine provider-package hydrate-references "$package" --workspace-root .
+            audio-engine provider-package hydrate-model "$package" --cache-root generated/provider-models
+            audio-engine provider-package validate "$package" \
+              --verify-files --workspace-root . --voice-pack "$VOICE_PACK"
             audio-engine provider-cache prewarm "$PROGRAM"               --voices "$VOICE_PACK"               --provider-package "$package"               --cache-root "$cache_root"               --provider-model-cache generated/provider-models               --workspace-root .               > "$report_root/$safe_id.json"
             deactivate
           done
