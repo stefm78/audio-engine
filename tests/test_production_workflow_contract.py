@@ -115,7 +115,7 @@ class ProductionWorkflowContractTests(unittest.TestCase):
         self.assertIn("audio-engine provider-cache prewarm", self.workflow)
         self.assertNotIn("Hydrate and verify promoted provider assets", self.workflow)
         self.assertIn("--cache-only-promoted-provider", self.workflow)
-        self.assertIn("provider cache identity mismatch", self.workflow)
+        self.assertIn("provider_cache_identity_mismatch", self.workflow)
         self.assertIn("was not cache-only in final render", self.workflow)
         self.assertIn('cp -R "$work/provider-prewarm" "$publish/provider-prewarm"', self.workflow)
 
