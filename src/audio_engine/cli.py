@@ -222,6 +222,22 @@ def build_parser():
     )
     provider_cache_prewarm.add_argument("--workspace-root", default=".")
 
+    beltout = sub.add_parser("beltout", help="Deterministic single-pass BeltOut performance conversion")
+    beltout_sub = beltout.add_subparsers(dest="beltout_command", required=True)
+    beltout_convert = beltout_sub.add_parser(
+        "convert",
+        help="Convert one frozen source performance exactly once into a target timbre",
+    )
+    beltout_convert.add_argument("--source", required=True)
+    beltout_convert.add_argument("--target-anchor", required=True)
+    beltout_convert.add_argument("--beltout-source", required=True)
+    beltout_convert.add_argument("--checkpoint-dir", required=True)
+    beltout_convert.add_argument("--out", required=True)
+    beltout_convert.add_argument("--seed", required=True, type=int)
+    beltout_convert.add_argument("--n-timesteps", default=10, type=int)
+    beltout_convert.add_argument("--gain-clamp-db", default=8.0, type=float)
+    beltout_convert.add_argument("--device", default="cpu")
+
     qa = sub.add_parser(
         "qa",
         help="Run deterministic machine QA over one completed render directory",
@@ -396,6 +412,19 @@ def main(argv=None):
                     args.cache_root,
                     workspace_root=args.workspace_root,
                     model_cache_root=args.provider_model_cache,
+                )
+        elif args.command == "beltout":
+            if args.beltout_command == "convert":
+                result = beltout_convert_once(
+                    args.source,
+                    args.target_anchor,
+                    args.beltout_source,
+                    args.checkpoint_dir,
+                    args.out,
+                    seed=args.seed,
+                    n_timesteps=args.n_timesteps,
+                    gain_clamp_db=args.gain_clamp_db,
+                    device=args.device,
                 )
         elif args.command == "provider-package":
             if args.provider_package_command == "validate":
