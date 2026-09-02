@@ -32,6 +32,11 @@ on:
         required: false
         default: '[]'
         type: string
+      fresh_scene_cache_units_json:
+        description: JSON array of unit ids whose prior scene caches are explicitly quarantined
+        required: false
+        default: '[]'
+        type: string
       max_parallel:
         description: Maximum concurrent scene renders
         required: false
@@ -242,6 +247,7 @@ jobs:
           LEGACY_ENGINE_REF: ${{ inputs.legacy_scene_cache_engine_ref }}
           LEGACY_VOICE_PACK_SHA: ${{ inputs.legacy_scene_cache_voice_pack_sha256 }}
           FORCE_UNITS_JSON: ${{ inputs.legacy_scene_cache_force_units_json }}
+          FRESH_UNITS_JSON: ${{ inputs.fresh_scene_cache_units_json }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -261,11 +267,26 @@ jobs:
               raise SystemExit("legacy_scene_cache_force_units_json must be a JSON array of non-empty strings")
           if len(force_units) != len(set(force_units)):
               raise SystemExit("legacy_scene_cache_force_units_json must not contain duplicates")
+          try:
+              fresh_units = json.loads(os.environ["FRESH_UNITS_JSON"])
+          except json.JSONDecodeError as exc:
+              raise SystemExit(f"fresh_scene_cache_units_json must be valid JSON: {exc}")
+          if not isinstance(fresh_units, list) or any(
+              not isinstance(item, str) or not item.strip() for item in fresh_units
+          ):
+              raise SystemExit("fresh_scene_cache_units_json must be a JSON array of non-empty strings")
+          if len(fresh_units) != len(set(fresh_units)):
+              raise SystemExit("fresh_scene_cache_units_json must not contain duplicates")
           if engine and not re.fullmatch(r"[0-9a-f]{40}", engine):
               raise SystemExit("legacy_scene_cache_engine_ref must be an exact 40-hex commit SHA")
           if voice_pack and not re.fullmatch(r"[0-9a-f]{64}", voice_pack):
               raise SystemExit("legacy_scene_cache_voice_pack_sha256 must be an exact 64-hex SHA-256")
           force = unit in force_units
+          fresh = unit in fresh_units
+          if force and fresh:
+              raise SystemExit(
+                  f"{unit}: fresh scene-cache quarantine conflicts with forced legacy migration"
+              )
           if force and not engine:
               raise SystemExit(
                   f"{unit}: forced legacy cache migration requires legacy_scene_cache_engine_ref"
@@ -278,11 +299,14 @@ jobs:
           with output.open("a", encoding="utf-8") as handle:
               handle.write(f"force_legacy={'true' if force else 'false'}\n")
               handle.write(f"force_mode={'true' if bool(force_units) else 'false'}\n")
+              handle.write(f"fresh_cache={'true' if fresh else 'false'}\n")
           PY
 
       - id: scene-cache-v4
         name: Restore optional content-addressed scene-v4 cache
-        if: steps.cache-migration-policy.outputs.force_legacy != 'true'
+        if: >-
+          steps.cache-migration-policy.outputs.force_legacy != 'true' &&
+          steps.cache-migration-policy.outputs.fresh_cache != 'true'
         uses: actions/cache/restore@v4
         with:
           path: generated/work/${{ matrix.id }}/.cache
@@ -298,6 +322,7 @@ jobs:
         name: Restore optional scene-v2 migration source
         if: >-
           steps.cache-migration-policy.outputs.force_legacy != 'true' &&
+          steps.cache-migration-policy.outputs.fresh_cache != 'true' &&
           steps.scene-cache-v4.outputs.cache-matched-key == ''
         uses: actions/cache/restore@v4
         with:
@@ -311,6 +336,7 @@ jobs:
         if: >-
           inputs.legacy_scene_cache_engine_ref != '' &&
           inputs.legacy_scene_cache_voice_pack_sha256 != '' &&
+          steps.cache-migration-policy.outputs.fresh_cache != 'true' &&
           (
             steps.cache-migration-policy.outputs.force_legacy == 'true' ||
             (
@@ -332,6 +358,7 @@ jobs:
         if: >-
           inputs.legacy_scene_cache_engine_ref != '' &&
           inputs.legacy_scene_cache_voice_pack_sha256 == '' &&
+          steps.cache-migration-policy.outputs.fresh_cache != 'true' &&
           steps.cache-migration-policy.outputs.force_mode != 'true' &&
           steps.cache-migration-policy.outputs.force_legacy != 'true' &&
           steps.scene-cache-v4.outputs.cache-matched-key == '' &&
@@ -346,6 +373,7 @@ jobs:
       - name: Require non-forced cache source during forced recovery
         if: >-
           steps.cache-migration-policy.outputs.force_mode == 'true' &&
+          steps.cache-migration-policy.outputs.fresh_cache != 'true' &&
           steps.cache-migration-policy.outputs.force_legacy != 'true' &&
           steps.scene-cache-v4.outputs.cache-matched-key == '' &&
           steps.scene-cache-v2-migration.outputs.cache-matched-key == ''
@@ -359,6 +387,7 @@ jobs:
       - name: Require opted-in legacy scene cache migration source
         if: >-
           inputs.legacy_scene_cache_engine_ref != '' &&
+          steps.cache-migration-policy.outputs.fresh_cache != 'true' &&
           (
             steps.cache-migration-policy.outputs.force_legacy == 'true' ||
             (
