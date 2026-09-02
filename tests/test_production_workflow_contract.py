@@ -48,6 +48,11 @@ class ProductionWorkflowContractTests(unittest.TestCase):
             self.workflow,
         )
 
+        self.assertIn(
+            "steps.scene-cache-v2.outputs.cache-hit != 'true'",
+            self.workflow,
+        )
+
     def test_local_provider_runtime_installers_are_explicit(self):
         self.assertIn("install_chatterbox_mtl_v3_h1b.sh", self.workflow)
         self.assertIn("install_voxcpm2_p4_runtime.sh", self.workflow)
