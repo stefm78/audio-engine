@@ -44,7 +44,8 @@ class ProductionWorkflowContractTests(unittest.TestCase):
         )
         self.assertIn(
             "${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- "
-            "${{ inputs.legacy_scene_cache_engine_ref }}-${{ matrix.id }}-",
+            "${{ inputs.legacy_scene_cache_engine_ref }}-${{ matrix.id }}- "
+            "${{ matrix.program_sha256 }}-",
             self.workflow,
         )
 
