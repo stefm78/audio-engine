@@ -25,11 +25,11 @@ class ProductionWorkflowContractTests(unittest.TestCase):
         self.assertIn("${{ needs.plan.outputs.engine_ref }}", self.workflow)
         self.assertIn("Restore optional scene-v2 migration source", self.workflow)
         self.assertIn(
-            "${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}-scene-v2-${{ matrix.id }}-",
+            "${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- scene-v2-${{ matrix.id }}-",
             self.workflow,
         )
         self.assertIn(
-            "${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}-scene-v3-${{ matrix.id }}-",
+            "${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- scene-v3-${{ matrix.id }}-",
             self.workflow,
         )
 
@@ -49,6 +49,21 @@ class ProductionWorkflowContractTests(unittest.TestCase):
         )
         self.assertIn(
             "opted-in legacy scene cache migration source was not found",
+            self.workflow,
+        )
+
+    def test_forced_recovery_is_isolated_from_non_forced_units(self):
+        self.assertIn("force_mode=", self.workflow)
+        self.assertIn(
+            "steps.cache-migration-policy.outputs.force_mode != 'true'",
+            self.workflow,
+        )
+        self.assertIn(
+            "Require non-forced cache source during forced recovery",
+            self.workflow,
+        )
+        self.assertIn(
+            "forced recovery mode forbids remote resynthesis for non-forced unit",
             self.workflow,
         )
 
