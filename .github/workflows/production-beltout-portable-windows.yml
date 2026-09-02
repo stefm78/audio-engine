@@ -1,0 +1,207 @@
+name: Production BeltOut portable runtime Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/production-beltout-portable-windows.yml
+
+permissions:
+  contents: read
+
+env:
+  BELTOUT_REV: f71295e33cc9c0092083089ed0f9c1a532e77e6b
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  bundle:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Build managed Python runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --disable-pip-version-check uv
+          New-Item -ItemType Directory -Force portable/managed-python | Out-Null
+          $env:UV_PYTHON_INSTALL_DIR = (Resolve-Path portable/managed-python).Path
+          uv python install 3.12
+          $py = Get-ChildItem portable/managed-python -Recurse -File -Filter python.exe |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $py) { throw "managed Python executable not found" }
+          & $py --version
+          $portable = (Resolve-Path portable).Path
+          [IO.Path]::GetRelativePath($portable, $py) |
+            Set-Content -Encoding ascii portable/python-path.txt
+
+      - name: Install exact qualified BeltOut runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $portable = (Resolve-Path portable).Path
+          $pyRel = (Get-Content portable/python-path.txt -Raw).Trim()
+          $py = Join-Path $portable $pyRel
+          & $py -m ensurepip --upgrade
+          & $py -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu "torch==2.6.0" "torchaudio==2.6.0"
+          & $py -m pip install --disable-pip-version-check "numpy==1.26.4" "librosa==0.11.0" "s3tokenizer==0.3.0" "torchcrepe==0.0.24" "transformers==4.46.3" "diffusers==0.29.0" "conformer==0.3.2" "safetensors==0.5.3" "huggingface_hub==0.33.1" "scipy==1.15.3" "tqdm==4.67.1" "soundfile==0.13.1" "edge-tts==7.2.8" "imageio-ffmpeg==0.6.0"
+          & $py -c "import torch, torchaudio, librosa, s3tokenizer, torchcrepe, transformers, diffusers, conformer, safetensors, huggingface_hub, soundfile; print('WINDOWS_PORTABLE_RUNTIME_IMPORT_PASS', torch.__version__, torchaudio.__version__)"
+
+      - name: Pin BeltOut source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:GIT_LFS_SKIP_SMUDGE = "1"
+          git clone --filter=blob:none https://github.com/Bill13579/beltout.git portable/beltout-src
+          git -C portable/beltout-src checkout $env:BELTOUT_REV
+          $actual = (git -C portable/beltout-src rev-parse HEAD).Trim()
+          if ($actual -ne $env:BELTOUT_REV) {
+            throw "BeltOut revision mismatch: $actual != $env:BELTOUT_REV"
+          }
+          $portable = (Resolve-Path portable).Path
+          $pyRel = (Get-Content portable/python-path.txt -Raw).Trim()
+          $py = Join-Path $portable $pyRel
+          & $py -m pip install --disable-pip-version-check --no-deps ./portable/beltout-src
+
+      - name: Hydrate exact checkpoints
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $portable = (Resolve-Path portable).Path
+          $pyRel = (Get-Content portable/python-path.txt -Raw).Trim()
+          $py = Join-Path $portable $pyRel
+          New-Item -ItemType Directory -Force portable/checkpoints | Out-Null
+          $code = @'
+          from pathlib import Path
+          from huggingface_hub import hf_hub_download
+          import os, shutil
+          
+          root = Path("portable")
+          names = [
+              "checkpoints/cfm_step_117580.safetensors",
+              "checkpoints/pitchmvmt_step_117580.safetensors",
+              "checkpoints/encoder_step_0.safetensors",
+              "checkpoints/flow_step_0.safetensors",
+              "checkpoints/mel2wav_step_0.safetensors",
+              "checkpoints/speaker_encoder_step_0.safetensors",
+              "checkpoints/tokenizer_step_0.safetensors",
+          ]
+          for name in names:
+              source = Path(hf_hub_download(
+                  repo_id="Bill13579/beltout",
+                  filename=name,
+                  revision=os.environ["BELTOUT_REV"],
+                  local_dir=str(root / "hf"),
+              ))
+              shutil.copy2(source, root / "checkpoints" / source.name)
+          '@
+          $code | & $py -
+
+      - name: Install Audio Engine and verify immutable runtime manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $portable = (Resolve-Path portable).Path
+          $pyRel = (Get-Content portable/python-path.txt -Raw).Trim()
+          $py = Join-Path $portable $pyRel
+          & $py -m pip install --disable-pip-version-check --no-deps .
+
+          $code = @'
+          import hashlib
+          import json
+          import platform
+          import subprocess
+          from pathlib import Path
+          
+          expected = {
+              "cfm_step_117580.safetensors": "32c7599e48c99e4583d4e390d7cf5438573e168198aabd5d7375881c90ef04f4",
+              "encoder_step_0.safetensors": "285f525e81ce163ee9dd259d431bd059d3cb4a5cd87a0f8530d1a20c392580bf",
+              "flow_step_0.safetensors": "f294f889ffe297428b8e153abcb99966eb81f0e29124c778da78322b178a328d",
+              "mel2wav_step_0.safetensors": "4c7a439280cf053c093b5d14ef0b41992e21efb8928926cd295082bf3551a688",
+              "pitchmvmt_step_117580.safetensors": "79d930d2b300d2a0428a7040340a064738943cdf9752006d914816d0a98d1826",
+              "speaker_encoder_step_0.safetensors": "96b8cc0a066e9c3fc5928c270a59f3d63c815de845211f05879b387edb1b474d",
+              "tokenizer_step_0.safetensors": "1641b71a0059b74f37f0c56e4200f3d8b28fcff0fd0328ba452ebfc776db4564",
+          }
+          root = Path("portable")
+          verified = []
+          for name, digest in expected.items():
+              path = root / "checkpoints" / name
+              actual = hashlib.sha256(path.read_bytes()).hexdigest()
+              if actual != digest:
+                  raise SystemExit(f"checkpoint SHA mismatch {name}: {actual} != {digest}")
+              verified.append({"file": name, "sha256": actual, "bytes": path.stat().st_size})
+          engine_ref = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          beltout_ref = subprocess.check_output(
+              ["git", "-C", str(root / "beltout-src"), "rev-parse", "HEAD"], text=True
+          ).strip()
+          manifest = {
+              "schema": "beltout-portable-runtime-v1",
+              "platform": "windows-x86_64",
+              "python": "3.12",
+              "beltout_revision": beltout_ref,
+              "audio_engine_ref": engine_ref,
+              "checkpoint_count": len(verified),
+              "checkpoints": verified,
+              "contains_human_audio": False,
+              "host": {"system": platform.system(), "machine": platform.machine()},
+          }
+          (root / "runtime-manifest.json").write_text(
+              json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(manifest, indent=2))
+          '@
+          $code | & $py -
+
+          $pyRelWin = $pyRel -replace '/', '\'
+          @"
+          @echo off
+          setlocal
+          "%~dp0$pyRelWin" -m audio_engine.cli %*
+          "@ | Set-Content -Encoding ascii portable/audio-engine.cmd
+
+          & $py -m audio_engine.cli voice-conversion beltout-once --help
+
+      - name: Load exact BeltOut model on Windows CPU
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $portable = (Resolve-Path portable).Path
+          $pyRel = (Get-Content portable/python-path.txt -Raw).Trim()
+          $py = Join-Path $portable $pyRel
+          $code = @'
+          from pathlib import Path
+          import torch
+          from beltout import BeltOutTTM
+          
+          cp = Path("portable/checkpoints")
+          model = BeltOutTTM.from_local(
+              cp / "cfm_step_117580.safetensors",
+              cp / "pitchmvmt_step_117580.safetensors",
+              cp / "encoder_step_0.safetensors",
+              cp / "flow_step_0.safetensors",
+              cp / "mel2wav_step_0.safetensors",
+              cp / "speaker_encoder_step_0.safetensors",
+              cp / "tokenizer_step_0.safetensors",
+              device="cpu",
+          )
+          assert model.sr > 0
+          print("WINDOWS_BELTOUT_MODEL_LOAD_PASS", model.sr, torch.__version__)
+          '@
+          $code | & $py -
+
+      - name: Upload qualified portable runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-portable-runtime-windows-x86_64
+          path: portable
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 14
