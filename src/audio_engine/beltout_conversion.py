@@ -4,6 +4,8 @@ import math
 import sys
 from pathlib import Path
 
+from .contract import ContractError
+
 
 CHECKPOINTS = {
     "decoder": "cfm_step_117580.safetensors",
@@ -16,7 +18,7 @@ CHECKPOINTS = {
 }
 
 
-class BeltOutConversionError(RuntimeError):
+class BeltOutConversionError(ContractError):
     pass
 
 
