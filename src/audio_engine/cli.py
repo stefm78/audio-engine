@@ -13,7 +13,10 @@ from .effects import load_capabilities, public_capabilities
 from .preflight import preflight_program
 from .preview import preview_program
 from .providers.factory import build_promoted_providers
-from .provider_cache import prewarm_promoted_provider_cache
+from .provider_cache import (
+    prewarm_promoted_provider_cache,
+    prewarm_promoted_provider_cache_to_file,
+)
 from .production import (
     hydrate_production_unit_assets,
     production_plan,
@@ -212,6 +215,11 @@ def build_parser():
     provider_cache_prewarm.add_argument("--provider-package", required=True)
     provider_cache_prewarm.add_argument("--cache-root", required=True)
     provider_cache_prewarm.add_argument("--provider-model-cache", default=".provider-models")
+    provider_cache_prewarm.add_argument(
+        "--report",
+        default=None,
+        help="Write pure structured JSON evidence atomically to this path",
+    )
     provider_cache_prewarm.add_argument("--workspace-root", default=".")
 
     qa = sub.add_parser(
@@ -370,14 +378,25 @@ def main(argv=None):
                     workspace_root=args.workspace_root,
                 )
         elif args.command == "provider-cache":
-            result = prewarm_promoted_provider_cache(
-                args.program,
-                args.voices,
-                args.provider_package,
-                args.cache_root,
-                workspace_root=args.workspace_root,
-                model_cache_root=args.provider_model_cache,
-            )
+            if args.report:
+                result = prewarm_promoted_provider_cache_to_file(
+                    args.report,
+                    args.program,
+                    args.voices,
+                    args.provider_package,
+                    args.cache_root,
+                    workspace_root=args.workspace_root,
+                    model_cache_root=args.provider_model_cache,
+                )
+            else:
+                result = prewarm_promoted_provider_cache(
+                    args.program,
+                    args.voices,
+                    args.provider_package,
+                    args.cache_root,
+                    workspace_root=args.workspace_root,
+                    model_cache_root=args.provider_model_cache,
+                )
         elif args.command == "provider-package":
             if args.provider_package_command == "validate":
                 result = provider_package_report(
