@@ -131,11 +131,6 @@ def convert_once(
     device="cpu",
 ):
     """Perform one immutable BeltOut conversion. Existing output is a hard stop."""
-    import numpy as np
-    import soundfile as sf
-    import torch
-    import librosa
-
     source_path = Path(source_path).resolve()
     target_anchor_path = Path(target_anchor_path).resolve()
     beltout_source = Path(beltout_source).resolve()
@@ -152,6 +147,11 @@ def convert_once(
     for filename in CHECKPOINTS.values():
         if not (checkpoint_dir / filename).is_file():
             raise BeltOutConversionError(f"missing BeltOut checkpoint: {filename}")
+
+    import numpy as np
+    import soundfile as sf
+    import torch
+    import librosa
 
     torch.manual_seed(int(seed))
     np.random.seed(int(seed) % (2**32 - 1))
