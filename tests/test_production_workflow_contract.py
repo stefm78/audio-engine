@@ -53,8 +53,8 @@ class ProductionWorkflowContractTests(unittest.TestCase):
         )
 
     def test_scene_v3_cache_is_saved_only_for_ready_units(self):
-        self.assertNotIn("uses: actions/cache@v4", self.workflow)
         self.assertIn("uses: actions/cache/restore@v4", self.workflow)
+        self.assertNotIn("- id: scene-cache-v3\n        name: Restore optional content-addressed scene-v3 cache\n        uses: actions/cache@v4", self.workflow)
         self.assertIn("uses: actions/cache/save@v4", self.workflow)
         self.assertIn("Authorize ready-only scene-v3 cache save", self.workflow)
         self.assertIn('result.get("state") == "ready"', self.workflow)
