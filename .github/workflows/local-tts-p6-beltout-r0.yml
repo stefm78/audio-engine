@@ -128,6 +128,7 @@ jobs:
 
           python - <<'PY'
           import ast
+          import os
           from pathlib import Path
           t = ast.parse(Path("lab/voice-casting/beltout_r0.py").read_text())
           vals = {}
