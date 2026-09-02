@@ -52,6 +52,20 @@ class ProductionWorkflowContractTests(unittest.TestCase):
             self.workflow,
         )
 
+    def test_fresh_scene_cache_units_skip_all_restore_paths(self):
+        self.assertIn("fresh_scene_cache_units_json:", self.workflow)
+        self.assertIn("default: '[]'", self.workflow)
+        self.assertIn("FRESH_UNITS_JSON", self.workflow)
+        self.assertIn("fresh_scene_cache_units_json must be valid JSON", self.workflow)
+        self.assertIn("fresh_scene_cache_units_json must be a JSON array of non-empty strings", self.workflow)
+        self.assertIn("fresh_scene_cache_units_json must not contain duplicates", self.workflow)
+        self.assertIn("fresh scene-cache quarantine conflicts with forced legacy migration", self.workflow)
+        self.assertIn("fresh_cache=", self.workflow)
+        self.assertGreaterEqual(
+            self.workflow.count("steps.cache-migration-policy.outputs.fresh_cache != 'true'"),
+            5,
+        )
+
     def test_forced_recovery_is_isolated_from_non_forced_units(self):
         self.assertIn("force_mode=", self.workflow)
         self.assertIn(
