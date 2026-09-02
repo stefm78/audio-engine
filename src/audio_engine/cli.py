@@ -35,6 +35,7 @@ from .sound.library import hydrate_sound_library
 from .sound.selection import select_candidates
 from .timing import timing_report
 from .voices import load_voice_config, public_catalog, recommend_presets
+from .voice_conversion import convert_beltout_once
 
 
 VOICE_LAB_PROVIDER_CANDIDATE_SETS = ("fr", "fr-plus-multilingual")
@@ -222,6 +223,31 @@ def build_parser():
     )
     provider_cache_prewarm.add_argument("--workspace-root", default=".")
 
+    voice_conversion = sub.add_parser(
+        "voice-conversion",
+        help="Run explicit offline voice-conversion primitives",
+    )
+    voice_conversion_sub = voice_conversion.add_subparsers(
+        dest="voice_conversion_command",
+        required=True,
+    )
+    beltout_once = voice_conversion_sub.add_parser(
+        "beltout-once",
+        help="Convert one immutable performance exactly once with pinned BeltOut assets",
+    )
+    beltout_once.add_argument("--source", required=True)
+    beltout_once.add_argument("--source-sha256", required=True)
+    beltout_once.add_argument("--target-reference", required=True)
+    beltout_once.add_argument("--target-reference-sha256", required=True)
+    beltout_once.add_argument("--beltout-source", required=True)
+    beltout_once.add_argument("--expected-revision", required=True)
+    beltout_once.add_argument("--checkpoint-dir", required=True)
+    beltout_once.add_argument("--checkpoint-manifest", required=True)
+    beltout_once.add_argument("--seed", required=True, type=int)
+    beltout_once.add_argument("--n-timesteps", required=True, type=int)
+    beltout_once.add_argument("--out", required=True)
+    beltout_once.add_argument("--report", required=True)
+
     qa = sub.add_parser(
         "qa",
         help="Run deterministic machine QA over one completed render directory",
@@ -377,6 +403,23 @@ def main(argv=None):
                     args.unit,
                     workspace_root=args.workspace_root,
                 )
+        elif args.command == "voice-conversion":
+            result = convert_beltout_once(
+                source=args.source,
+                source_sha256=args.source_sha256,
+                target_reference=args.target_reference,
+                target_reference_sha256=args.target_reference_sha256,
+                beltout_source=args.beltout_source,
+                expected_revision=args.expected_revision,
+                checkpoint_dir=args.checkpoint_dir,
+                checkpoint_manifest=args.checkpoint_manifest,
+                output=args.out,
+                report=args.report,
+                seed=args.seed,
+                n_timesteps=args.n_timesteps,
+            )
+            if result.get("status") != "PASS":
+                exit_code = 2
         elif args.command == "provider-cache":
             if args.report:
                 result = prewarm_promoted_provider_cache_to_file(
