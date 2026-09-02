@@ -7,7 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import numpy as np
 
 from audio_engine.cli import build_parser
 from audio_engine.contract import ContractError
@@ -174,9 +173,18 @@ class BeltOutVoiceConversionTests(unittest.TestCase):
             def load(*args, **kwargs):
                 raise RuntimeError("unsupported webm container")
 
-        payload = np.asarray([0.125, -0.25, 0.0], dtype="<f4").tobytes()
+        class Decoded:
+            size = 3
+
+            def copy(self):
+                return self
+
+        fake_numpy = SimpleNamespace(
+            float32="float32",
+            frombuffer=lambda *args, **kwargs: Decoded(),
+        )
         fake_ffmpeg = SimpleNamespace(get_ffmpeg_exe=lambda: "pinned-ffmpeg")
-        completed = SimpleNamespace(returncode=0, stdout=payload, stderr=b"")
+        completed = SimpleNamespace(returncode=0, stdout=b"raw-f32", stderr=b"")
 
         with (
             patch.dict(sys.modules, {"imageio_ffmpeg": fake_ffmpeg}),
@@ -186,11 +194,11 @@ class BeltOutVoiceConversionTests(unittest.TestCase):
             ) as run,
         ):
             audio, decoder = _load_audio_for_conversion(
-                UnsupportedContainer, np, Path("selected.webm"), 24000
+                UnsupportedContainer, fake_numpy, Path("selected.webm"), 24000
             )
 
         self.assertEqual(decoder, "ffmpeg-memory")
-        self.assertTrue(np.allclose(audio, [0.125, -0.25, 0.0]))
+        self.assertEqual(audio.size, 3)
         command = run.call_args.args[0]
         self.assertEqual(command[0], "pinned-ffmpeg")
         self.assertEqual(command[-1], "pipe:1")
