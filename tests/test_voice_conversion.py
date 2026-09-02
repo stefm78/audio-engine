@@ -1,13 +1,18 @@
 import hashlib
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
+import numpy as np
 
 from audio_engine.cli import build_parser
 from audio_engine.contract import ContractError
 from audio_engine.voice_conversion import (
+    _load_audio_for_conversion,
     convert_beltout_once,
     load_beltout_checkpoint_manifest,
     verify_beltout_conversion_inputs,
@@ -162,6 +167,36 @@ class BeltOutVoiceConversionTests(unittest.TestCase):
             self.assertFalse(result["conversion"]["second_pass"])
             self.assertEqual(result["output"]["sha256"], sha_bytes(b"converted"))
             self.assertEqual(json.loads(report.read_text(encoding="utf-8")), result)
+
+    def test_unsupported_container_falls_back_to_in_memory_ffmpeg_decode(self):
+        class UnsupportedContainer:
+            @staticmethod
+            def load(*args, **kwargs):
+                raise RuntimeError("unsupported webm container")
+
+        payload = np.asarray([0.125, -0.25, 0.0], dtype="<f4").tobytes()
+        fake_ffmpeg = SimpleNamespace(get_ffmpeg_exe=lambda: "pinned-ffmpeg")
+        completed = SimpleNamespace(returncode=0, stdout=payload, stderr=b"")
+
+        with (
+            patch.dict(sys.modules, {"imageio_ffmpeg": fake_ffmpeg}),
+            patch(
+                "audio_engine.voice_conversion.subprocess.run",
+                return_value=completed,
+            ) as run,
+        ):
+            audio, decoder = _load_audio_for_conversion(
+                UnsupportedContainer, np, Path("selected.webm"), 24000
+            )
+
+        self.assertEqual(decoder, "ffmpeg-memory")
+        self.assertTrue(np.allclose(audio, [0.125, -0.25, 0.0]))
+        command = run.call_args.args[0]
+        self.assertEqual(command[0], "pinned-ffmpeg")
+        self.assertEqual(command[-1], "pipe:1")
+        self.assertNotIn("-af", command)
+        self.assertNotIn("-filter:a", command)
+        self.assertNotIn("-filter_complex", command)
 
     def test_cli_exposes_explicit_one_shot_arguments(self):
         args = build_parser().parse_args([
