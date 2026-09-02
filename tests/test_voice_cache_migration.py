@@ -5,6 +5,10 @@ from pathlib import Path
 
 from audio_engine.audio import run_ffmpeg
 from audio_engine.render import render_program
+from audio_engine.voice.render import (
+    _voice_fingerprint_for_cache_identity,
+    render_voice_clip,
+)
 
 
 def write_tone(path, duration=0.7):
@@ -54,6 +58,12 @@ class PaddedFakeProvider(FakeProvider):
     def synthesize(self, segment, path):
         self.calls += 1
         write_padded_tone(path)
+
+
+class CompatibleFakeProvider(FakeProvider):
+    name = "fake-compatible"
+    cache_identity = "current-compatible-v2"
+    cache_compatible_identities = ("legacy-compatible-v1",)
 
 
 class VoiceCacheMigrationTests(unittest.TestCase):
@@ -110,6 +120,67 @@ class VoiceCacheMigrationTests(unittest.TestCase):
             # Provider padding is gone; the deliberate 250 ms internal pause survives.
             self.assertGreater(timing["measured_duration_ms"], 850)
             self.assertLess(timing["measured_duration_ms"], 1300)
+
+    def test_provider_declared_compatible_cache_rekeys_exact_bytes_without_provider_call(self):
+        with tempfile.TemporaryDirectory() as temp_value:
+            cache = Path(temp_value) / "voices"
+            cache.mkdir(parents=True)
+            segment = {
+                "voice": "voice-a",
+                "text": "Exact cached sentence.",
+                "rate": "+0%",
+                "pitch": "+0Hz",
+                "volume": "+0%",
+            }
+            provider = CompatibleFakeProvider()
+            legacy_fp = _voice_fingerprint_for_cache_identity(
+                segment,
+                provider.name,
+                "legacy-compatible-v1",
+            )
+            legacy_clip = cache / f"{legacy_fp}.mp3"
+            write_tone(legacy_clip)
+            legacy_bytes = legacy_clip.read_bytes()
+
+            path, cache_hit, current_fp = render_voice_clip(segment, provider, cache)
+
+            self.assertTrue(cache_hit)
+            self.assertEqual(provider.calls, 0)
+            self.assertNotEqual(current_fp, legacy_fp)
+            self.assertEqual(path.read_bytes(), legacy_bytes)
+            self.assertEqual(
+                current_fp,
+                _voice_fingerprint_for_cache_identity(
+                    segment,
+                    provider.name,
+                    provider.cache_identity,
+                ),
+            )
+
+    def test_undeclared_legacy_cache_identity_never_bypasses_provider(self):
+        with tempfile.TemporaryDirectory() as temp_value:
+            cache = Path(temp_value) / "voices"
+            cache.mkdir(parents=True)
+            segment = {
+                "voice": "voice-a",
+                "text": "Must synthesize.",
+                "rate": "+0%",
+                "pitch": "+0Hz",
+                "volume": "+0%",
+            }
+            provider = CompatibleFakeProvider()
+            undeclared_fp = _voice_fingerprint_for_cache_identity(
+                segment,
+                provider.name,
+                "not-approved-for-migration",
+            )
+            write_tone(cache / f"{undeclared_fp}.mp3")
+
+            _, cache_hit, current_fp = render_voice_clip(segment, provider, cache)
+
+            self.assertFalse(cache_hit)
+            self.assertEqual(provider.calls, 1)
+            self.assertNotEqual(current_fp, undeclared_fp)
 
     def test_new_synthesis_normalizes_only_clip_edges(self):
         with tempfile.TemporaryDirectory() as temp_value:

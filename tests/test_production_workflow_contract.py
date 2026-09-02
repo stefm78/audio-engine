@@ -29,6 +29,30 @@ class ProductionWorkflowContractTests(unittest.TestCase):
             self.workflow,
         )
 
+    def test_legacy_scene_cache_migration_is_explicit_opt_in_and_fail_closed(self):
+        self.assertIn("legacy_scene_cache_engine_ref:", self.workflow)
+        self.assertIn("default: ''", self.workflow)
+        self.assertIn("actions/cache/restore@v4", self.workflow)
+        self.assertIn("cache-matched-key", self.workflow)
+        self.assertIn(
+            "legacy_scene_cache_engine_ref must be an exact 40-hex commit SHA",
+            self.workflow,
+        )
+        self.assertIn(
+            "opted-in legacy scene cache migration source was not found",
+            self.workflow,
+        )
+        self.assertIn(
+            "${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- "
+            "${{ inputs.legacy_scene_cache_engine_ref }}-${{ matrix.id }}-",
+            self.workflow,
+        )
+
+        self.assertIn(
+            "steps.scene-cache-v2.outputs.cache-hit != 'true'",
+            self.workflow,
+        )
+
     def test_local_provider_runtime_installers_are_explicit(self):
         self.assertIn("install_chatterbox_mtl_v3_h1b.sh", self.workflow)
         self.assertIn("install_voxcpm2_p4_runtime.sh", self.workflow)
