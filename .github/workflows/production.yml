@@ -435,6 +435,8 @@ jobs:
                 exit 2
                 ;;
             esac
+            python -m pip install --disable-pip-version-check --no-deps \
+              "imageio-ffmpeg==0.6.0" "edge-tts==7.2.8"
             python -m pip install --disable-pip-version-check --no-deps ./.audio-engine
             audio-engine provider-package hydrate-references "$package" --workspace-root .
             audio-engine provider-package hydrate-model "$package" --cache-root generated/provider-models

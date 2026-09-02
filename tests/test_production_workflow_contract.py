@@ -106,6 +106,8 @@ class ProductionWorkflowContractTests(unittest.TestCase):
         self.assertIn("install_voxcpm2_p4_runtime.sh", self.workflow)
         self.assertIn("requirements/chatterbox-mtl-v3-h1b-runtime.txt", self.workflow)
         self.assertIn("requirements/voxcpm2-p4-runtime.txt", self.workflow)
+        self.assertIn('"imageio-ffmpeg==0.6.0" "edge-tts==7.2.8"', self.workflow)
+        self.assertIn("--disable-pip-version-check --no-deps", self.workflow)
         self.assertIn("--no-deps ./.audio-engine", self.workflow)
         self.assertIn("audio-engine provider-package hydrate-references", self.workflow)
         self.assertIn("audio-engine provider-package hydrate-model", self.workflow)
