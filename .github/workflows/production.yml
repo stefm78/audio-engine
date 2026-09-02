@@ -320,7 +320,7 @@ jobs:
               handle.write(f"force_mode={'true' if bool(force_units) else 'false'}\n")
           PY
 
-      - id: scene-cache-v3
+      - id: scene-cache-v4
         name: Restore optional content-addressed scene-v4 cache
         if: steps.cache-migration-policy.outputs.force_legacy != 'true'
         uses: actions/cache/restore@v4
@@ -338,7 +338,7 @@ jobs:
         name: Restore optional scene-v2 migration source
         if: >-
           steps.cache-migration-policy.outputs.force_legacy != 'true' &&
-          steps.scene-cache-v3.outputs.cache-matched-key == ''
+          steps.scene-cache-v4.outputs.cache-matched-key == ''
         uses: actions/cache/restore@v4
         with:
           path: generated/work/${{ matrix.id }}/.cache
@@ -355,7 +355,7 @@ jobs:
             steps.cache-migration-policy.outputs.force_legacy == 'true' ||
             (
               steps.cache-migration-policy.outputs.force_mode != 'true' &&
-              steps.scene-cache-v3.outputs.cache-matched-key == '' &&
+              steps.scene-cache-v4.outputs.cache-matched-key == '' &&
               steps.scene-cache-v2-migration.outputs.cache-matched-key == ''
             )
           )
@@ -374,7 +374,7 @@ jobs:
           inputs.legacy_scene_cache_voice_pack_sha256 == '' &&
           steps.cache-migration-policy.outputs.force_mode != 'true' &&
           steps.cache-migration-policy.outputs.force_legacy != 'true' &&
-          steps.scene-cache-v3.outputs.cache-matched-key == '' &&
+          steps.scene-cache-v4.outputs.cache-matched-key == '' &&
           steps.scene-cache-v2-migration.outputs.cache-matched-key == ''
         uses: actions/cache/restore@v4
         with:
@@ -387,7 +387,7 @@ jobs:
         if: >-
           steps.cache-migration-policy.outputs.force_mode == 'true' &&
           steps.cache-migration-policy.outputs.force_legacy != 'true' &&
-          steps.scene-cache-v3.outputs.cache-matched-key == '' &&
+          steps.scene-cache-v4.outputs.cache-matched-key == '' &&
           steps.scene-cache-v2-migration.outputs.cache-matched-key == ''
         shell: bash
         env:
@@ -403,7 +403,7 @@ jobs:
             steps.cache-migration-policy.outputs.force_legacy == 'true' ||
             (
               steps.cache-migration-policy.outputs.force_mode != 'true' &&
-              steps.scene-cache-v3.outputs.cache-matched-key == '' &&
+              steps.scene-cache-v4.outputs.cache-matched-key == '' &&
               steps.scene-cache-v2-migration.outputs.cache-matched-key == ''
             )
           )
@@ -612,7 +612,7 @@ jobs:
         if: >-
           always() &&
           steps.scene-cache-save-gate.outputs.ready == 'true' &&
-          steps.scene-cache-v3.outputs.cache-hit != 'true'
+          steps.scene-cache-v4.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: generated/work/${{ matrix.id }}/.cache
