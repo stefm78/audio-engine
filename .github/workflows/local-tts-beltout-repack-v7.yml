@@ -1,0 +1,116 @@
+name: LOCAL TTS BeltOut repack validated runtime v7
+
+on:
+  push:
+    branches:
+      - lab/LOCAL-TTS-WP-010-portable-runtime
+    paths:
+      - .github/workflows/local-tts-beltout-repack-v7.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  repack:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN: "33618143904"
+      SOURCE_ARTIFACT: beltout-portable-runtime-linux-x86_64
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Recover already validated v5 runtime artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p recovered
+          gh run download "$SOURCE_RUN" --repo "${{ github.repository }}" -n "$SOURCE_ARTIFACT" -D recovered
+          test -f recovered/runtime-manifest.json
+          test -x recovered/run-python.sh
+          grep -q '"contains_human_audio": false' recovered/runtime-manifest.json
+          du -sh recovered
+
+      - name: Repack and split below connector limit
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v zstd >/dev/null || {
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends zstd
+          }
+          tar -I 'zstd -3 -T0' -cf validated-runtime.tar.zst -C recovered .
+          mkdir parts
+          split -b 400M -d -a 2 validated-runtime.tar.zst parts/runtime.part.
+          sha256sum parts/runtime.part.* > parts/SHA256SUMS.txt
+          ls -lh parts
+          test "$(find parts -type f -name 'runtime.part.*' -size +450M | wc -l)" = "0"
+
+      - name: Upload part 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-runtime-repack-part-00
+          path: parts/runtime.part.00
+          compression-level: 0
+          retention-days: 1
+      - name: Upload part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-runtime-repack-part-01
+          path: parts/runtime.part.01
+          compression-level: 0
+          retention-days: 1
+      - name: Upload part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-runtime-repack-part-02
+          path: parts/runtime.part.02
+          compression-level: 0
+          retention-days: 1
+      - name: Upload part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-runtime-repack-part-03
+          path: parts/runtime.part.03
+          compression-level: 0
+          retention-days: 1
+      - name: Upload part 04
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-runtime-repack-part-04
+          path: parts/runtime.part.04
+          compression-level: 0
+          retention-days: 1
+      - name: Upload part 05
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-runtime-repack-part-05
+          path: parts/runtime.part.05
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+      - name: Upload part 06
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-runtime-repack-part-06
+          path: parts/runtime.part.06
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+      - name: Upload part 07
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-runtime-repack-part-07
+          path: parts/runtime.part.07
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 1
+      - name: Upload checksum manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-runtime-repack-checksums
+          path: parts/SHA256SUMS.txt
+          compression-level: 0
+          retention-days: 1
