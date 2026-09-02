@@ -297,7 +297,7 @@ jobs:
           path: generated/work/${{ matrix.id }}/.cache
           key: legacy-scene-cache-migration-${{ github.run_id }}-${{ matrix.id }}
           restore-keys: |
-            ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- ${{ inputs.legacy_scene_cache_engine_ref }}-${{ matrix.id }}-
+            ${{ inputs.cache_namespace }}-${{ runner.os }}-${{ github.repository }}- ${{ inputs.legacy_scene_cache_engine_ref }}-${{ matrix.id }}- ${{ matrix.program_sha256 }}-
 
       - name: Require opted-in legacy scene cache migration source
         if: inputs.legacy_scene_cache_engine_ref != '' && steps.scene-cache-v2.outputs.cache-hit != 'true'
