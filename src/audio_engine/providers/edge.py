@@ -50,6 +50,21 @@ class EdgeProvider:
     processing = "remote"
     expressive_controls = ("rate", "pitch", "volume")
 
+    # Cache identity is a synthesis contract, not a hash of incidental adapter code.
+    # Bump this value only when successful Edge audio semantics change.
+    cache_identity = (
+        "edge-tts-7.2.8|ssml-locale-v1|"
+        "voice-synthesis-v2-edge-silence-normalized"
+    )
+
+    # Historical identities whose successful synthesis path and normalized clip
+    # bytes are semantically compatible with cache_identity above. These are
+    # opt-in migration aliases only; the current identity remains authoritative.
+    cache_compatible_identities = (
+        "dfc727bb784bcb630165714b90a01266d524a1c4aa3485b6c6d106e7a1f8e6a6",
+        "7c58d0ba7ff7c0bd2b8a14f28a342274407e893f92d1eccdbb0daca90be2b380",
+    )
+
     def __init__(self):
         patch_ssml_locale()
 
