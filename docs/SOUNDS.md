@@ -86,7 +86,7 @@ Bounds are intentional:
 - at most two continuous layers;
 - at most sixteen explicit events;
 - event timing is explicit `at_ms`;
-- optional semantic event placement is `left`, `center` or `right`;
+- optional semantic event placement is `left`, `slight-left`, `center`, `slight-right` or `right`; subtle placements are fixed at ±0.16 and arbitrary numeric pan remains forbidden;
 - one global environment ducking mode: `speech` or `off`.
 
 There is no random scheduling. Two renders of the same declared program and assets must produce the same scene structure.

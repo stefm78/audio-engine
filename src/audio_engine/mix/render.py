@@ -6,7 +6,9 @@ from ..effects import acoustic_space_filter
 
 PLACEMENT_PAN = {
     "left": -0.45,
+    "slight-left": -0.16,
     "center": 0.0,
+    "slight-right": 0.16,
     "right": 0.45,
 }
 

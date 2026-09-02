@@ -32,6 +32,15 @@ class V3SoundscapeContractTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_program(data)
 
+    def test_accepts_bounded_subtle_event_placements(self):
+        for placement in ("slight-left", "slight-right"):
+            with self.subTest(placement=placement):
+                data = base_program()
+                data["soundscape"]["events"] = [
+                    {"file": "bell.wav", "at_ms": 1200, "placement": placement}
+                ]
+                self.assertEqual(validate_program(data)["schema_version"], 3)
+
     def test_rejects_more_than_two_layers(self):
         data = base_program()
         data["soundscape"]["layers"].append({"file": "rain.wav"})

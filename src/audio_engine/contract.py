@@ -5,7 +5,7 @@ from pathlib import Path
 from .effects import acoustic_space_ids
 
 SUPPORTED_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6)
-PLACEMENTS = ("left", "center", "right")
+PLACEMENTS = ("left", "slight-left", "center", "slight-right", "right")
 DUCKING_MODES = ("speech", "off")
 EVENT_ROLES_V4 = ("punctuation", "scene")
 EVENT_ROLES_V5 = ("punctuation", "scene", "bridge")
