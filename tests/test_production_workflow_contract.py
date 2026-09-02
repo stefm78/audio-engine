@@ -119,6 +119,17 @@ class ProductionWorkflowContractTests(unittest.TestCase):
         self.assertIn("promoted_provider_not_cache_only", self.workflow)
         self.assertIn('cp -R "$work/provider-prewarm" "$publish/provider-prewarm"', self.workflow)
 
+    def test_immutable_clip_provider_needs_no_model_runtime(self):
+        self.assertIn("immutable-voice-clips-v1)", self.workflow)
+        self.assertIn(
+            'if [[ "$provider_id" != "immutable-voice-clips-v1" ]]',
+            self.workflow,
+        )
+        self.assertIn(
+            "No model runtime: references are immutable authored/converted clips.",
+            self.workflow,
+        )
+
     def test_provider_prewarm_and_binding_evidence_are_structured_and_explicit(self):
         self.assertIn('--report "$report_root/$safe_id.json"', self.workflow)
         self.assertNotIn('> "$report_root/$safe_id.json"', self.workflow)
