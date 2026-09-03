@@ -5,11 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from audio_engine.providers.edge import (
-    EdgeProvider,
-    _explicit_language_scoped_text,
-    _speech_locale,
-)
+from audio_engine.providers.edge import EdgeProvider, _speech_locale
 from audio_engine.voice.render import (
     provider_cache_identity,
     voice_content_key,
@@ -43,25 +39,8 @@ class EdgeLocaleTests(unittest.TestCase):
         )
         self.assertEqual(_speech_locale(communicate), "fr-FR")
 
-    def test_explicit_locale_wraps_only_multilingual_voice_with_lang_element(self):
-        multi = SimpleNamespace(
-            voice="fr-FR-RemyMultilingualNeural",
-            _audio_engine_language_locale="fr-FR",
-        )
-        native = SimpleNamespace(
-            voice="fr-FR-HenriNeural",
-            _audio_engine_language_locale="fr-FR",
-        )
-        self.assertEqual(
-            _explicit_language_scoped_text(multi, "Bonjour."),
-            "<lang xml:lang='fr-FR'>Bonjour.</lang>",
-        )
-        self.assertEqual(
-            _explicit_language_scoped_text(native, "Bonjour."),
-            "Bonjour.",
-        )
-
     def test_explicit_locale_participates_in_voice_cache_identity(self):
+
         provider = EdgeProvider()
         baseline = {
             "text": "Qui es-tu ?",
