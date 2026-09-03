@@ -43,6 +43,7 @@ def voice_content_key(segment, provider_name):
         "volume": segment.get("volume", "+0%"),
         "provider_parameters": segment.get("provider_parameters"),
         "provider_seed": segment.get("provider_seed"),
+        "language_locale": segment.get("language_locale"),
     }
     if segment.get("performance_provider"):
         payload["casting_identity"] = segment.get("casting_identity")
@@ -71,6 +72,7 @@ def _voice_fingerprint_for_cache_identity(segment, provider_name, cache_identity
         "volume": segment.get("volume", "+0%"),
         "provider_parameters": segment.get("provider_parameters"),
         "provider_seed": segment.get("provider_seed"),
+        "language_locale": segment.get("language_locale"),
     }
     if segment.get("performance_provider"):
         payload["casting_identity"] = segment.get("casting_identity")
@@ -166,6 +168,7 @@ def _timing_metadata(segment, provider, fingerprint, path):
         "rate": segment.get("rate", "+0%"),
         "pitch": segment.get("pitch", "+0Hz"),
         "volume": segment.get("volume", "+0%"),
+        "language_locale": segment.get("language_locale"),
         "text_chars": len(text),
         "text_words": len(text.split()),
         "edge_silence_normalized": _edge_silence_normalization_enabled(provider),
