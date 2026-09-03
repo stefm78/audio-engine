@@ -1,0 +1,105 @@
+name: P7 179 BeltOut runtime split transport
+
+on:
+  push:
+    branches:
+      - lab/p7-179-beltout-runtime-split-transport
+    paths:
+      - .github/workflows/p7-179-beltout-runtime-split-transport.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  split:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SOURCE_ARTIFACT_ID: "9897086252"
+      SOURCE_ARTIFACT_SHA256: "a40d27bfe9a8e2e11eda6c822a12c8bb3e98a467b662e55cfead19c1cf9b74e3"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download exact qualified runtime archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3             -H "Authorization: Bearer $GH_TOKEN"             -H "Accept: application/vnd.github+json"             -H "X-GitHub-Api-Version: 2022-11-28"             -o runtime.zip             "https://api.github.com/repos/stefm78/audio-engine/actions/artifacts/$SOURCE_ARTIFACT_ID/zip"
+          test "$(sha256sum runtime.zip | cut -d' ' -f1)" = "$SOURCE_ARTIFACT_SHA256"
+          ls -lh runtime.zip
+
+      - name: Split archive without changing bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p transport
+          split -b 400M -d -a 2 runtime.zip transport/runtime.zip.part-
+          test "$(find transport -type f -name 'runtime.zip.part-*' | wc -l)" -le 6
+          cat transport/runtime.zip.part-* > reconstructed.zip
+          test "$(sha256sum reconstructed.zip | cut -d' ' -f1)" = "$SOURCE_ARTIFACT_SHA256"
+          (
+            echo "source_artifact_id=$SOURCE_ARTIFACT_ID"
+            echo "source_sha256=$SOURCE_ARTIFACT_SHA256"
+            echo "source_bytes=$(stat -c %s runtime.zip)"
+            sha256sum transport/runtime.zip.part-*
+            stat -c '%n %s' transport/runtime.zip.part-*
+          ) > transport/MANIFEST.txt
+          cat transport/MANIFEST.txt
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: p7-179-runtime-split-manifest
+          path: transport/MANIFEST.txt
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload part 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: p7-179-runtime-part-00
+          path: transport/runtime.zip.part-00
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: p7-179-runtime-part-01
+          path: transport/runtime.zip.part-01
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: p7-179-runtime-part-02
+          path: transport/runtime.zip.part-02
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: p7-179-runtime-part-03
+          path: transport/runtime.zip.part-03
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload part 04
+        uses: actions/upload-artifact@v4
+        with:
+          name: p7-179-runtime-part-04
+          path: transport/runtime.zip.part-04
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload part 05
+        uses: actions/upload-artifact@v4
+        with:
+          name: p7-179-runtime-part-05
+          path: transport/runtime.zip.part-05
+          compression-level: 0
+          retention-days: 1
