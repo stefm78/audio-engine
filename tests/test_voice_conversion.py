@@ -96,6 +96,139 @@ class BeltOutVoiceConversionTests(unittest.TestCase):
                     n_timesteps=10,
                 )
 
+    def _portable_revision_fixture(self, root, revision="a" * 40):
+        root = Path(root)
+        source = root / "source.wav"
+        target = root / "target.wav"
+        source.write_bytes(b"source")
+        target.write_bytes(b"target")
+
+        checkpoint_dir = root / "checkpoints"
+        checkpoint_dir.mkdir()
+        for role in ROLES:
+            (checkpoint_dir / f"{role}.bin").write_bytes(role.encode())
+
+        portable = root / "portable"
+        beltout_source = portable / "beltout-src"
+        beltout_source.mkdir(parents=True)
+        runtime_manifest = {
+            "schema": "beltout-portable-runtime-v1",
+            "beltout_revision": revision,
+            "python": "3.12",
+            "torch": "2.6.0+cpu",
+            "torchaudio": "2.6.0+cpu",
+            "checkpoints": [
+                {
+                    "file": f"{role}.bin",
+                    "sha256": sha_bytes(role.encode()),
+                    "bytes": len(role.encode()),
+                }
+                for role in ROLES
+            ],
+            "contains_human_audio": False,
+        }
+        (portable / "runtime-manifest.json").write_text(
+            json.dumps(runtime_manifest),
+            encoding="utf-8",
+        )
+        return {
+            "source": source,
+            "target": target,
+            "checkpoint_dir": checkpoint_dir,
+            "checkpoint_manifest": self.checkpoint_manifest(root),
+            "beltout_source": beltout_source,
+        }
+
+    def test_portable_runtime_manifest_restores_revision_proof_without_git(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self._portable_revision_fixture(tmp)
+            with patch(
+                "audio_engine.voice_conversion.subprocess.run",
+                return_value=SimpleNamespace(returncode=128, stdout="", stderr="not a git repo"),
+            ):
+                result = verify_beltout_conversion_inputs(
+                    source=fixture["source"],
+                    source_sha256=sha_bytes(b"source"),
+                    target_reference=fixture["target"],
+                    target_reference_sha256=sha_bytes(b"target"),
+                    beltout_source=fixture["beltout_source"],
+                    expected_revision="a" * 40,
+                    checkpoint_dir=fixture["checkpoint_dir"],
+                    checkpoint_manifest=fixture["checkpoint_manifest"],
+                    output=Path(tmp) / "out.wav",
+                    report=Path(tmp) / "report.json",
+                    seed=1,
+                    n_timesteps=10,
+                )
+
+            self.assertEqual(result["expected_revision"], "a" * 40)
+            self.assertEqual(
+                result["revision_proof"]["proof"],
+                "portable-runtime-manifest",
+            )
+            self.assertRegex(
+                result["revision_proof"]["manifest_sha256"],
+                r"^[0-9a-f]{64}$",
+            )
+
+    def test_portable_runtime_manifest_rejects_wrong_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self._portable_revision_fixture(tmp, revision="b" * 40)
+            with (
+                patch(
+                    "audio_engine.voice_conversion.subprocess.run",
+                    return_value=SimpleNamespace(
+                        returncode=128,
+                        stdout="",
+                        stderr="not a git repo",
+                    ),
+                ),
+                self.assertRaisesRegex(ContractError, "source revision mismatch"),
+            ):
+                verify_beltout_conversion_inputs(
+                    source=fixture["source"],
+                    source_sha256=sha_bytes(b"source"),
+                    target_reference=fixture["target"],
+                    target_reference_sha256=sha_bytes(b"target"),
+                    beltout_source=fixture["beltout_source"],
+                    expected_revision="a" * 40,
+                    checkpoint_dir=fixture["checkpoint_dir"],
+                    checkpoint_manifest=fixture["checkpoint_manifest"],
+                    output=Path(tmp) / "out.wav",
+                    report=Path(tmp) / "report.json",
+                    seed=1,
+                    n_timesteps=10,
+                )
+
+    def test_git_revision_mismatch_cannot_fallback_to_portable_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self._portable_revision_fixture(tmp, revision="a" * 40)
+            with (
+                patch(
+                    "audio_engine.voice_conversion.subprocess.run",
+                    return_value=SimpleNamespace(
+                        returncode=0,
+                        stdout=("b" * 40) + "\n",
+                        stderr="",
+                    ),
+                ),
+                self.assertRaisesRegex(ContractError, "source revision mismatch"),
+            ):
+                verify_beltout_conversion_inputs(
+                    source=fixture["source"],
+                    source_sha256=sha_bytes(b"source"),
+                    target_reference=fixture["target"],
+                    target_reference_sha256=sha_bytes(b"target"),
+                    beltout_source=fixture["beltout_source"],
+                    expected_revision="a" * 40,
+                    checkpoint_dir=fixture["checkpoint_dir"],
+                    checkpoint_manifest=fixture["checkpoint_manifest"],
+                    output=Path(tmp) / "out.wav",
+                    report=Path(tmp) / "report.json",
+                    seed=1,
+                    n_timesteps=10,
+                )
+
     def test_success_report_binds_inputs_conversion_and_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
