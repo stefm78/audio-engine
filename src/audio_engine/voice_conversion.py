@@ -65,11 +65,12 @@ def load_beltout_checkpoint_manifest(path):
     return data
 
 
-def _verify_git_revision(source_root: Path, expected_revision: str):
+def _verify_beltout_revision(source_root: Path, expected_revision: str):
     if not _GIT_SHA_RE.fullmatch(str(expected_revision or "")):
         raise ContractError("BeltOut expected revision must be an exact 40-char Git SHA")
     if not source_root.is_dir():
         raise ContractError(f"BeltOut source directory not found: {source_root}")
+
     try:
         probe = subprocess.run(
             ["git", "-C", str(source_root), "rev-parse", "HEAD"],
@@ -78,14 +79,67 @@ def _verify_git_revision(source_root: Path, expected_revision: str):
             stderr=subprocess.PIPE,
             check=False,
         )
-    except OSError as exc:
-        raise ContractError(f"Unable to inspect BeltOut Git revision: {exc}") from exc
-    actual = (probe.stdout or "").strip()
-    if probe.returncode != 0 or actual != expected_revision:
+    except OSError:
+        probe = None
+
+    if probe is not None and probe.returncode == 0:
+        actual = (probe.stdout or "").strip()
+        if actual != expected_revision:
+            raise ContractError(
+                f"BeltOut source revision mismatch: {actual or 'unavailable'} != {expected_revision}"
+            )
+        return {
+            "revision": actual,
+            "proof": "git-head",
+            "manifest_path": None,
+            "manifest_sha256": None,
+        }
+
+    manifest_path = source_root.parent / "runtime-manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ContractError(
+            "BeltOut source revision unavailable from Git and portable runtime "
+            f"manifest is invalid: {exc}"
+        ) from exc
+
+    if not isinstance(manifest, dict):
+        raise ContractError("BeltOut portable runtime manifest must be an object")
+    if manifest.get("schema") != "beltout-portable-runtime-v1":
+        raise ContractError("BeltOut portable runtime manifest schema mismatch")
+    actual = manifest.get("beltout_revision")
+    if actual != expected_revision:
         raise ContractError(
             f"BeltOut source revision mismatch: {actual or 'unavailable'} != {expected_revision}"
         )
-    return actual
+    if manifest.get("contains_human_audio") is not False:
+        raise ContractError(
+            "BeltOut portable runtime manifest must explicitly exclude human audio"
+        )
+
+    checkpoints = manifest.get("checkpoints")
+    if not isinstance(checkpoints, list) or not checkpoints:
+        raise ContractError(
+            "BeltOut portable runtime manifest must bind checkpoint evidence"
+        )
+    for item in checkpoints:
+        if not isinstance(item, dict):
+            raise ContractError(
+                "BeltOut portable runtime manifest checkpoint evidence is invalid"
+            )
+        digest = item.get("sha256")
+        if not isinstance(digest, str) or not _SHA256_RE.fullmatch(digest):
+            raise ContractError(
+                "BeltOut portable runtime manifest checkpoint SHA-256 is invalid"
+            )
+
+    return {
+        "revision": expected_revision,
+        "proof": "portable-runtime-manifest",
+        "manifest_path": str(manifest_path),
+        "manifest_sha256": _sha256(manifest_path),
+    }
 
 
 def verify_beltout_conversion_inputs(
@@ -141,7 +195,7 @@ def verify_beltout_conversion_inputs(
             f"BeltOut target reference SHA-256 mismatch: {actual_target_sha} != {target_reference_sha256}"
         )
 
-    revision = _verify_git_revision(beltout_source, expected_revision)
+    revision_proof = _verify_beltout_revision(beltout_source, expected_revision)
     manifest = load_beltout_checkpoint_manifest(checkpoint_manifest)
     verified_checkpoints = {}
     for role in _REQUIRED_CHECKPOINT_ROLES:
@@ -173,7 +227,8 @@ def verify_beltout_conversion_inputs(
         "target_reference": target_reference,
         "target_reference_sha256": actual_target_sha,
         "beltout_source": beltout_source,
-        "expected_revision": revision,
+        "expected_revision": revision_proof["revision"],
+        "revision_proof": revision_proof,
         "checkpoint_dir": checkpoint_dir,
         "checkpoints": verified_checkpoints,
         "output": output,
@@ -462,6 +517,7 @@ def convert_beltout_once(
             "source_sha256": validated["source_sha256"],
             "target_reference_sha256": validated["target_reference_sha256"],
             "beltout_revision": validated["expected_revision"],
+            "beltout_revision_proof": validated.get("revision_proof"),
             "checkpoints": {
                 role: {
                     "file": item["file"],
