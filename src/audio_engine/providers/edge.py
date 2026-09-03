@@ -16,23 +16,6 @@ def _speech_locale(config):
     return explicit or _locale_from_voice(getattr(config, "voice", None))
 
 
-def _is_multilingual_voice(voice):
-    return "Multilingual" in str(voice or "")
-
-
-def _explicit_language_scoped_text(config, escaped_text):
-    """Force spoken language only for multilingual voices with explicit locale.
-
-    Azure multilingual voices use the SSML <lang xml:lang> element to select
-    the spoken language/accent. Native voices intentionally keep the existing
-    root-locale-only path.
-    """
-    explicit = getattr(config, "_audio_engine_language_locale", None)
-    if not explicit or not _is_multilingual_voice(getattr(config, "voice", None)):
-        return escaped_text
-    return f"<lang xml:lang='{explicit}'>{escaped_text}</lang>"
-
-
 def patch_ssml_locale():
     global _PATCHED
     if _PATCHED:
@@ -42,10 +25,7 @@ def patch_ssml_locale():
         original = getattr(edge_communicate, "mkssml", None)
         if original:
             def localized(config, escaped_text):
-                ssml = original(
-                    config,
-                    _explicit_language_scoped_text(config, escaped_text),
-                )
+                ssml = original(config, escaped_text)
                 locale = _speech_locale(config)
                 if locale:
                     ssml = re.sub(
