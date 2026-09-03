@@ -5,8 +5,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from audio_engine.providers.edge import EdgeProvider, _speech_locale
-from audio_engine.voice.render import provider_cache_identity
+from audio_engine.providers.edge import (
+    EdgeProvider,
+    _explicit_language_scoped_text,
+    _speech_locale,
+)
+from audio_engine.voice.render import (
+    provider_cache_identity,
+    voice_content_key,
+    voice_fingerprint,
+)
 
 
 class EdgeLocaleTests(unittest.TestCase):
@@ -34,6 +42,43 @@ class EdgeLocaleTests(unittest.TestCase):
             _audio_engine_language_locale="fr-FR",
         )
         self.assertEqual(_speech_locale(communicate), "fr-FR")
+
+    def test_explicit_locale_wraps_only_multilingual_voice_with_lang_element(self):
+        multi = SimpleNamespace(
+            voice="fr-FR-RemyMultilingualNeural",
+            _audio_engine_language_locale="fr-FR",
+        )
+        native = SimpleNamespace(
+            voice="fr-FR-HenriNeural",
+            _audio_engine_language_locale="fr-FR",
+        )
+        self.assertEqual(
+            _explicit_language_scoped_text(multi, "Bonjour."),
+            "<lang xml:lang='fr-FR'>Bonjour.</lang>",
+        )
+        self.assertEqual(
+            _explicit_language_scoped_text(native, "Bonjour."),
+            "Bonjour.",
+        )
+
+    def test_explicit_locale_participates_in_voice_cache_identity(self):
+        provider = EdgeProvider()
+        baseline = {
+            "text": "Qui es-tu ?",
+            "voice": "fr-FR-RemyMultilingualNeural",
+            "rate": "+5%",
+            "pitch": "+8Hz",
+            "volume": "+2%",
+        }
+        localized = {**baseline, "language_locale": "fr-FR"}
+        self.assertNotEqual(
+            voice_content_key(baseline, "edge"),
+            voice_content_key(localized, "edge"),
+        )
+        self.assertNotEqual(
+            voice_fingerprint(baseline, provider),
+            voice_fingerprint(localized, provider),
+        )
 
     def test_unavailable_voice_is_reported_explicitly_after_provider_retries(self):
         class FakeNoAudioReceived(Exception):
@@ -83,6 +128,7 @@ class EdgeLocaleTests(unittest.TestCase):
             def __init__(self, text, voice, rate, pitch, volume):
                 self.text = text
                 self.voice = voice
+                self.tts_config = SimpleNamespace(voice=voice)
                 captured["instance"] = self
 
             async def save(self, path):
@@ -103,6 +149,10 @@ class EdgeLocaleTests(unittest.TestCase):
             self.assertTrue(output.exists())
             self.assertEqual(
                 captured["instance"]._audio_engine_language_locale,
+                "fr-FR",
+            )
+            self.assertEqual(
+                captured["instance"].tts_config._audio_engine_language_locale,
                 "fr-FR",
             )
 

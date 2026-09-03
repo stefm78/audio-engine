@@ -10,15 +10,27 @@ def _locale_from_voice(voice):
     return match.group(1) if match else None
 
 
-def _speech_locale(communicate):
-    """Resolve the SSML language independently from the provider voice identity.
+def _speech_locale(config):
+    """Resolve the root SSML locale from explicit transport or voice identity."""
+    explicit = getattr(config, "_audio_engine_language_locale", None)
+    return explicit or _locale_from_voice(getattr(config, "voice", None))
 
-    Normal voices keep their provider locale. Multilingual laboratory calls may
-    attach `_audio_engine_language_locale` to request French while deliberately
-    retaining a voice whose native provider locale is different.
+
+def _is_multilingual_voice(voice):
+    return "Multilingual" in str(voice or "")
+
+
+def _explicit_language_scoped_text(config, escaped_text):
+    """Force spoken language only for multilingual voices with explicit locale.
+
+    Azure multilingual voices use the SSML <lang xml:lang> element to select
+    the spoken language/accent. Native voices intentionally keep the existing
+    root-locale-only path.
     """
-    explicit = getattr(communicate, "_audio_engine_language_locale", None)
-    return explicit or _locale_from_voice(getattr(communicate, "voice", None))
+    explicit = getattr(config, "_audio_engine_language_locale", None)
+    if not explicit or not _is_multilingual_voice(getattr(config, "voice", None)):
+        return escaped_text
+    return f"<lang xml:lang='{explicit}'>{escaped_text}</lang>"
 
 
 def patch_ssml_locale():
@@ -29,9 +41,12 @@ def patch_ssml_locale():
         import edge_tts.communicate as edge_communicate
         original = getattr(edge_communicate, "mkssml", None)
         if original:
-            def localized(communicate, escaped_text):
-                ssml = original(communicate, escaped_text)
-                locale = _speech_locale(communicate)
+            def localized(config, escaped_text):
+                ssml = original(
+                    config,
+                    _explicit_language_scoped_text(config, escaped_text),
+                )
+                locale = _speech_locale(config)
                 if locale:
                     ssml = re.sub(
                         r"xml:lang=(['\"])en-US\1",
@@ -101,6 +116,9 @@ class EdgeProvider:
                 language_locale = segment.get("language_locale")
                 if language_locale:
                     communicator._audio_engine_language_locale = language_locale
+                    tts_config = getattr(communicator, "tts_config", None)
+                    if tts_config is not None:
+                        tts_config._audio_engine_language_locale = language_locale
                 await communicator.save(str(path))
                 return
             except Exception as exc:
