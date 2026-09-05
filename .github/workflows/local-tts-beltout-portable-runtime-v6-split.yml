@@ -1,0 +1,228 @@
+name: LOCAL TTS BeltOut exact Linux runtime split transport v6
+
+on:
+  push:
+    branches:
+      - lab/LOCAL-TTS-WP-010-portable-runtime
+    paths:
+      - .github/workflows/local-tts-beltout-portable-runtime-v6-split.yml
+
+permissions:
+  contents: read
+
+env:
+  BELTOUT_REV: f71295e33cc9c0092083089ed0f9c1a532e77e6b
+  AUDIO_ENGINE_GATE: 8b9d9d2f55e916695e28e56f67abd585c266434b
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PIP_NO_CACHE_DIR: "1"
+
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Free disk
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          df -h /
+
+      - name: Build exact managed Python runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check uv
+          mkdir -p portable/managed-python
+          export UV_PYTHON_INSTALL_DIR="$PWD/portable/managed-python"
+          uv python install 3.12.14
+          PY="$(find portable/managed-python -type f \( -name python3.12 -o -name python \) | head -1)"
+          test -n "$PY"
+          test "$("$PY" -c 'import platform; print(platform.python_version())')" = "3.12.14"
+          echo "$PY" > portable/python-path.txt
+          STDLIB="$("$PY" -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
+          rm -f "$STDLIB/EXTERNALLY-MANAGED"
+          export PIP_BREAK_SYSTEM_PACKAGES=1
+          "$PY" -m ensurepip --upgrade
+          "$PY" -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 torchaudio==2.6.0
+          "$PY" -m pip install --disable-pip-version-check numpy==1.26.4 librosa==0.11.0 s3tokenizer==0.3.0 torchcrepe==0.0.24 transformers==4.46.3 diffusers==0.29.0 conformer==0.3.2 safetensors==0.5.3 huggingface_hub==0.33.1 scipy==1.15.3 tqdm==4.67.1 soundfile==0.13.1
+          "$PY" - <<'PY'
+          import torch, torchaudio, numpy, librosa, s3tokenizer, torchcrepe
+          import transformers, diffusers, conformer, safetensors, huggingface_hub, scipy, tqdm, soundfile
+          assert torch.__version__ == '2.6.0+cpu'
+          assert torchaudio.__version__ == '2.6.0+cpu'
+          assert numpy.__version__ == '1.26.4'
+          print('EXACT_DEPENDENCY_GATE_PASS')
+          PY
+
+      - name: Pin exact BeltOut source and Audio Engine gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          GIT_LFS_SKIP_SMUDGE=1 git clone --filter=blob:none https://github.com/Bill13579/beltout.git portable/beltout-src
+          git -C portable/beltout-src checkout "$BELTOUT_REV"
+          test "$(git -C portable/beltout-src rev-parse HEAD)" = "$BELTOUT_REV"
+          rm -rf portable/beltout-src/.git
+          GIT_LFS_SKIP_SMUDGE=1 git clone --filter=blob:none https://github.com/stefm78/audio-engine.git portable/audio-engine-src
+          git -C portable/audio-engine-src checkout "$AUDIO_ENGINE_GATE"
+          test "$(git -C portable/audio-engine-src rev-parse HEAD)" = "$AUDIO_ENGINE_GATE"
+          rm -rf portable/audio-engine-src/.git
+          PY="$(cat portable/python-path.txt)"
+          "$PY" -m pip install --disable-pip-version-check --no-deps ./portable/beltout-src
+          "$PY" -m pip install --disable-pip-version-check --no-deps ./portable/audio-engine-src
+
+      - name: Hydrate and verify exact checkpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY="$(cat portable/python-path.txt)"
+          mkdir -p portable/checkpoints
+          "$PY" - <<'PY'
+          import os, hashlib, shutil
+          from pathlib import Path
+          from huggingface_hub import hf_hub_download
+          expected = {
+            'cfm_step_117580.safetensors':'32c7599e48c99e4583d4e390d7cf5438573e168198aabd5d7375881c90ef04f4',
+            'encoder_step_0.safetensors':'285f525e81ce163ee9dd259d431bd059d3cb4a5cd87a0f8530d1a20c392580bf',
+            'flow_step_0.safetensors':'f294f889ffe297428b8e153abcb99966eb81f0e29124c778da78322b178a328d',
+            'mel2wav_step_0.safetensors':'4c7a439280cf053c093b5d14ef0b41992e21efb8928926cd295082bf3551a688',
+            'pitchmvmt_step_117580.safetensors':'79d930d2b300d2a0428a7040340a064738943cdf9752006d914816d0a98d1826',
+            'speaker_encoder_step_0.safetensors':'96b8cc0a066e9c3fc5928c270a59f3d63c815de845211f05879b387edb1b474d',
+            'tokenizer_step_0.safetensors':'1641b71a0059b74f37f0c56e4200f3d8b28fcff0fd0328ba452ebfc776db4564',
+          }
+          out=Path('portable/checkpoints')
+          for name,digest in expected.items():
+              src=Path(hf_hub_download(repo_id='Bill13579/beltout', filename='checkpoints/'+name, revision=os.environ['BELTOUT_REV'], local_dir='portable/hf'))
+              dst=out/name
+              shutil.copy2(src,dst)
+              actual=hashlib.sha256(dst.read_bytes()).hexdigest()
+              if actual != digest: raise SystemExit(f'checkpoint mismatch {name}: {actual}')
+          shutil.rmtree('portable/hf', ignore_errors=True)
+          print('CHECKPOINT_GATE_PASS_7_7')
+          PY
+
+      - name: Write immutable runtime manifest and smoke model
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > portable/run-python.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          ROOT="$(cd "$(dirname "$0")" && pwd)"
+          PY="$(find "$ROOT/managed-python" -type f \( -name python3.12 -o -name python \) | head -1)"
+          export PYTHONPATH="$ROOT/beltout-src/src:$ROOT/audio-engine-src/src${PYTHONPATH:+:$PYTHONPATH}"
+          exec "$PY" "$@"
+          SH
+          chmod +x portable/run-python.sh
+          python - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          root=Path('portable')
+          cps=[]
+          for p in sorted((root/'checkpoints').glob('*.safetensors')):
+              cps.append({'file':p.name,'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'bytes':p.stat().st_size})
+          m={'schema':'beltout-portable-runtime-v1','platform':'linux-x86_64','python':'3.12.14','torch':'2.6.0+cpu','torchaudio':'2.6.0+cpu','beltout_revision':'f71295e33cc9c0092083089ed0f9c1a532e77e6b','audio_engine_gate':'8b9d9d2f55e916695e28e56f67abd585c266434b','checkpoints':cps,'contains_human_audio':False}
+          (root/'runtime-manifest.json').write_text(json.dumps(m,indent=2)+'\n')
+          print(json.dumps(m,indent=2))
+          PY
+          ./portable/run-python.sh - <<'PY'
+          from pathlib import Path
+          import torch
+          from beltout import BeltOutTTM
+          cp=Path('portable/checkpoints')
+          model=BeltOutTTM.from_local(cp/'cfm_step_117580.safetensors',cp/'pitchmvmt_step_117580.safetensors',cp/'encoder_step_0.safetensors',cp/'flow_step_0.safetensors',cp/'mel2wav_step_0.safetensors',cp/'speaker_encoder_step_0.safetensors',cp/'tokenizer_step_0.safetensors',device='cpu')
+          assert model.sr == 24000
+          print('LINUX_BELTOUT_MODEL_LOAD_PASS', model.sr, torch.__version__)
+          PY
+          ./portable/run-python.sh -m audio_engine.cli voice-conversion beltout-once --help >/dev/null
+          echo AUDIO_ENGINE_GATE_CLI_PASS
+
+      - name: Create content-addressed split transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -cf beltout-runtime-linux-x86_64.tar portable
+          sha256sum beltout-runtime-linux-x86_64.tar > transport-SHA256SUMS.txt
+          mkdir -p transport-parts
+          split -b 400M -d -a 2 beltout-runtime-linux-x86_64.tar transport-parts/part-
+          sha256sum transport-parts/part-* >> transport-SHA256SUMS.txt
+          ls -lh transport-parts
+          cat transport-SHA256SUMS.txt
+          test "$(find transport-parts -type f -size +500M | wc -l)" = "0"
+
+      - name: Upload transport manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: beltout-linux-transport-manifest
+          path: |
+            transport-SHA256SUMS.txt
+            portable/runtime-manifest.json
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload part 00
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-00, path: transport-parts/part-00, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 01
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-01, path: transport-parts/part-01, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 02
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-02, path: transport-parts/part-02, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 03
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-03, path: transport-parts/part-03, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 04
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-04, path: transport-parts/part-04, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 05
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-05, path: transport-parts/part-05, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 06
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-06, path: transport-parts/part-06, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 07
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-07, path: transport-parts/part-07, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 08
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-08, path: transport-parts/part-08, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 09
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-09, path: transport-parts/part-09, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 10
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-10, path: transport-parts/part-10, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 11
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-11, path: transport-parts/part-11, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 12
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-12, path: transport-parts/part-12, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 13
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-13, path: transport-parts/part-13, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 14
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-14, path: transport-parts/part-14, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 15
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-15, path: transport-parts/part-15, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 16
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-16, path: transport-parts/part-16, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 17
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-17, path: transport-parts/part-17, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 18
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-18, path: transport-parts/part-18, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
+      - name: Upload part 19
+        uses: actions/upload-artifact@v4
+        with: {name: beltout-linux-part-19, path: transport-parts/part-19, compression-level: 0, retention-days: 1, if-no-files-found: ignore}
