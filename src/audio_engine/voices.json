@@ -1,8 +1,16 @@
 {
-  "version": 2,
-  "description": "Validated French voice presets migrated from the audioguide prototype. Generic consumers may also use explicit provider voice names.",
+  "version": 3,
+  "description": "Validated French voice presets migrated from the audioguide prototype. Ordinary French narration defaults to the native French narrateur-vif preset; explicit provider voices and role-specific presets remain opt-in.",
+  "language_defaults": {
+    "fr-FR": {
+      "preset": "narrateur-vif",
+      "voice": "fr-FR-HenriNeural",
+      "voice_class": "native",
+      "policy": "avoid-multilingual-auto-detection-for-default-narration"
+    }
+  },
   "presets": [
-    {"id":"narrateur-vif","voice":"fr-FR-RemyMultilingualNeural","rate":"+8%","pitch":"+14Hz","volume":"+5%","traits":{"gender":"male","age":"adult","energy":5,"authority":3,"warmth":4,"darkness":1,"proximity":3},"tags":["narrateur","conteur","vif"]},
+    {"id":"narrateur-vif","voice":"fr-FR-HenriNeural","rate":"+8%","pitch":"+14Hz","volume":"+5%","traits":{"gender":"male","age":"adult","energy":5,"authority":3,"warmth":4,"darkness":1,"proximity":3},"tags":["narrateur","conteur","vif"]},
     {"id":"sentinelle-nerveuse","voice":"fr-FR-HenriNeural","rate":"+22%","pitch":"+12Hz","volume":"+8%","traits":{"gender":"male","age":"adult","energy":5,"authority":3,"warmth":1,"darkness":2,"proximity":2},"tags":["sentinelle","alerte","nerveux","projete"]},
     {"id":"marchande-truculente","voice":"fr-FR-DeniseNeural","rate":"+18%","pitch":"+20Hz","volume":"+10%","traits":{"gender":"female","age":"adult","energy":5,"authority":2,"warmth":4,"darkness":1,"proximity":3},"tags":["populaire","marchande","truculent","comique"]},
     {"id":"officier-autorite","voice":"fr-FR-RemyMultilingualNeural","rate":"-10%","pitch":"-24Hz","volume":"+3%","traits":{"gender":"male","age":"adult","energy":2,"authority":5,"warmth":1,"darkness":4,"proximity":2},"tags":["officier","autorite","froid","grave"]},
