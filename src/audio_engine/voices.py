@@ -84,6 +84,7 @@ def public_catalog(voice_config):
     return {
         "version": voice_config.get("version"),
         "description": voice_config.get("description"),
+        "language_defaults": voice_config.get("language_defaults", {}),
         "quality_validation": voice_config.get("quality_validation", QUALITY_VALIDATION),
         "casting_policy": CASTING_POLICY,
         "selection_rules": selection_rules(),
