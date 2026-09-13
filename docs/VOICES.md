@@ -22,6 +22,16 @@ A voice that sounds attractive but deforms French should not be promoted merely 
 
 The engine deliberately does **not** publish invented historical aggregate scores. It publishes the tested criteria and the presets that were retained through human listening.
 
+## Standard French narration
+
+For ordinary `fr-FR` narration, the catalog default is `narrateur-vif`, resolved to the native French provider voice `fr-FR-HenriNeural`.
+
+This default is intentionally non-multilingual. Human A/B evidence showed that a multilingual narrator could occasionally switch spoken language around foreign proper names even when the source narration remained French. Proper names are preserved unchanged; the mitigation is at voice selection, not text rewriting.
+
+The default does **not** silently recast explicit voices or role-specific presets. A consumer that explicitly selects another provider voice or preset keeps that choice under the normal identity-first casting rules.
+
+The machine-readable `audio-engine voices` catalog exposes the current `language_defaults` mapping.
+
 ## Identity-first casting
 
 A declared `character_id` is cast as a character, not as a sequence of unrelated lines.
