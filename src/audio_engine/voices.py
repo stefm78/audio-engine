@@ -31,30 +31,10 @@ QUALITY_VALIDATION = {
     "origin": "initial blind French voice benchmark and subsequent human casting tests",
     "principle": "language quality is checked before role fit",
     "criteria": [
-        {
-            "id": "french_pronunciation",
-            "label": "Prononciation française",
-            "priority": 1,
-            "eliminatory": True,
-        },
-        {
-            "id": "fluency_prosody",
-            "label": "Fluidité et prosodie",
-            "priority": 2,
-            "eliminatory": False,
-        },
-        {
-            "id": "naturalness",
-            "label": "Naturel / absence d’effet synthétique",
-            "priority": 3,
-            "eliminatory": False,
-        },
-        {
-            "id": "narrative_potential",
-            "label": "Potentiel de narration / conteur",
-            "priority": 4,
-            "eliminatory": False,
-        },
+        {"id": "french_pronunciation", "label": "Prononciation française", "priority": 1, "eliminatory": True},
+        {"id": "fluency_prosody", "label": "Fluidité et prosodie", "priority": 2, "eliminatory": False},
+        {"id": "naturalness", "label": "Naturel / absence d’effet synthétique", "priority": 3, "eliminatory": False},
+        {"id": "narrative_potential", "label": "Potentiel de narration / conteur", "priority": 4, "eliminatory": False},
     ],
     "benchmark_note": "The original benchmark compared French voices on the same difficult French text before revealing voice identity. No fabricated historical aggregate score is published here.",
 }
@@ -131,11 +111,7 @@ def recommend_presets(target, voice_config, limit=3):
         "casting_policy": CASTING_POLICY,
         "selection_rules": selection_rules(),
         "recommendations": [
-            {
-                "rank": index,
-                "score": round(score, 3),
-                "preset": preset,
-            }
+            {"rank": index, "score": round(score, 3), "preset": preset}
             for index, (score, preset) in enumerate(ranked, start=1)
         ],
     }
@@ -144,6 +120,26 @@ def recommend_presets(target, voice_config, limit=3):
 def choose_preset(target, presets):
     ranked = rank_presets(target, presets, limit=3)
     return ranked[0][1], ranked
+
+
+def language_default_preset(program, voice_config, by_id):
+    language = program.get("language")
+    default = voice_config.get("language_defaults", {}).get(language)
+    if not default:
+        return None
+    preset_id = default.get("preset")
+    if not preset_id:
+        return None
+    if preset_id not in by_id:
+        raise ValueError(f"Language default {language!r} references unknown voice preset: {preset_id!r}")
+    preset = by_id[preset_id]
+    declared_voice = default.get("voice")
+    if declared_voice and declared_voice != preset.get("voice"):
+        raise ValueError(
+            f"Language default {language!r} voice {declared_voice!r} conflicts with "
+            f"preset {preset_id!r} voice {preset.get('voice')!r}"
+        )
+    return preset
 
 
 def _identity_from_resolution(provider, voice, rate, pitch, volume, resolved_preset):
@@ -207,7 +203,12 @@ def resolve_segments(program, voice_config):
             volume = segment.get("volume", identity["volume"])
             resolved_preset = identity["resolved_preset"]
         else:
-            preset, ranked = choose_preset(segment.get("target", {}), presets)
+            target = segment.get("target", {})
+            preset = language_default_preset(program, voice_config, by_id) if not target else None
+            if preset is None:
+                preset, ranked = choose_preset(target, presets)
+            else:
+                ranked = []
             identity_provider = preset.get("provider", "edge")
             if explicit_provider and explicit_provider != identity_provider:
                 raise ValueError(
@@ -226,15 +227,11 @@ def resolve_segments(program, voice_config):
 
         if explicit_character_id:
             previous = character_cast.get(character_id)
-            if previous and (
-                previous["provider"] != identity_provider
-                or previous["voice"] != voice
-            ):
+            if previous and (previous["provider"] != identity_provider or previous["voice"] != voice):
                 raise ValueError(
                     f"Character {character_id!r} cannot silently change provider identity "
                     f"from {previous['provider']}:{previous['voice']} "
-                    f"to {identity_provider}:{voice}; "
-                    "use an explicit qualified identity lineage instead"
+                    f"to {identity_provider}:{voice}; use an explicit qualified identity lineage instead"
                 )
             if previous is None:
                 character_cast[character_id] = _identity_from_resolution(
@@ -253,9 +250,7 @@ def resolve_segments(program, voice_config):
             "rate": rate,
             "pitch": pitch,
             "volume": volume,
-            "casting_identity": (
-                f"{identity_provider}:{voice}" if explicit_character_id else None
-            ),
+            "casting_identity": f"{identity_provider}:{voice}" if explicit_character_id else None,
             "casting_alternatives": alternatives,
         })
     return resolved

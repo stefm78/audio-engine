@@ -16,6 +16,7 @@ class FrenchNativeDefaultTests(unittest.TestCase):
 
     def test_narrateur_vif_resolves_to_henri_with_existing_prosody(self):
         program = {
+            "language": "fr-FR",
             "segments": [{
                 "preset": "narrateur-vif",
                 "text": "Entrez par la Puerta del León puis poursuivez en français.",
@@ -27,8 +28,35 @@ class FrenchNativeDefaultTests(unittest.TestCase):
         self.assertEqual(segment["pitch"], "+14Hz")
         self.assertEqual(segment["volume"], "+5%")
 
+    def test_uncast_fr_fr_segment_uses_native_language_default(self):
+        program = {
+            "language": "fr-FR",
+            "segments": [{
+                "target": {},
+                "text": "Narration française sans casting explicite.",
+            }],
+        }
+        segment = resolve_segments(program, self.config)[0]
+        self.assertEqual(segment["resolved_preset"], "narrateur-vif")
+        self.assertEqual(segment["voice"], "fr-FR-HenriNeural")
+        self.assertEqual(segment["casting_alternatives"], [])
+
+    def test_nonempty_casting_target_still_uses_role_ranking(self):
+        program = {
+            "language": "fr-FR",
+            "segments": [{
+                "target": {"gender": "female", "tags": ["marchande"]},
+                "text": "Ceci reste une demande de casting explicite.",
+            }],
+        }
+        segment = resolve_segments(program, self.config)[0]
+        self.assertEqual(segment["resolved_preset"], "marchande-truculente")
+        self.assertEqual(segment["voice"], "fr-FR-DeniseNeural")
+        self.assertTrue(segment["casting_alternatives"])
+
     def test_explicit_multilingual_voice_remains_explicit_opt_in(self):
         program = {
+            "language": "fr-FR",
             "segments": [{
                 "voice": "fr-FR-RemyMultilingualNeural",
                 "text": "Voix explicitement demandée.",
@@ -40,6 +68,7 @@ class FrenchNativeDefaultTests(unittest.TestCase):
 
     def test_role_specific_preset_is_not_silently_recast(self):
         program = {
+            "language": "fr-FR",
             "segments": [{
                 "preset": "officier-autorite",
                 "text": "Ordre explicite du rôle.",
